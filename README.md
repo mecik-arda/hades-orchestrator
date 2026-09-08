@@ -2,6 +2,44 @@
 
 Hades Orchestrator, OpenCode host, Codex ve diğer ana modellerin yerel MCP üzerinden bağımsız subagent backend'leri çağırmasını sağlayan provider-neutral bir orkestrasyon sistemidir. İç yürütme bileşeni `subagent-bridge` olarak adlandırılır. Host veya orchestrator modeli ile subagent backend'i aynı kavram değildir.
 
+## Ne sunar
+
+- Provider-neutral MCP köprüsü: OpenCode host ve ana orkestratör modeli; DeepSeek V4 Pro/Flash, GLM 5.2/5.3 (HighSpeed/Flash dahil), Codex Luna/Terra/Sol ve GPT-6 Astra, Gemini Pro/Flash (Antigravity) ve native Claude Code backend'lerini tek MCP yüzeyinden çağırır.
+- Salt-okunur sandbox ve izole izin profili: read-only çağrılar provider başlamadan doğrulanır; örneğin Antigravity ortamında harici MCP sunucusu veya kalıtsal geniş izin varsa fail-closed reddedilir.
+- Kontrollü edit: yalnız seçilmiş dosyalar disposable workspace içinde düzenlenir; source hash eşzamanlılık kontrolü, secret taraması ve rollback destekli promotion uygulanır.
+- Model yetki ve erişim modu politikası: `defaultMode` ve `allowedModes` fail-closed çalışır; istenmeyen modda provider process'i başlatılmaz.
+- Bütçe ve retry yönetimi: günlük/aylık maliyet limitleri atomik rezervasyonla uygulanır; yalnız geçici hatalar retry edilir, kalıcı hatalar fail-fast döner.
+- Kalıcı hafıza katmanı: secret korumalı, kaynaklandırılmış ve denetlenebilir Obsidian tabanlı bellek entegrasyonu.
+- Gözlemlenebilirlik: redacted metrikler, süreçler arası kilitler, circuit breaker ve isteğe bağlı proje mirror'ı.
+
+## İçindekiler
+
+- [Güncel durum](#güncel-durum)
+- [Hızlı başlangıç](#hızlı-başlangıç)
+- [Kullanım](#kullanım)
+- [Verified baseline](#verified-baseline)
+- [Model rolleri](#model-rolleri)
+- [Güvenlik ayrımı](#güvenlik-ayrımı)
+- [Gereksinimler](#gereksinimler)
+- [Kurulum](#kurulum)
+- [Başlatma](#başlatma)
+- [Komut referansı](#komut-referansı)
+- [Kalıcı hafıza](#kalıcı-hafıza)
+- [Güvenilirlik ve metrikler](#güvenilirlik-ve-metrikler)
+- [Architecture documents](#architecture-documents)
+- [Continuous integration](#continuous-integration)
+- [Lisans ve katkı](#lisans-ve-katkı)
+
+## Kullanım
+
+Köprü, MCP üzerinden salt-okunur ve kontrollü edit araçları sunar:
+
+- Çalışma zamanı policy'si `~/.config/subagent-bridge/config.json` ve `~/.config/subagent-bridge/agents.json` dosyalarından yüklenir; `ORCHESTRATOR_CONFIG` ve `SUBAGENT_BRIDGE_AGENTS_CONFIG` ortam değişkenleri bu konumları değiştirir. Repo içindeki `config/policy.json` ve `config/agents.json` dağıtım şablonudur.
+- Host tarafı MCP tanımı için `opencode.jsonc.example` dosyasını kendi konfigürasyonunuza uyarlayın; server `subagent-bridge/src/server.js` ve `SUBAGENT_BRIDGE_TRUSTED_WORKSPACE` başlangıç context'i ile başlatılır.
+- Salt-okunur görev: `subagent-bridge_deepseekPro`, `subagent-bridge_glm52`, `subagent-bridge_codex`, `subagent-bridge_geminiFlash` gibi global araçlarla tek mesajda uzman modele görev verin; izinli kök içinde isteğe bağlı `workspace` kabul edilir.
+- Kontrollü edit: yalnız seçili dosyalar ve kabul kriterleriyle; doğrudan workspace yazma yetkisi verilmez. Örnek: `subagent-bridge_glm52Edit`, `subagent-bridge_codexSolEdit`, `subagent-bridge_codexAstraEdit` veya `run_task_profile` üzerinden tanımlı edit profilleri.
+- Doğrulama ve izleme: `npm test`, `npm run verify:ci`, `npm run budget` ve `npm run metrics` komutlarıyla.
+
 ## Güncel durum
 
 - Paket: `hades-orchestrator@2.1.0`
@@ -744,3 +782,9 @@ Temel mimari kararlar `docs/architecture` altındadır:
 `.github/workflows/validate.yml`, Node 22 ve 24 üzerinde Windows ve Linux matrisiyle `npm ci`, `npm test` ve `npm run verify:ci` çalıştırır. `verify:ci` yerel executable, provider auth ve Vault'a ihtiyaç duymaz; dağıtım şablonlarını, policy şemasını, eşlenmiş skill içeriklerini ve zorunlu recent-runs/mirror bileşenlerini denetler. Gerçek provider acceptance komutları yerel veya onaylı nightly ortam için bırakılır.
 
 Personal policy değişikliği öncesinde `npm run config:backup` ile backup alınabilir. Doğrulanmış bir backup'a dönmek için `npm run config:rollback -- config-<timestamp>.json` kullanılır. Rollback yalnız `~/.config/subagent-bridge/backups` içindeki bridge tarafından oluşturulmuş backup adlarını kabul eder. Değişiklikten sonra `npm run verify` ve `npm run smoke` çalıştırılmalıdır.
+
+## Lisans ve katkı
+
+- Lisans: [Apache-2.0](LICENSE)
+- Güvenlik açığı bildirimi: [SECURITY.md](SECURITY.md)
+- Katkı rehberi: [CONTRIBUTING.md](CONTRIBUTING.md)
