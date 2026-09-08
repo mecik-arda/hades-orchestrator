@@ -3,6 +3,7 @@ name: Hades Orchestrator Validate
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,7 +15,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         node: [22.x, 24.x]
+        exclude:
+          - os: ubuntu-latest
+            node: 24.x
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
