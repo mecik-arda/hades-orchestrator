@@ -1,0 +1,101 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "deepseek-readonly": {
+      "description": "Runs read-only DeepSeek analysis and returns only valid JSON.",
+      "mode": "primary",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "edit": "deny",
+        "bash": "deny",
+        "task": "deny",
+        "question": "deny",
+        "external_directory": "deny"
+      },
+      "prompt": "Perform only read-only analysis. Never edit files, run shell commands, delegate work, or ask questions. Return only one valid JSON object that satisfies the caller-provided schema. Do not use Markdown, code fences, prose outside JSON, or JavaScript object syntax."
+    },
+    "deepseek-edit": {
+      "description": "Edits files only inside a bridge-owned disposable workspace.",
+      "mode": "primary",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "edit": "allow",
+        "bash": "deny",
+        "task": "deny",
+        "question": "deny",
+        "external_directory": "deny"
+      },
+      "prompt": "Edit only files inside the current disposable workspace. Never run shell commands, delegate work, access external directories, or read secrets."
+    },
+    "glm-edit": {
+      "description": "Runs controlled GLM edits only inside a bridge-owned disposable workspace.",
+      "mode": "primary",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "edit": "allow",
+        "bash": "deny",
+        "task": "deny",
+        "question": "deny",
+        "external_directory": "deny"
+      },
+      "prompt": "Edit only files inside the current disposable workspace. Never run shell commands, delegate work, access external directories, or read secrets."
+    },
+    "kimi-edit": {
+      "description": "Runs controlled Kimi edits only inside a bridge-owned disposable workspace.",
+      "mode": "primary",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "edit": "allow",
+        "bash": "deny",
+        "task": "deny",
+        "question": "deny",
+        "external_directory": "deny"
+      },
+      "prompt": "Edit only files inside the current disposable workspace. Never run shell commands, delegate work, access external directories, or read secrets."
+    },
+    "qwen-edit": {
+      "description": "Runs controlled Qwen edits only inside a bridge-owned disposable workspace.",
+      "mode": "primary",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "edit": "allow",
+        "bash": "deny",
+        "task": "deny",
+        "question": "deny",
+        "external_directory": "deny"
+      },
+      "prompt": "Edit only files inside the current disposable workspace. Never run shell commands, delegate work, access external directories, or read secrets."
+    }
+  },
+  "mcp": {
+    "subagent-bridge": {
+      "type": "local",
+      "command": [
+        "node",
+        "<repo-root>\\subagent-bridge\\src\\server.js"
+      ],
+      "cwd": "<repo-root>",
+      "environment": {
+        "ORCHESTRATOR_CONFIG": "~/.config/subagent-bridge/config.json",
+        "SUBAGENT_BRIDGE_TRUSTED_WORKSPACE": "<repo-root>"
+      },
+      "enabled": true,
+      "timeout": 1260000
+    }
+  }
+}

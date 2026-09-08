@@ -1,0 +1,11 @@
+{
+  "taskId": "task-YYYY-NNNN",
+  "objective": "Görevin açık ve ölçülebilir amacı",
+  "workspace": "/path/to/workspace",
+  "files": [],
+  "contextFiles": [],
+  "acceptanceCriteria": [
+    "Kabul kriteri"
+  ],
+  "validationSteps": []
+}

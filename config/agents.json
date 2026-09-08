@@ -1,0 +1,69 @@
+{
+    "agents":  {
+                   "claude_code":  {
+                                       "enabled":  true,
+                                       "executable":  "claude",
+                                       "timeoutMs":  900000,
+                                       "maxRetries":  2,
+                                       "defaultMode":  "read_only",
+                                       "allowedModes":  [
+                                                            "read_only"
+                                                        ]
+                                   },
+                   "codex":  {
+                                 "enabled":  true,
+                                 "executable":  "codex",
+                                 "timeoutMs":  900000,
+                                 "maxRetries":  1,
+                                 "defaultMode":  "read_only",
+                                 "allowedModes":  [
+                                                      "read_only",
+                                                      "edit"
+                                                  ]
+                             },
+                   "opencode":  {
+                                    "enabled":  true,
+                                    "executable":  "opencode",
+                                    "timeoutMs":  900000,
+                                    "maxRetries":  2,
+                                    "deepSeekReadOnlyAgent":  "deepseek-readonly",
+                                    "deepSeekEditAgent":  "deepseek-edit",
+                                    "glmEditAgent":  "glm-edit",
+                                    "kimiEditAgent":  "kimi-edit",
+                                    "qwenEditAgent":  "qwen-edit",
+                                    "editAgent":  "build",
+                                    "allowedModels":  [
+                                                          "deepseek/deepseek-chat",
+                                                          "deepseek/deepseek-v4-pro",
+                                                          "deepseek/deepseek-v4-flash",
+                                                          "zai-coding-plan/glm-5.2",
+                                                          "zai-coding-plan/glm-5.2-highspeed",
+                                                          "moonshot/kimi-k2.5-instruct",
+                                                          "moonshot/kimi-k2-thinking",
+                                                          "alibaba/qwen3-coder-480b-a35b",
+                                                          "alibaba/qwen3-coder-plus",
+                                                          "alibaba/qwen3-coder-30b-a3b",
+                                                          "zai-coding-plan/glm-5.3",
+                                                          "zai-coding-plan/glm-5.3-flash"
+                                                      ],
+                                    "defaultMode":  "read_only",
+                                    "allowedModes":  [
+                                                         "read_only",
+                                                         "edit"
+                                                     ]
+                                },
+                   "antigravity":  {
+                                       "enabled":  true,
+                                       "executable":  "agy",
+                                       "timeoutMs":  900000,
+                                       "maxRetries":  1,
+                                       "maxOutputBytes":  8388608,
+                                       "defaultSandbox":  true,
+                                       "defaultMode":  "read_only",
+                                       "allowedModes":  [
+                                                            "read_only",
+                                                            "edit"
+                                                        ]
+                                   }
+               }
+}

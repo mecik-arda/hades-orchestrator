@@ -1,0 +1,15 @@
+node_modules/
+.opencode/node_modules/
+memory/
+logs/runs/*.jsonl
+logs/runs/*.json
+logs/validation/*.json
+logs/metrics/*.jsonl
+state/checkpoints/*.json
+state/current.json
+cache/
+pilot-workspace/
+.codex/
+.env
+*.log
+.hades/

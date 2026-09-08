@@ -1,0 +1,80 @@
+{
+  "documents": [
+    { "relativePath": "01_Projects/Orkestrasyon/Provider-Routing.md", "content": "Gemini Antigravity AGY canonical routing kuralı uygulanır.", "updated": "2026-08-10T00:00:00.000Z", "confidence": "high", "verification": "verified", "memoryType": "decision" },
+    { "relativePath": "01_Projects/Orkestrasyon/Vault-Security.md", "content": "Vault SHA-256 subagent workspace güvenlik sınırı zorunludur.", "updated": "2026-08-10T00:00:00.000Z", "confidence": "high", "verification": "verified", "memoryType": "decision" },
+    { "relativePath": "03_Resources/Orkestrasyon/Retry-Policy.md", "content": "Edit mutation retry belirsizliği otomatik tekrarı engeller.", "updated": "2026-08-10T00:00:00.000Z", "confidence": "high", "verification": "verified", "memoryType": "procedural" },
+    { "relativePath": "03_Resources/Orkestrasyon/Cost-Journal.md", "content": "Atomik reservation settlement cost journal hard cap sağlar.", "updated": "2026-08-10T00:00:00.000Z", "confidence": "high", "verification": "verified", "memoryType": "procedural" },
+    { "relativePath": "03_Resources/Orkestrasyon/Circuit-State.md", "content": "Provider half-open probe circuit state tek çağrı kabul eder.", "updated": "2026-08-10T00:00:00.000Z", "confidence": "high", "verification": "verified", "memoryType": "procedural" },
+
+    { "relativePath": "04_Archive/Timeout-Old.md", "content": "zamanalfa timeout politikası sürüm kararı", "updated": "2024-01-01T00:00:00.000Z", "confidence": "medium", "verification": "verified" },
+    { "relativePath": "01_Projects/Orkestrasyon/Timeout-New.md", "content": "zamanalfa timeout politikası sürüm kararı", "updated": "2026-08-10T00:00:00.000Z", "confidence": "medium", "verification": "verified" },
+    { "relativePath": "04_Archive/Cache-Old.md", "content": "zamanbeta cache geçerlilik sürüm kararı", "updated": "2024-01-01T00:00:00.000Z", "confidence": "medium", "verification": "verified" },
+    { "relativePath": "01_Projects/Orkestrasyon/Cache-New.md", "content": "zamanbeta cache geçerlilik sürüm kararı", "updated": "2026-08-10T00:00:00.000Z", "confidence": "medium", "verification": "verified" },
+    { "relativePath": "04_Archive/Audit-Old.md", "content": "zamargama audit saklama sürüm kararı", "updated": "2024-01-01T00:00:00.000Z", "confidence": "medium", "verification": "verified" },
+    { "relativePath": "01_Projects/Orkestrasyon/Audit-New.md", "content": "zamargama audit saklama sürüm kararı", "updated": "2026-08-10T00:00:00.000Z", "confidence": "medium", "verification": "verified" },
+    { "relativePath": "04_Archive/Health-Old.md", "content": "zamandelta health gözlem sürüm kararı", "updated": "2024-01-01T00:00:00.000Z", "confidence": "medium", "verification": "verified" },
+    { "relativePath": "01_Projects/Orkestrasyon/Health-New.md", "content": "zamandelta health gözlem sürüm kararı", "updated": "2026-08-10T00:00:00.000Z", "confidence": "medium", "verification": "verified" },
+
+    { "relativePath": "04_Archive/Model-Route-Old.md", "content": "guncellealfa model yönlendirme güncel bilgi", "updated": "2024-01-01T00:00:00.000Z", "confidence": "low", "verification": "provisional" },
+    { "relativePath": "01_Projects/Orkestrasyon/Model-Route-New.md", "content": "guncellealfa model yönlendirme güncel bilgi", "updated": "2026-08-10T00:00:00.000Z", "confidence": "high", "verification": "verified" },
+    { "relativePath": "04_Archive/Lock-Old.md", "content": "guncellebeta lock heartbeat güncel bilgi", "updated": "2024-01-01T00:00:00.000Z", "confidence": "low", "verification": "provisional" },
+    { "relativePath": "01_Projects/Orkestrasyon/Lock-New.md", "content": "guncellebeta lock heartbeat güncel bilgi", "updated": "2026-08-10T00:00:00.000Z", "confidence": "high", "verification": "verified" },
+    { "relativePath": "04_Archive/Expiry-Old.md", "content": "guncellegama valid until güncel bilgi", "updated": "2024-01-01T00:00:00.000Z", "confidence": "low", "verification": "provisional" },
+    { "relativePath": "01_Projects/Orkestrasyon/Expiry-New.md", "content": "guncellegama valid until güncel bilgi", "updated": "2026-08-10T00:00:00.000Z", "confidence": "high", "verification": "verified" },
+    { "relativePath": "04_Archive/Budget-Old.md", "content": "guncelledelta maliyet bütçe güncel bilgi", "updated": "2024-01-01T00:00:00.000Z", "confidence": "low", "verification": "provisional" },
+    { "relativePath": "01_Projects/Orkestrasyon/Budget-New.md", "content": "guncelledelta maliyet bütçe güncel bilgi", "updated": "2026-08-10T00:00:00.000Z", "confidence": "high", "verification": "verified" },
+
+    { "relativePath": "04_Archive/Sandbox-Unsafe.md", "content": "celiskialfa sandbox izin sonucu", "updated": "2026-08-10T00:00:00.000Z", "confidence": "low", "verification": "provisional" },
+    { "relativePath": "01_Projects/Orkestrasyon/Sandbox-Safe.md", "content": "celiskialfa sandbox izin sonucu", "updated": "2026-08-10T00:00:00.000Z", "confidence": "high", "verification": "verified" },
+    { "relativePath": "04_Archive/Memory-Auto.md", "content": "celiskibeta hafıza birleştirme sonucu", "updated": "2026-08-10T00:00:00.000Z", "confidence": "low", "verification": "provisional" },
+    { "relativePath": "01_Projects/Orkestrasyon/Memory-Manual.md", "content": "celiskibeta hafıza birleştirme sonucu", "updated": "2026-08-10T00:00:00.000Z", "confidence": "high", "verification": "verified" },
+    { "relativePath": "04_Archive/Fallback-All.md", "content": "celiskigama fallback kapsam sonucu", "updated": "2026-08-10T00:00:00.000Z", "confidence": "low", "verification": "provisional" },
+    { "relativePath": "01_Projects/Orkestrasyon/Fallback-Profile.md", "content": "celiskigama fallback kapsam sonucu", "updated": "2026-08-10T00:00:00.000Z", "confidence": "high", "verification": "verified" },
+
+    { "relativePath": "03_Resources/Orkestrasyon/Partial-Schema.md", "content": "Uzun bir açıklamanın ortasında parcacikalfa zod issue escalation ayrıntısı bulunur." },
+    { "relativePath": "03_Resources/Orkestrasyon/Partial-Audit.md", "content": "Geniş operasyon belgesinde parcacikbeta journal rotasyon ayrıntısı bulunur." },
+    { "relativePath": "03_Resources/Orkestrasyon/Partial-Lease.md", "content": "Dağıtık olmayan yerel tasarımda parcacikgama owner lease ayrıntısı bulunur." },
+
+    { "relativePath": "03_Resources/Orkestrasyon/Related-Routing.md", "content": "iliskialfa provider rota ailesi ortak bağı", "confidence": "high", "verification": "verified" },
+    { "relativePath": "03_Resources/Orkestrasyon/Related-Model.md", "content": "iliskialfa provider rota ailesi ortak bağı", "confidence": "medium", "verification": "verified" },
+    { "relativePath": "03_Resources/Orkestrasyon/Related-Vault.md", "content": "iliskibeta vault lifecycle ailesi ortak bağı", "confidence": "high", "verification": "verified" },
+    { "relativePath": "03_Resources/Orkestrasyon/Related-Review.md", "content": "iliskibeta vault lifecycle ailesi ortak bağı", "confidence": "medium", "verification": "verified" },
+    { "relativePath": "03_Resources/Orkestrasyon/Related-Cost.md", "content": "iliskigama reservation budget ailesi ortak bağı", "confidence": "high", "verification": "verified" },
+    { "relativePath": "03_Resources/Orkestrasyon/Related-Metric.md", "content": "iliskigama reservation budget ailesi ortak bağı", "confidence": "medium", "verification": "verified" },
+
+    { "relativePath": "04_Archive/Expired-Hidden.md", "content": "gecmisomega tarihsel içerik normal aramada gizlidir", "validUntil": "2025-01-01T00:00:00.000Z" }
+  ],
+  "cases": [
+    { "id": "single-routing", "category": "single-hop", "query": "Gemini Antigravity AGY canonical", "qrels": { "01_Projects/Orkestrasyon/Provider-Routing.md": 3 } },
+    { "id": "single-vault", "category": "single-hop", "query": "Vault SHA-256 subagent workspace", "qrels": { "01_Projects/Orkestrasyon/Vault-Security.md": 3 } },
+    { "id": "single-retry", "category": "single-hop", "query": "edit mutation retry belirsizliği", "qrels": { "03_Resources/Orkestrasyon/Retry-Policy.md": 3 } },
+    { "id": "single-cost", "category": "single-hop", "query": "reservation settlement cost journal", "qrels": { "03_Resources/Orkestrasyon/Cost-Journal.md": 3 } },
+    { "id": "single-circuit", "category": "single-hop", "query": "half-open probe circuit state", "qrels": { "03_Resources/Orkestrasyon/Circuit-State.md": 3 } },
+
+    { "id": "temporal-timeout", "category": "temporal-ordering", "query": "zamanalfa timeout politikası", "qrels": { "01_Projects/Orkestrasyon/Timeout-New.md": 3, "04_Archive/Timeout-Old.md": 1 }, "fixedTime": "2026-08-11T00:00:00.000Z" },
+    { "id": "temporal-cache", "category": "temporal-ordering", "query": "zamanbeta cache geçerlilik", "qrels": { "01_Projects/Orkestrasyon/Cache-New.md": 3, "04_Archive/Cache-Old.md": 1 }, "fixedTime": "2026-08-11T00:00:00.000Z" },
+    { "id": "temporal-audit", "category": "temporal-ordering", "query": "zamargama audit saklama", "qrels": { "01_Projects/Orkestrasyon/Audit-New.md": 3, "04_Archive/Audit-Old.md": 1 }, "fixedTime": "2026-08-11T00:00:00.000Z" },
+    { "id": "temporal-health", "category": "temporal-ordering", "query": "zamandelta health gözlem", "qrels": { "01_Projects/Orkestrasyon/Health-New.md": 3, "04_Archive/Health-Old.md": 1 }, "fixedTime": "2026-08-11T00:00:00.000Z" },
+
+    { "id": "update-model", "category": "knowledge-update", "query": "guncellealfa model yönlendirme", "qrels": { "01_Projects/Orkestrasyon/Model-Route-New.md": 3, "04_Archive/Model-Route-Old.md": 1 } },
+    { "id": "update-lock", "category": "knowledge-update", "query": "guncellebeta lock heartbeat", "qrels": { "01_Projects/Orkestrasyon/Lock-New.md": 3, "04_Archive/Lock-Old.md": 1 } },
+    { "id": "update-expiry", "category": "knowledge-update", "query": "guncellegama valid until", "qrels": { "01_Projects/Orkestrasyon/Expiry-New.md": 3, "04_Archive/Expiry-Old.md": 1 } },
+    { "id": "update-budget", "category": "knowledge-update", "query": "guncelledelta maliyet bütçe", "qrels": { "01_Projects/Orkestrasyon/Budget-New.md": 3, "04_Archive/Budget-Old.md": 1 } },
+
+    { "id": "contradiction-sandbox", "category": "contradiction", "query": "celiskialfa sandbox izin", "qrels": { "01_Projects/Orkestrasyon/Sandbox-Safe.md": 3, "04_Archive/Sandbox-Unsafe.md": 1 } },
+    { "id": "contradiction-memory", "category": "contradiction", "query": "celiskibeta hafıza birleştirme", "qrels": { "01_Projects/Orkestrasyon/Memory-Manual.md": 3, "04_Archive/Memory-Auto.md": 1 } },
+    { "id": "contradiction-fallback", "category": "contradiction", "query": "celiskigama fallback kapsam", "qrels": { "01_Projects/Orkestrasyon/Fallback-Profile.md": 3, "04_Archive/Fallback-All.md": 1 } },
+
+    { "id": "partial-schema", "category": "partial-match", "query": "parcacikalfa zod escalation", "qrels": { "03_Resources/Orkestrasyon/Partial-Schema.md": 3 } },
+    { "id": "partial-audit", "category": "partial-match", "query": "parcacikbeta journal rotasyon", "qrels": { "03_Resources/Orkestrasyon/Partial-Audit.md": 3 } },
+    { "id": "partial-lease", "category": "partial-match", "query": "parcacikgama owner lease", "qrels": { "03_Resources/Orkestrasyon/Partial-Lease.md": 3 } },
+
+    { "id": "negative-unrelated", "category": "negative-query", "query": "kuantum orkide sulama efemeris", "qrels": {} },
+    { "id": "negative-expired", "category": "negative-query", "query": "gecmisomega tarihsel içerik", "qrels": {} },
+    { "id": "negative-unknown", "category": "negative-query", "query": "bilinmeyen xenon pusula protokolü", "qrels": {} },
+
+    { "id": "related-routing", "category": "related-note", "query": "iliskialfa provider rota ailesi", "qrels": { "03_Resources/Orkestrasyon/Related-Routing.md": 3, "03_Resources/Orkestrasyon/Related-Model.md": 2 } },
+    { "id": "related-vault", "category": "related-note", "query": "iliskibeta vault lifecycle ailesi", "qrels": { "03_Resources/Orkestrasyon/Related-Vault.md": 3, "03_Resources/Orkestrasyon/Related-Review.md": 2 } },
+    { "id": "related-cost", "category": "related-note", "query": "iliskigama reservation budget ailesi", "qrels": { "03_Resources/Orkestrasyon/Related-Cost.md": 3, "03_Resources/Orkestrasyon/Related-Metric.md": 2 } }
+  ]
+}

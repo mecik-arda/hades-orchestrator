@@ -1,0 +1,343 @@
+{
+    "configVersion":  2,
+    "allowedRoots":  [
+                         "C:\\Users\\ornek\\Desktop\\Projeler"
+                     ],
+    "agentRules":  "config/agent-rules.md",
+    "skills":  {
+                   "root":  ".agents/skills",
+                   "allowed":  [
+                                   "commit-at",
+                                   "guvenlik-ve-sertlestirme",
+                                   "kod-denetleyicisi",
+                                   "otomatik-dokumantasyon",
+                                   "veri-seti-analizcisi"
+                               ]
+               },
+    "deepseek":  {
+                     "openCodeModel":  "deepseek/deepseek-v4-pro",
+                     "openCodeFlashModel":  "deepseek/deepseek-v4-flash",
+                     "subagentRules":  "config/deepseek-subagent-rules.md",
+                     "workspaceTools":  [
+                                            "Read",
+                                            "Glob",
+                                            "Grep"
+                                        ],
+                     "researchTools":  [
+                                           "WebSearch",
+                                           "WebFetch"
+                                       ],
+                     "timeoutMs":  900000,
+                     "maxOutputBytes":  8388608,
+                     "requireGitRepository":  false,
+                     "deniedRoots":  [
+                                         "memory"
+                                     ]
+                 },
+    "glm":  {
+                "openCodeModel":  "zai-coding-plan/glm-5.2",
+                "openCodeHighSpeedModel":  "zai-coding-plan/glm-5.2-highspeed",
+                "openCode53Model":  "zai-coding-plan/glm-5.3",
+                "timeoutMs":  900000,
+                "deniedRoots":  [
+                                    "memory"
+                                ],
+                "openCode53FlashModel":  "zai-coding-plan/glm-5.3-flash"
+            },
+    "kimi":  {
+                 "models":  {
+                                "kimi_k2_5_instruct":  "moonshot/kimi-k2.5-instruct",
+                                "kimi_k2_thinking":  "moonshot/kimi-k2-thinking"
+                            },
+                 "timeoutMs":  900000,
+                 "deniedRoots":  [
+                                     "memory"
+                                 ]
+             },
+    "qwen":  {
+                 "models":  {
+                                "qwen3_coder_480b":  "alibaba/qwen3-coder-480b-a35b",
+                                "qwen3_coder_plus":  "alibaba/qwen3-coder-plus",
+                                "qwen3_coder_30b":  "alibaba/qwen3-coder-30b-a3b"
+                            },
+                 "timeoutMs":  900000,
+                 "deniedRoots":  [
+                                     "memory"
+                                 ]
+             },
+    "workspacePolicy":  {
+                            "antigravityDeniedRoots":  [
+                                                           "memory"
+                                                       ]
+                        },
+    "memory":  {
+                   "enabled":  true,
+                   "vaultRoot":  "memory",
+                   "allowedWriteFolders":  [
+                                               "00_Inbox",
+                                               "01_Projects",
+                                               "02_Areas",
+                                               "03_Resources",
+                                               "04_Archive",
+                                               "06_Metadata"
+                                           ],
+                   "ignoredDirectories":  [
+                                              "05_Attachments",
+                                              "node_modules"
+                                          ],
+                   "maxIndexedFiles":  5000,
+                   "maxSearchResults":  10,
+                   "maxSearchFileBytes":  131072,
+                   "maxExcerptCharacters":  700,
+                   "maxReadBytes":  262144,
+                   "maxWriteBytes":  65536,
+                   "auditMaxBytes":  5242880,
+                   "reviewDefaults":  {
+                                          "sourceStalenessDays":  365,
+                                          "maxDuplicateGroups":  20,
+                                          "maxReadBytesPerFile":  32768
+                                      }
+               },
+    "reliability":  {
+                        "maxAttempts":  3,
+                        "maxSchemaRepairAttempts":  1,
+                        "baseRetryDelayMs":  750,
+                        "maxRetryDelayMs":  8000,
+                        "maxTotalDurationMs":  1200000,
+                        "maxRetryCostUsd":  1,
+                        "maxRetryCostReserveUsd":  0.1,
+                        "maxUnknownAttemptCostUsd":  0.1,
+                        "monthlyCostLimitUsd":  50,
+                        "warningThresholdPercent":  80
+                    },
+    "observability":  {
+                          "maxMetricFileBytes":  20971520,
+                          "maxMetricRetentionDays":  45
+                      },
+    "orchestration":  {
+                          "taskProfiles":  {
+                                               "quick_read":  {
+                                                                  "target":  "codex",
+                                                                  "model":  "gpt-5.6-luna",
+                                                                  "mode":  "read_only",
+                                                                  "priority":  30,
+                                                                  "cacheable":  true
+                                                              },
+                                               "low_cost_analysis":  {
+                                                                         "target":  "opencode",
+                                                                         "model":  "deepseek/deepseek-v4-flash",
+                                                                         "mode":  "read_only",
+                                                                         "priority":  25,
+                                                                         "cacheable":  true
+                                                                     },
+                                               "deep_analysis":  {
+                                                                     "target":  "opencode",
+                                                                     "model":  "deepseek/deepseek-v4-pro",
+                                                                     "mode":  "read_only",
+                                                                     "priority":  20,
+                                                                     "cacheable":  true
+                                                                 },
+                                               "glm_analysis":  {
+                                                                    "target":  "glm",
+                                                                    "model":  "glm_5_2",
+                                                                    "mode":  "read_only",
+                                                                    "priority":  18,
+                                                                    "cacheable":  true
+                                                                },
+                                               "low_cost_glm_highspeed":  {
+                                                                              "target":  "glm",
+                                                                              "model":  "glm_5_2_highspeed",
+                                                                              "mode":  "read_only",
+                                                                              "priority":  22,
+                                                                              "cacheable":  true
+                                                                          },
+                                               "kimi_analysis":  {
+                                                                     "target":  "kimi",
+                                                                     "model":  "kimi_k2_5_instruct",
+                                                                     "mode":  "read_only",
+                                                                     "priority":  18,
+                                                                     "cacheable":  true
+                                                                 },
+                                               "qwen_analysis":  {
+                                                                     "target":  "qwen",
+                                                                     "model":  "qwen3_coder_480b",
+                                                                     "mode":  "read_only",
+                                                                     "priority":  18,
+                                                                     "cacheable":  true
+                                                                 },
+                                               "web_research_fast":  {
+                                                                         "target":  "gemini_flash",
+                                                                         "mode":  "read_only",
+                                                                         "priority":  25,
+                                                                         "cacheable":  true
+                                                                     },
+                                               "web_research":  {
+                                                                    "target":  "gemini_pro",
+                                                                    "mode":  "read_only",
+                                                                    "priority":  20,
+                                                                    "cacheable":  true
+                                                                },
+                                               "file_audit":  {
+                                                                  "target":  "gemini_pro",
+                                                                  "mode":  "read_only",
+                                                                  "priority":  20,
+                                                                  "cacheable":  true
+                                                              },
+                                               "review":  {
+                                                              "target":  "codex",
+                                                              "model":  "gpt-5.6-terra",
+                                                              "mode":  "read_only",
+                                                              "priority":  20,
+                                                              "cacheable":  true
+                                                          },
+                                               "critical_review":  {
+                                                                       "target":  "codex",
+                                                                       "model":  "gpt-5.6-sol",
+                                                                       "mode":  "read_only",
+                                                                       "priority":  15,
+                                                                       "cacheable":  true
+                                                                   },
+                                               "luna_implementation":  {
+                                                                           "target":  "codex",
+                                                                           "model":  "gpt-5.6-luna",
+                                                                           "mode":  "edit",
+                                                                           "priority":  12,
+                                                                           "cacheable":  false
+                                                                       },
+                                               "implementation":  {
+                                                                      "target":  "codex",
+                                                                      "model":  "gpt-5.6-terra",
+                                                                      "mode":  "edit",
+                                                                      "priority":  10,
+                                                                      "cacheable":  false,
+                                                                      "fallbackTargets":  [
+                                                                                              {
+                                                                                                  "target":  "glm",
+                                                                                                  "model":  "glm_5_2"
+                                                                                              },
+                                                                                              {
+                                                                                                  "target":  "opencode",
+                                                                                                  "model":  "deepseek/deepseek-v4-pro"
+                                                                                              },
+                                                                                              {
+                                                                                                  "target":  "gemini_pro"
+                                                                                              }
+                                                                                          ]
+                                                                  },
+                                               "glm_implementation":  {
+                                                                          "target":  "glm",
+                                                                          "model":  "glm_5_2",
+                                                                          "mode":  "edit",
+                                                                          "priority":  8,
+                                                                          "cacheable":  false,
+                                                                          "fallbackTargets":  [
+                                                                                                  {
+                                                                                                      "target":  "opencode",
+                                                                                                      "model":  "deepseek/deepseek-v4-pro"
+                                                                                                  },
+                                                                                                  {
+                                                                                                      "target":  "codex",
+                                                                                                      "model":  "gpt-5.6-terra"
+                                                                                                  },
+                                                                                                  {
+                                                                                                      "target":  "gemini_pro"
+                                                                                                  }
+                                                                                              ]
+                                                                      },
+                                               "critical_implementation":  {
+                                                                               "target":  "codex",
+                                                                               "model":  "gpt-5.6-sol",
+                                                                               "mode":  "edit",
+                                                                               "priority":  5,
+                                                                               "cacheable":  false,
+                                                                               "fallbackTargets":  [
+                                                                                                       {
+                                                                                                           "target":  "glm",
+                                                                                                           "model":  "glm_5_2"
+                                                                                                       },
+                                                                                                       {
+                                                                                                           "target":  "opencode",
+                                                                                                           "model":  "deepseek/deepseek-v4-pro"
+                                                                                                       }
+                                                                                                   ]
+                                                                           },
+                                               "glm53_implementation":  {
+                                                                            "target":  "glm",
+                                                                            "model":  "glm_5_3",
+                                                                            "mode":  "edit",
+                                                                            "priority":  7,
+                                                                            "cacheable":  false,
+                                                                            "fallbackTargets":  [
+                                                                                                    {
+                                                                                                        "target":  "opencode",
+                                                                                                        "model":  "deepseek/deepseek-v4-pro"
+                                                                                                    },
+                                                                                                    {
+                                                                                                        "target":  "codex",
+                                                                                                        "model":  "gpt-5.6-terra"
+                                                                                                    },
+                                                                                                    {
+                                                                                                        "target":  "gemini_pro"
+                                                                                                    }
+                                                                                                ]
+                                                                        },
+                                               "glm53_flash_implementation":  {
+                                                                                  "target":  "glm",
+                                                                                  "model":  "glm_5_3_flash",
+                                                                                  "mode":  "edit",
+                                                                                  "priority":  6,
+                                                                                  "cacheable":  false,
+                                                                                  "fallbackTargets":  [
+                                                                                                          {
+                                                                                                              "target":  "glm",
+                                                                                                              "model":  "glm_5_2"
+                                                                                                          },
+                                                                                                          {
+                                                                                                              "target":  "opencode",
+                                                                                                              "model":  "deepseek/deepseek-v4-flash"
+                                                                                                          }
+                                                                                                      ]
+                                                                              },
+                                               "astra_review":  {
+                                                                    "target":  "codex",
+                                                                    "model":  "gpt-6-astra",
+                                                                    "mode":  "read_only",
+                                                                    "priority":  14,
+                                                                    "cacheable":  true
+                                                                },
+                                               "astra_implementation":  {
+                                                                            "target":  "codex",
+                                                                            "model":  "gpt-6-astra",
+                                                                            "mode":  "edit",
+                                                                            "priority":  4,
+                                                                            "cacheable":  false,
+                                                                            "fallbackTargets":  [
+                                                                                                    {
+                                                                                                        "target":  "codex",
+                                                                                                        "model":  "gpt-5.6-sol"
+                                                                                                    },
+                                                                                                    {
+                                                                                                        "target":  "glm",
+                                                                                                        "model":  "glm_5_2"
+                                                                                                    }
+                                                                                                ]
+                                                                        }
+                                           },
+                          "circuitBreaker":  {
+                                                 "failureThreshold":  5,
+                                                 "windowMs":  60000,
+                                                 "openMs":  30000
+                                             },
+                          "scheduler":  {
+                                            "maxQueuedPerWorkspace":  100,
+                                            "staleLockMs":  1500000,
+                                            "leaseHeartbeatMs":  300000
+                                        },
+                          "readOnlyCache":  {
+                                                "enabled":  true,
+                                                "ttlMs":  600000,
+                                                "maxEntryBytes":  262144,
+                                                "maxEntries":  100
+                                            }
+                      }
+}

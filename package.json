@@ -1,0 +1,47 @@
+{
+  "name": "hades-orchestrator",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node subagent-bridge/src/server.js",
+    "pilot": "node scripts/pilot-mcp.js",
+    "pilot:flash": "node scripts/pilot-mcp.js --model deepseek_flash",
+    "pilot:edit:deepseek": "node scripts/pilot-deepseek-edit.js",
+    "pilot:edit:glm": "node scripts/pilot-glm-edit.js",
+    "accept:edit:deepseek": "node scripts/accept-deepseek-edit.js",
+    "accept:edit:glm": "node scripts/accept-glm-edit.js",
+    "accept:read:glm": "node scripts/accept-glm-read-only.js",
+    "p0:e2e": "node scripts/p0-portability-e2e.js",
+    "p2a:e2e": "node scripts/p2a-opencode-v1-e2e.js",
+    "p2b:e2e": "node scripts/p2b-personal-global-e2e.js",
+    "smoke": "node scripts/smoke-mcp.js",
+    "metrics": "node scripts/report-metrics.js",
+    "budget": "node scripts/report-metrics.js --budget-only",
+    "runs:recent": "node scripts/report-recent-runs.js",
+    "runs:mirror": "node scripts/manage-project-logs.js",
+    "edit:feedback": "node scripts/record-edit-feedback.js",
+    "routing:feedback": "node scripts/record-routing-feedback.js",
+    "memory:review": "node scripts/review-memory.js",
+    "memory:evaluate": "node scripts/evaluate-memory.js",
+    "memory:prune-audit": "node scripts/prune-memory-audit.js",
+    "skills:sync": "node scripts/sync-skills.js",
+    "test": "node --test tests/*.test.js",
+    "verify": "node scripts/verify-project.js",
+    "verify:ci": "node scripts/verify-project-ci.js",
+    "metrics:prune": "node scripts/report-metrics.js --prune",
+    "config:backup": "node scripts/manage-config.js backup",
+    "config:rollback": "node scripts/manage-config.js rollback",
+    "config:apply-routing": "node scripts/apply-provider-routing.js",
+    "config:apply-agent-modes": "node scripts/apply-agent-modes.js",
+    "config:rollback-agent-modes": "node scripts/apply-agent-modes.js rollback"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.3",
+    "sharp": "^0.35.3",
+    "zod": "^3.25.76"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  }
+}
