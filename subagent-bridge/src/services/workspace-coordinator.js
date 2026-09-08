@@ -188,10 +188,7 @@ export function createWorkspaceCoordinator({ lockDirectory, staleLockMs = 150000
     const queue = queueFor(workspace);
     while (queue.length > 0) {
       const queuedWriter = queue.filter((entry) => entry.mode === "edit").sort((left, right) => right.priority - left.priority || left.enqueuedAt - right.enqueuedAt)[0];
-      const eligible = queuedWriter
-        ? queue.filter((entry) => entry.enqueuedAt <= queuedWriter.enqueuedAt)
-        : queue;
-      const next = eligible.sort((left, right) => right.priority - left.priority || left.enqueuedAt - right.enqueuedAt)[0];
+      const next = queuedWriter || queue.sort((left, right) => right.priority - left.priority || left.enqueuedAt - right.enqueuedAt)[0];
       if (next.cancelled) {
         queue.splice(queue.indexOf(next), 1);
         if (next.mode === "edit") clearWriterIntent(workspace, next.executionId);

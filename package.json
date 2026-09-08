@@ -26,7 +26,7 @@
     "memory:evaluate": "node scripts/evaluate-memory.js",
     "memory:prune-audit": "node scripts/prune-memory-audit.js",
     "skills:sync": "node scripts/sync-skills.js",
-    "test": "node --test --test-concurrency=1 --test-timeout=120000 tests/*.test.js",
+    "test": "node --test --test-timeout=120000 tests/*.test.js",
     "verify": "node scripts/verify-project.js",
     "verify:ci": "node scripts/verify-project-ci.js",
     "metrics:prune": "node scripts/report-metrics.js --prune",

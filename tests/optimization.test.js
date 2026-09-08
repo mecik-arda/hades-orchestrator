@@ -45,8 +45,17 @@ test("OPT-01: processler arası coordinator paralel okumayı korur ve yazmayı s
   assert.ok(externalGrant);
   second.release("external-waiter");
   assert.ok(await first.acquire(root, "read_only", "reader-before-writer"));
-  const waitingWriter = second.acquire(root, "edit", "waiting-writer", 10);
-  const laterReader = second.acquire(root, "read_only", "later-reader", 30);
+  const originalNow = Date.now;
+  const enqueueTime = originalNow();
+  let waitingWriter;
+  let laterReader;
+  try {
+    Date.now = () => enqueueTime;
+    waitingWriter = second.acquire(root, "edit", "waiting-writer", 10);
+    laterReader = second.acquire(root, "read_only", "later-reader", 30);
+  } finally {
+    Date.now = originalNow;
+  }
   first.release("reader-before-writer");
   assert.ok(await waitingWriter);
   let laterReaderResolved = false;
