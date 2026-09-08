@@ -102,6 +102,18 @@ test("OPT-01aa: etkin lease staleLockMs aşılırken silinmez", async (t) => {
   second.release("lease-waiter");
 });
 
+test("OPT-01aaa: coordinator sınırlı bekleme sonrası isteği fail-closed reddeder", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-coordinator-wait-limit-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lockDirectory = path.join(root, "locks");
+  const holder = createWorkspaceCoordinator({ lockDirectory });
+  const waiter = createWorkspaceCoordinator({ lockDirectory, maxWaitAttempts: 0 });
+  assert.ok(await holder.acquire(root, "edit", "wait-limit-holder"));
+  assert.equal(await waiter.acquire(root, "read_only", "wait-limit-reader"), null);
+  assert.equal(waiter.snapshot().localQueued, 0);
+  holder.release("wait-limit-holder");
+});
+
 test("OPT-01ab: metric lock canlı sahibi silmez ve ölü sahibi temizler", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-metric-lock-owner-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
