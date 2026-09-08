@@ -137,18 +137,31 @@ test("OPT-01b: bağımsız Node processleri aynı workspace yazma kilidini payla
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const moduleUrl = pathToFileURL(path.resolve("subagent-bridge/src/services/workspace-coordinator.js")).href;
   const launch = (executionId, holdMs) => {
-    const source = `import { createWorkspaceCoordinator } from ${JSON.stringify(moduleUrl)}; const coordinator = createWorkspaceCoordinator({ lockDirectory: ${JSON.stringify(path.join(root, "locks"))} }); const keepAlive = setInterval(() => {}, 1000); const grant = await coordinator.acquire(${JSON.stringify(root)}, "edit", ${JSON.stringify(executionId)}); clearInterval(keepAlive); process.stdout.write("acquired\\n"); setTimeout(() => { coordinator.release(${JSON.stringify(executionId)}); }, ${holdMs});`;
+    const source = `import { createWorkspaceCoordinator } from ${JSON.stringify(moduleUrl)}; const coordinator = createWorkspaceCoordinator({ lockDirectory: ${JSON.stringify(path.join(root, "locks"))} }); const grant = await coordinator.acquire(${JSON.stringify(root)}, "edit", ${JSON.stringify(executionId)}); if (!grant) process.exit(1); process.stdout.write("acquired\\n"); setTimeout(() => { coordinator.release(${JSON.stringify(executionId)}); }, ${holdMs});`;
     return childProcess.spawn(process.execPath, ["--input-type=module", "--eval", source], { stdio: ["ignore", "pipe", "ignore"] });
   };
   const waitForAcquire = (child) => new Promise((resolve, reject) => {
     let output = "";
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error("coordinator process did not acquire the lock"));
+    }, 5000);
     child.stdout.on("data", (chunk) => {
       output += chunk.toString("utf8");
-      if (output.includes("acquired")) resolve();
+      if (output.includes("acquired")) {
+        clearTimeout(timeout);
+        resolve();
+      }
     });
-    child.once("error", reject);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
     child.once("exit", (code) => {
-      if (!output.includes("acquired")) reject(new Error(`coordinator process exited with ${code}`));
+      if (!output.includes("acquired")) {
+        clearTimeout(timeout);
+        reject(new Error(`coordinator process exited with ${code}`));
+      }
     });
   });
   const waitForExit = (child) => new Promise((resolve, reject) => child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`coordinator process exited with ${code}`))));
