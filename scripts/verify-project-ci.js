@@ -12,7 +12,6 @@ const configuration = loadConfiguration({ configurationPath });
 loadAgentsConfig({ agentsPath });
 
 const requiredFiles = [
-  ".codex/config.toml",
   "AGENTS.md",
   "CLAUDE.md",
   "config/agent-rules.md",
