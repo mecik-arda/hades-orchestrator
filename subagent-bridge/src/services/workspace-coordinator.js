@@ -182,7 +182,6 @@ export function createWorkspaceCoordinator({ lockDirectory, staleLockMs = 150000
       queue.retryTimer = null;
       drain(workspace);
     }, 50);
-    queue.retryTimer.unref?.();
   }
 
   function drain(workspace) {
@@ -234,7 +233,6 @@ export function createWorkspaceCoordinator({ lockDirectory, staleLockMs = 150000
         if (mode === "edit" && !registerWriterIntent(workspace, executionId, priority, enqueuedAt)) {
           pending.set(executionId, entry);
           entry.retryTimer = setTimeout(enqueue, 50);
-          entry.retryTimer.unref?.();
           return;
         }
         pending.delete(executionId);
