@@ -87,7 +87,7 @@ export function withGuard(directory, staleLockMs, callback) {
   }
 }
 
-export function createWorkspaceCoordinator({ lockDirectory, staleLockMs = 1500000, leaseHeartbeatMs = Math.max(1000, Math.floor(staleLockMs / 3)), maxQueuedPerWorkspace = 100 } = {}) {
+export function createWorkspaceCoordinator({ lockDirectory, staleLockMs = 1500000, leaseHeartbeatMs = Math.max(1000, Math.floor(staleLockMs / 3)), maxQueuedPerWorkspace = 100, maxWaitAttempts = 12000 } = {}) {
   const directory = lockDirectory || path.join(process.cwd(), ".subagent-bridge-locks");
   const queues = new Map();
   const active = new Map();
@@ -204,6 +204,13 @@ export function createWorkspaceCoordinator({ lockDirectory, staleLockMs = 150000
       }
       const release = acquireExternal(workspace, next.mode, next.executionId, next.priority, next.enqueuedAt);
       if (!release) {
+        next.waitAttempts = (next.waitAttempts || 0) + 1;
+        if (next.waitAttempts > maxWaitAttempts) {
+          queue.splice(queue.indexOf(next), 1);
+          if (next.mode === "edit") clearWriterIntent(workspace, next.executionId);
+          next.resolve(null);
+          continue;
+        }
         scheduleDrain(workspace, queue);
         break;
       }
@@ -231,6 +238,12 @@ export function createWorkspaceCoordinator({ lockDirectory, staleLockMs = 150000
           return;
         }
         if (mode === "edit" && !registerWriterIntent(workspace, executionId, priority, enqueuedAt)) {
+          entry.waitAttempts = (entry.waitAttempts || 0) + 1;
+          if (entry.waitAttempts > maxWaitAttempts) {
+            pending.delete(executionId);
+            resolve(null);
+            return;
+          }
           pending.set(executionId, entry);
           entry.retryTimer = setTimeout(enqueue, 50);
           return;
