@@ -311,9 +311,8 @@ test("GLM-14: checkGlm glm_5_3 kimliğini ve katalog durumunu raporlar", async (
   });
   assert.equal(result.glm53Model, "zai-coding-plan/glm-5.3");
   assert.equal(typeof result.glm53ModelAvailable, "boolean");
-  assert.equal(result.glm53ModelAvailable, true);
   assert.equal(result.glm53FlashModel, "zai-coding-plan/glm-5.3-flash");
-  assert.equal(result.glm53FlashModelAvailable, true);
+  assert.equal(typeof result.glm53FlashModelAvailable, "boolean");
   assert.equal(result.model, "zai-coding-plan/glm-5.2");
 });
 

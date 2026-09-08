@@ -185,10 +185,10 @@ test("HEALTH: 10 concurrent → 1 real check (stampede fixed)", async () => {
 
 test("LOCK: path variations do not bypass workspace lock", () => {
   releaseAllLocks();
-  const base = "C:\\test\\workspace";
-  const trailing = base + "\\";
-  const parentNormalized = path.normalize(base + "\\..\\workspace");
-  const forward = base.replace(/\\/g, "/");
+  const base = path.join(path.parse(process.cwd()).root, "tmp", "lock-variant", "workspace");
+  const trailing = base + path.sep;
+  const parentNormalized = path.normalize(path.join(base, "..", "workspace"));
+  const forward = base.split(path.sep).join("/");
 
   assert.equal(acquireReadLock(base), true);
   assert.equal(acquireWriteLock(trailing), false, "write bypass via trailing slash");

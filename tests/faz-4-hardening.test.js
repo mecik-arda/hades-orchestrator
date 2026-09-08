@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
 import { appendRedactedRunMetric, createRedactedRunMetric } from "../subagent-bridge/src/metrics.js";
 import { validateAgentsConfig, loadAgentsConfig, loadRuntimeConfiguration } from "../subagent-bridge/src/config.js";
 import { createClaudeCodeAdapter } from "../subagent-bridge/src/adapters/claude-code-adapter.js";
@@ -214,7 +215,7 @@ test("HARDEN-11: agents.json geçersiz backend reddedilir", () => {
 });
 
 test("HARDEN-12: agents.json production config yüklenir", () => {
-  const config = loadAgentsConfig();
+  const config = loadAgentsConfig({ agentsPath: path.resolve("config/agents.json") });
   assert.ok(config.agents);
   assert.equal(typeof config.agents, "object");
   const keys = Object.keys(config.agents);
@@ -226,8 +227,12 @@ test("HARDEN-12: agents.json production config yüklenir", () => {
 });
 
 test("HARDEN-13: agents.json runtime adapter yapılandırmasına aktarılır", () => {
-  const agents = loadAgentsConfig();
-  const runtime = loadRuntimeConfiguration();
+  const repositoryPaths = {
+    configurationPath: path.resolve("config/policy.json"),
+    agentsPath: path.resolve("config/agents.json")
+  };
+  const agents = loadAgentsConfig(repositoryPaths);
+  const runtime = loadRuntimeConfiguration(repositoryPaths);
 
   for (const [name, agent] of Object.entries(agents.agents)) {
     assert.deepEqual(runtime[name], agent);

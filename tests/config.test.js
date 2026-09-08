@@ -119,7 +119,10 @@ test("provider rol profilleri exact model kullanır ve edit fallback policy ile 
 });
 
 test("deepseek-readonly agent dış dizin erişimini açıkça reddeder", () => {
-  const opencodeConfiguration = JSON.parse(fs.readFileSync(path.resolve("opencode.jsonc"), "utf8"));
+  const opencodePath = fs.existsSync(path.resolve("opencode.jsonc"))
+    ? path.resolve("opencode.jsonc")
+    : path.resolve("opencode.jsonc.example");
+  const opencodeConfiguration = JSON.parse(fs.readFileSync(opencodePath, "utf8"));
   assert.equal(opencodeConfiguration.agent["deepseek-readonly"].permission.external_directory, "deny");
 });
 

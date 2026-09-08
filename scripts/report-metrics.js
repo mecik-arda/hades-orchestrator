@@ -4,9 +4,6 @@ import { fileURLToPath } from "node:url";
 import { loadConfiguration } from "../subagent-bridge/src/config.js";
 import { getCostBudgetSnapshot, pruneMetricFiles } from "../subagent-bridge/src/metrics.js";
 
-const configuration = loadConfiguration();
-const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
-
 function readMetricFile(metricsPath) {
   return fs.readFileSync(metricsPath, "utf8").split("\n").filter(Boolean).flatMap((line) => {
     try {
@@ -155,6 +152,8 @@ export function readMetricsDirectory(directory) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const configuration = loadConfiguration();
+  const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
   const budget = await getCostBudgetSnapshot(configuration);
   if (process.argv.includes("--budget-only")) {
     console.log(JSON.stringify(budget, null, 2));
