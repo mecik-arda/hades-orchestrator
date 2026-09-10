@@ -204,6 +204,142 @@ test("OPT-01c: coordinator snapshot owner ve workspace kimliği göstermeden kuy
   coordinator.release("private-waiter");
 });
 
+test("OPT-01d: kuyruktaki yazarlar öncelik sırasına göre edinir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-coordinator-priority-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const coordinator = createWorkspaceCoordinator({ lockDirectory: path.join(root, "locks") });
+  t.after(() => {
+    coordinator.cancel("priority-holder");
+    coordinator.cancel("priority-low");
+    coordinator.cancel("priority-high");
+    coordinator.release("priority-holder");
+    coordinator.release("priority-low");
+    coordinator.release("priority-high");
+  });
+  assert.ok(await coordinator.acquire(root, "edit", "priority-holder"));
+  let lowResolved = false;
+  let highResolved = false;
+  const low = coordinator.acquire(root, "edit", "priority-low", 0).then((grant) => {
+    lowResolved = Boolean(grant);
+    return grant;
+  });
+  const high = coordinator.acquire(root, "edit", "priority-high", 10).then((grant) => {
+    highResolved = Boolean(grant);
+    return grant;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(lowResolved, false);
+  assert.equal(highResolved, false);
+  coordinator.release("priority-holder");
+  assert.ok(await high);
+  assert.equal(lowResolved, false);
+  coordinator.release("priority-high");
+  assert.ok(await low);
+  coordinator.release("priority-low");
+});
+
+test("OPT-01e: kuyruk yazarının iptali intent dosyasını temizler ve bekleyen okuyucuyu açar", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-coordinator-cancel-intent-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const coordinator = createWorkspaceCoordinator({ lockDirectory: path.join(root, "locks") });
+  t.after(() => {
+    coordinator.cancel("cancel-active-reader");
+    coordinator.cancel("cancel-writer");
+    coordinator.cancel("cancel-blocked-reader");
+    coordinator.release("cancel-active-reader");
+    coordinator.release("cancel-writer");
+    coordinator.release("cancel-blocked-reader");
+  });
+  assert.ok(await coordinator.acquire(root, "read_only", "cancel-active-reader"));
+  const cancelledWriter = coordinator.acquire(root, "edit", "cancel-writer");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const intentPath = path.join(root, "locks", crypto.createHash("sha256").update(root).digest("hex"), `writer-${crypto.createHash("sha256").update("cancel-writer").digest("hex")}.intent`);
+  assert.equal(fs.existsSync(intentPath), true);
+  let blockedReaderResolved = false;
+  const blockedReader = coordinator.acquire(root, "read_only", "cancel-blocked-reader").then((grant) => {
+    blockedReaderResolved = Boolean(grant);
+    return grant;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(blockedReaderResolved, false);
+  assert.equal(coordinator.cancel("cancel-writer"), true);
+  assert.equal(fs.existsSync(intentPath), false);
+  assert.equal(await cancelledWriter, null);
+  assert.ok(await blockedReader);
+  coordinator.release("cancel-blocked-reader");
+  coordinator.release("cancel-active-reader");
+});
+
+test("OPT-01f: workspace kuyruk kapasitesi aşımında istek hemen reddedilir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-coordinator-capacity-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const coordinator = createWorkspaceCoordinator({ lockDirectory: path.join(root, "locks"), maxQueuedPerWorkspace: 2 });
+  t.after(() => {
+    coordinator.cancel("capacity-holder");
+    coordinator.cancel("capacity-queued-1");
+    coordinator.cancel("capacity-queued-2");
+    coordinator.cancel("capacity-overflow");
+    coordinator.release("capacity-holder");
+    coordinator.release("capacity-queued-1");
+    coordinator.release("capacity-queued-2");
+    coordinator.release("capacity-overflow");
+  });
+  assert.ok(await coordinator.acquire(root, "edit", "capacity-holder"));
+  const first = coordinator.acquire(root, "edit", "capacity-queued-1");
+  const second = coordinator.acquire(root, "read_only", "capacity-queued-2");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(await coordinator.acquire(root, "edit", "capacity-overflow"), null);
+  assert.equal(coordinator.snapshot().localQueued, 2);
+  coordinator.cancel("capacity-queued-1");
+  coordinator.cancel("capacity-queued-2");
+  assert.equal(await first, null);
+  assert.equal(await second, null);
+  coordinator.release("capacity-holder");
+});
+
+test("OPT-01g: ölü okuyucunun bayat kilidi yazma edinimi sırasında temizlenir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-coordinator-stale-read-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lockDirectory = path.join(root, "locks");
+  const staleReadPath = path.join(lockDirectory, crypto.createHash("sha256").update(root).digest("hex"), `read-${crypto.createHash("sha256").update("dead-reader").digest("hex")}.lock`);
+  fs.mkdirSync(path.dirname(staleReadPath), { recursive: true });
+  fs.writeFileSync(staleReadPath, "dead-owner", "utf8");
+  const staleAt = new Date(Date.now() - 2000);
+  fs.utimesSync(staleReadPath, staleAt, staleAt);
+  const coordinator = createWorkspaceCoordinator({ lockDirectory, staleLockMs: 100 });
+  t.after(() => {
+    coordinator.cancel("stale-read-writer");
+    coordinator.release("stale-read-writer");
+  });
+  assert.ok(await coordinator.acquire(root, "edit", "stale-read-writer"));
+  assert.equal(fs.existsSync(staleReadPath), false);
+  coordinator.release("stale-read-writer");
+});
+
+test("OPT-01h: farklı workspace'ler aynı kilit dizininde birbirini engellemez", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-coordinator-isolation-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspaceA = path.join(root, "workspace-a");
+  const workspaceB = path.join(root, "workspace-b");
+  fs.mkdirSync(workspaceA);
+  fs.mkdirSync(workspaceB);
+  const coordinator = createWorkspaceCoordinator({ lockDirectory: path.join(root, "locks") });
+  t.after(() => {
+    coordinator.cancel("isolation-a");
+    coordinator.cancel("isolation-b");
+    coordinator.release("isolation-a");
+    coordinator.release("isolation-b");
+  });
+  assert.ok(await coordinator.acquire(workspaceA, "edit", "isolation-a"));
+  assert.ok(await coordinator.acquire(workspaceB, "edit", "isolation-b"));
+  assert.equal(coordinator.snapshot().localActive, 2);
+  coordinator.release("isolation-a");
+  assert.equal(coordinator.snapshot().localActive, 1);
+  const workspaceBLockPath = path.join(root, "locks", crypto.createHash("sha256").update(workspaceB).digest("hex"), "write.lock");
+  assert.equal(fs.existsSync(workspaceBLockPath), true);
+  coordinator.release("isolation-b");
+});
+
 test("OPT-02: read-only cache yalnız Git revision anahtarıyla sonuç döndürür", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cache-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
