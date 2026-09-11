@@ -1,10 +1,103 @@
 import { z } from "zod";
 
+export const failureStageValues = ["mcp_preflight", "settings_lock", "settings_enforcement", "provider_execution", "result_parse"];
+export const providerCodeValues = [
+  "resource_exhausted",
+  "rate_limited",
+  "unauthenticated",
+  "permission_denied",
+  "timeout",
+  "output_limit",
+  "executable_missing",
+  "internal_error",
+  "bad_gateway",
+  "gateway_timeout",
+  "unavailable",
+  "connection_reset",
+  "dns_failure",
+  "fetch_failed",
+  "network_error",
+  "process_exit",
+  "process_error",
+  "invalid_model",
+  "empty_output",
+  "unclassified"
+];
+export const retryDecisionValues = ["retry", "stop", "not_applicable"];
+export const retryStopReasonValues = [
+  "mutation_state_unknown",
+  "non_retryable_failure_class",
+  "max_attempts_reached",
+  "budget_exhausted",
+  "budget_reserved",
+  "schema_repair_exhausted"
+];
+export const processSignalValues = [
+  "SIGABRT",
+  "SIGBUS",
+  "SIGFPE",
+  "SIGHUP",
+  "SIGILL",
+  "SIGINT",
+  "SIGKILL",
+  "SIGQUIT",
+  "SIGSEGV",
+  "SIGTERM",
+  "SIGTRAP",
+  "SIGXCPU",
+  "SIGXFSZ"
+];
+export const outputSizeBucketValues = ["empty", "lte_1_kib", "lte_64_kib", "lte_1_mib", "gt_1_mib"];
+export const capabilityStatusValues = ["not_probed", "available", "unavailable"];
+export const capabilityNames = ["modelAccess", "toolFreeResponse", "workspaceRead", "webRead"];
+export const capabilityFailureClassValues = [
+  "timeout",
+  "output_limit",
+  "executable_missing",
+  "permission_denied",
+  "policy_violation",
+  "rate_limited",
+  "authentication_failure",
+  "server",
+  "network",
+  "empty_output",
+  "process_exit",
+  "process_error",
+  "invalid_model",
+  "unclassified"
+];
+
+export const capabilityProbeSchema = z.object({
+  modelAccess: z.enum(capabilityStatusValues),
+  toolFreeResponse: z.enum(capabilityStatusValues),
+  workspaceRead: z.enum(capabilityStatusValues),
+  webRead: z.enum(capabilityStatusValues),
+  failureClass: z.enum(capabilityFailureClassValues).nullable(),
+  checkedAt: z.string().datetime().nullable()
+}).strict();
+
+export const attemptDiagnosticsSchema = z.object({
+  failureStage: z.enum(failureStageValues).nullable(),
+  providerCode: z.enum(providerCodeValues).nullable(),
+  settingsLockWaitMs: z.number().int().min(0).nullable(),
+  providerExecutionMs: z.number().int().min(0).nullable(),
+  stdoutBytes: z.number().int().min(0).nullable(),
+  stderrBytes: z.number().int().min(0).nullable()
+}).strict();
+
 export const healthResultSchema = z.object({
   installed: z.boolean(),
   version: z.string().nullable(),
-  authValid: z.boolean(),
+  authValid: z.boolean().nullable(),
   executable: z.string(),
+  probes: z.object({
+    cli: z.enum(["available", "unavailable"]),
+    modelAccess: z.enum(capabilityStatusValues),
+    toolFreeResponse: z.enum(capabilityStatusValues),
+    workspaceRead: z.enum(capabilityStatusValues),
+    webRead: z.enum(capabilityStatusValues)
+  }).strict().optional(),
+  capabilityProbes: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/), capabilityProbeSchema).optional(),
   error: z.string().optional()
 }).strict();
 
@@ -28,6 +121,8 @@ export const subagentResultSchema = z.object({
     queueWaitMs: z.number().int().min(0).optional(),
     cacheHit: z.boolean().optional(),
     totalCostUsd: z.number().min(0).nullable().optional(),
+    signal: z.string().nullable().optional(),
+    diagnostics: attemptDiagnosticsSchema.optional(),
     costBudget: z.object({
       period: z.enum(["daily", "monthly"]),
       limitUsd: z.number().min(0),
@@ -37,6 +132,15 @@ export const subagentResultSchema = z.object({
     attempts: z.array(z.object({
       number: z.number().int().min(1),
       failureClass: z.string().nullable(),
+      failureStage: z.enum(failureStageValues).nullable().optional(),
+      providerCode: z.enum(providerCodeValues).nullable().optional(),
+      retryDecision: z.enum(retryDecisionValues).optional(),
+      retryStopReason: z.enum(retryStopReasonValues).nullable().optional(),
+      signal: z.string().nullable().optional(),
+      settingsLockWaitMs: z.number().int().min(0).nullable().optional(),
+      providerExecutionMs: z.number().int().min(0).nullable().optional(),
+      stdoutBucket: z.enum(outputSizeBucketValues).nullable().optional(),
+      stderrBucket: z.enum(outputSizeBucketValues).nullable().optional(),
       exitCode: z.number().int().nullable(),
       durationMs: z.number().int().min(0),
       totalCostUsd: z.number().min(0).nullable()

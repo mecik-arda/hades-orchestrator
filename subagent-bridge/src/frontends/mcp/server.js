@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { z } from "zod";
 import { ANTIGRAVITY_MODEL_MAP } from "../../adapters/antigravity-adapter.js";
 import { analyzePersistentMemoryWrite, checkPersistentMemory, promotePersistentMemory, readPersistentMemory, reviewPersistentMemory, searchPersistentMemory, storePersistentMemory } from "../../memory.js";
-import { createMcpToolHandlers, publicToolSchemas } from "./tools.js";
+import { createMcpToolHandlers, publicToolSchemas, antigravityProbeSchema } from "./tools.js";
 
 const readOnlyAnnotations = {
   readOnlyHint: true,
@@ -50,6 +50,8 @@ function sanitizeHealth(health) {
     installed: health.installed,
     version: health.version,
     authValid: health.authValid,
+    probes: health.probes,
+    capabilityProbes: health.capabilityProbes,
     error: health.error
   };
 }
@@ -264,11 +266,14 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
 
   server.registerTool("check_antigravity_subagent", {
     title: "Antigravity subagent bağlantısını kontrol et",
-    description: "Antigravity CLI yürütücüsünü, model eşlemesini ve auth durumunu secret değerlerini göstermeden kontrol eder.",
-    inputSchema: {},
+    description: "Antigravity CLI yürütücüsünü, model eşlemesini ve auth durumunu secret değerlerini göstermeden kontrol eder. probeModels ve probeCapabilities birlikte verilirse isteğe bağlı, seri ve düşük maliyetli capability probları çalıştırır.",
+    inputSchema: antigravityProbeSchema,
     annotations: readOnlyAnnotations
-  }, safe(async () => {
-    const health = await runtime.health(["antigravity"]);
+  }, safe(async (input) => {
+    const health = await runtime.health(["antigravity"], {
+      probeModels: input.probeModels,
+      probeCapabilities: input.probeCapabilities
+    });
     const entry = health.adapters.antigravity;
     const result = {
       adapterId: entry.id,

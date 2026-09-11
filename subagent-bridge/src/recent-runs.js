@@ -2,6 +2,14 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import {
+  failureStageValues,
+  outputSizeBucketValues,
+  processSignalValues,
+  providerCodeValues,
+  retryDecisionValues,
+  retryStopReasonValues
+} from "./schemas/core-schemas.js";
 
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const tokenSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
@@ -39,6 +47,42 @@ const executionSchema = z.object({
   failureClass: nullableTokenSchema,
   usage: usageSchema,
   attempts: z.array(attemptSchema).max(100),
+  retries: z.number().int().nonnegative(),
+  queueWaitMs: finiteNonnegativeSchema,
+  cacheHit: z.boolean()
+}).strict();
+const attemptSchemaV2 = z.object({
+  number: z.number().int().positive().optional(),
+  failureClass: nullableTokenSchema.optional(),
+  failureStage: z.enum(failureStageValues).nullable().optional(),
+  providerCode: z.enum(providerCodeValues).nullable().optional(),
+  exitCode: z.number().int().optional().nullable(),
+  signal: z.enum(processSignalValues).nullable().optional(),
+  retryDecision: z.enum(retryDecisionValues).optional(),
+  retryStopReason: z.enum(retryStopReasonValues).nullable().optional(),
+  settingsLockWaitMs: finiteNonnegativeSchema.optional().nullable(),
+  providerExecutionMs: finiteNonnegativeSchema.optional().nullable(),
+  stdoutBucket: z.enum(outputSizeBucketValues).optional().nullable(),
+  stderrBucket: z.enum(outputSizeBucketValues).optional().nullable(),
+  durationMs: finiteNonnegativeSchema.optional().nullable(),
+  totalCostUsd: finiteNonnegativeSchema.optional().nullable()
+}).strict();
+const executionSchemaV2 = z.object({
+  schemaVersion: z.literal(2),
+  recordedAt: z.string().datetime(),
+  backend: backendSchema,
+  modelHash: hashSchema,
+  executionIdHash: hashSchema,
+  workspaceHash: hashSchema,
+  mode: modeSchema,
+  profile: tokenSchema.optional().nullable(),
+  outcomeStatus: outcomeSchema,
+  failureClass: nullableTokenSchema,
+  failureStage: z.enum(failureStageValues).nullable(),
+  providerCode: z.enum(providerCodeValues).nullable(),
+  retryStopReason: z.enum(retryStopReasonValues).nullable(),
+  usage: usageSchema,
+  attempts: z.array(attemptSchemaV2).max(100),
   retries: z.number().int().nonnegative(),
   queueWaitMs: finiteNonnegativeSchema,
   cacheHit: z.boolean()
@@ -133,7 +177,56 @@ function scanMetricFiles(selection, visit, countInvalid = true) {
   return invalidRecordCount;
 }
 
+function lastAttemptDiagnosis(attempts, fallback = {}) {
+  const lastAttempt = Array.isArray(attempts) && attempts.length > 0 ? attempts.at(-1) : null;
+  if (!lastAttempt) {
+    return {
+      failureStage: fallback.failureStage ?? null,
+      providerCode: fallback.providerCode ?? null,
+      retryStopReason: fallback.retryStopReason ?? null,
+      exitCode: null,
+      signal: null
+    };
+  }
+  return {
+    failureStage: lastAttempt.failureStage ?? null,
+    providerCode: lastAttempt.providerCode ?? null,
+    retryStopReason: lastAttempt.retryStopReason ?? null,
+    exitCode: lastAttempt.exitCode ?? null,
+    signal: lastAttempt.signal ?? null
+  };
+}
+
 function normalizeRun(record) {
+  if (record?.schemaVersion === 2) {
+    const executionV2 = executionSchemaV2.safeParse(record);
+    if (!executionV2.success) return null;
+    const value = executionV2.data;
+    const diagnosis = lastAttemptDiagnosis(value.attempts, value);
+    const lastAttempt = Array.isArray(value.attempts) && value.attempts.length > 0 ? value.attempts.at(-1) : null;
+    return {
+      kind: "execution",
+      identity: value.executionIdHash,
+      recordedAt: value.recordedAt,
+      fullHash: value.executionIdHash,
+      profile: value.profile || null,
+      role: null,
+      backend: value.backend,
+      modelHash: value.modelHash,
+      mode: value.mode,
+      outcomeStatus: value.outcomeStatus,
+      failureClass: lastAttempt ? lastAttempt.failureClass : value.failureClass,
+      failureStage: diagnosis.failureStage,
+      providerCode: diagnosis.providerCode,
+      retryStopReason: diagnosis.retryStopReason,
+      exitCode: diagnosis.exitCode,
+      signal: diagnosis.signal,
+      durationMs: value.usage.durationMs ?? null,
+      reportedCostUsd: value.usage.totalCostUsd ?? null,
+      cacheHit: value.cacheHit,
+      retries: lastAttempt ? Math.max(0, value.attempts.length - 1) : value.retries
+    };
+  }
   const execution = executionSchema.safeParse(record);
   if (execution.success) {
     const value = execution.data;
@@ -149,6 +242,11 @@ function normalizeRun(record) {
       mode: value.mode,
       outcomeStatus: value.outcomeStatus,
       failureClass: value.failureClass,
+      failureStage: null,
+      providerCode: null,
+      retryStopReason: null,
+      exitCode: null,
+      signal: null,
       durationMs: value.usage.durationMs ?? null,
       reportedCostUsd: value.usage.totalCostUsd ?? null,
       cacheHit: value.cacheHit,
@@ -170,6 +268,11 @@ function normalizeRun(record) {
     mode: "not_applicable",
     outcomeStatus: value.outcomeStatus,
     failureClass: value.failureClass,
+    failureStage: null,
+    providerCode: null,
+    retryStopReason: null,
+    exitCode: null,
+    signal: null,
     durationMs: value.usage.durationMs ?? null,
     reportedCostUsd: value.usage.totalCostUsd ?? null,
     cacheHit: false,
@@ -255,6 +358,11 @@ export function readRecentRuns(configuration, options = {}) {
       mode: run.mode,
       outcomeStatus: run.outcomeStatus,
       failureClass: run.failureClass,
+      failureStage: run.failureStage,
+      providerCode: run.providerCode,
+      retryStopReason: run.retryStopReason,
+      exitCode: run.exitCode,
+      signal: run.signal,
       durationMs: run.durationMs,
       reportedCostUsd: run.reportedCostUsd,
       cacheHit: run.cacheHit,

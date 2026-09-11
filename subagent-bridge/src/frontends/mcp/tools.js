@@ -6,6 +6,13 @@ const modeSchema = z.enum(["read_only", "edit"]).default("read_only");
 const timeoutSecondsSchema = z.number().int().min(10).max(1200).optional();
 const profileSchema = z.string().min(1).max(64);
 
+export const antigravityProbeFields = {
+  probeModels: z.array(z.enum(["gemini_pro", "gemini_flash", "gemini_flash_3_7", "gemini_flash_3_8", "claude_sonnet"])).max(5).default([]),
+  probeCapabilities: z.array(z.enum(["modelAccess", "toolFreeResponse", "workspaceRead", "webRead"])).max(4).default([])
+};
+
+export const antigravityProbeSchema = z.object(antigravityProbeFields).strict();
+
 export const publicToolSchemas = {
   runAntigravity: z.object({
     prompt: z.string().min(1).max(60000),

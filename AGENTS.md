@@ -1,6 +1,6 @@
 # Lider Orkestratör Talimatları
 
-Bu projede ana orkestratör ve son karar verici, OpenCode oturumunda aktif kullanılan modeldir. DeepSeek V4 Pro ile GLM 5.2 varsayılan salt-okunur uzman ve kontrollü edit subagent'lardır; DeepSeek V4 Flash ile GLM 5.2 HighSpeed düşük maliyetli veya hızlı yardımcı modellerdir. GLM 5.3 `run_glm_subagent(model=glm_5_3)` üzerinden opt-in olarak kullanılabilir; açıkça istendiğinde veya 5.2'nin yetersiz kaldığı karmaşık görevlerde tercih edilir. GLM 5.3 Flash (`glm_5_3_flash` → `zai-coding-plan/glm-5.3-flash`) düşük maliyetli hızlı yardımcı model olarak opt-in kullanılabilir. GLM 5.2, 5.3 ve 5.3 Flash kontrollü edit'i `glm_implementation`, `glm53_implementation` ve `glm53_flash_implementation` profilleriyle veya global `glm52Edit`/`glm53Edit`/`glm53FlashEdit` araçlarıyla yapılır. GPT-6 Astra en güçlü Codex modeli olarak `astra_review` read-only profili, `astra_implementation` edit profili ve global `codexAstra`/`codexAstraEdit` araçlarıyla opt-in kullanılır; yüksek maliyeti nedeniyle yalnız açıkça istendiğinde tercih edilir.
+Bu projede ana orkestratör ve son karar verici, OpenCode oturumunda aktif kullanılan modeldir. DeepSeek V4 Pro varsayılan salt-okunur uzmandır; DeepSeek V4 Flash düşük maliyetli veya hızlı yardımcı modeldir. GLM aboneliği aktif değildir: kullanıcı yeniden etkin olduğunu açıkça belirtmedikçe hiçbir GLM modeli, profili, fallback'i veya global GLM aracı çağrılmaz. Codex Luna hızlı fiyat/performans uygulayıcıdır; Codex Terra dengeli varsayılan edit modelidir; Codex Sol kilit zorlu sorunlar ve hata denetimi için güçlü uzman modeldir. GPT-6 Astra en güçlü Codex modelidir; yüksek token maliyeti nedeniyle yalnız Sol'un yetersiz kaldığı açıkça gerekçelendirilmiş durumlarda veya kullanıcı açıkça istediğinde kullanılır.
 
 ## Başlangıç kuralları
 
@@ -16,18 +16,32 @@ Bu projede ana orkestratör ve son karar verici, OpenCode oturumunda aktif kulla
 ## Orkestrasyon düzeni
 
 - Kullanıcı hedefini, kapsamı, kabul kriterlerini ve doğrulama sınırlarını ana orkestratör belirler.
-- Kod değişikliklerini ana orkestratör veya kontrollü `implementer` modundaki DeepSeek/GLM yapabilir; testleri ana orkestratör çalıştırır ve tamamlanma kararını ana orkestratör verir.
-- DeepSeek/GLM çıktısını kanıt değil danışmanlık olarak değerlendir ve önemli iddiaları bağımsız doğrula.
-- Geniş repository keşfi, alternatif mimari, ikinci görüş, dokümantasyon araştırması veya bağımsız inceleme gerçekten fayda sağlayacaksa `run_deepseek_subagent` veya `run_glm_subagent` aracını kullan.
-- GLM 5.2 kod üretimi ve dosya düzenlemede güçlü ve güvenilirdir; karmaşık implementation ve derin kod analizi için tercih edilir. DeepSeek V4 Flash'dan daha pahalı olduğundan rutin okumalar için değil, yüksek değerli görevler için kullan.
-- GLM 5.2 görüntü girdisi kabul etmez; görüntü gerektiren görevler GLM'ye yönlendirilmez.
-- GLM read-only sonucu sıkı JSON şemasıyla çalışma zamanında doğrulanır; `run_glm_edit_pilot` ana workspace'e değişiklik uygulamayan disposable diff üretir.
+- Kod değişikliklerini ana orkestratör veya seçilmiş dosyalı kontrollü Codex/DeepSeek implementer yapabilir; testleri ana orkestratör çalıştırır ve tamamlanma kararını ana orkestratör verir.
+- DeepSeek ve subagent çıktısını kanıt değil danışmanlık olarak değerlendir; önemli iddiaları bağımsız doğrula.
+- Geniş repository keşfi, alternatif mimari, ikinci görüş, dokümantasyon araştırması veya bağımsız inceleme gerçekten fayda sağlayacaksa DeepSeek veya uygun Codex modelini kullan.
+- Luna'yı dar, iyi tanımlı ve hız duyarlı uygulama işleri için; Terra'yı varsayılan dengeli kod düzenleme için; Sol'u zor hata ayıklama, kök neden analizi ve güçlü denetim için seç.
+- Astra'yı rutin iş, ilk denetim veya Sol'a verilmemiş sorunlar için seçme. Astra çağrısından önce Sol'un yetersiz kaldığını ya da Astra'nın neden gerekli olduğunu açıkça gerekçelendir.
 - Küçük ve açık görevleri, doğrudan uygulanabilecek değişiklikleri veya yalnızca ana orkestratörün sahip olduğu araçlarla doğrulanabilecek işleri gereksiz yere devretme.
-- DeepSeek/GLM'e tek çağrıda dar bir rol, açık hedef, ilgili dosyalar ve kabul kriterleri ver.
+- DeepSeek'e tek çağrıda dar bir rol, açık hedef, ilgili dosyalar ve kabul kriterleri ver.
 - Bağımsız alt problemler varsa ayrı çağrılar yap; aynı işi iki modele tekrar ettirme.
-- DeepSeek/GLM `needs_context` döndürürse eksik bilgiyi tamamla veya görevi küçült. Aynı başarısız promptu tekrar gönderme.
-- DeepSeek/GLM'e secret, kabuk erişimi, subagent delegasyonu, commit, push veya geri alınamaz işlem verme. Yazma yalnız `mode: edit`, `role: implementer` ve seçilmiş hedef dosyalarla kontrollü promotion üzerinden yapılır.
-- Yerel kod analizi ile internet araştırmasını aynı DeepSeek/GLM çağrısında birleştirme. `researcher` rolü yalnızca web araçları; `analyst`, `reviewer` ve `planner` yerel salt-okunur araçlar; `implementer` ise seçilmiş dosyalarda kontrollü edit kullanır.
+- DeepSeek `needs_context` döndürürse eksik bilgiyi tamamla veya görevi küçült. Aynı başarısız promptu tekrar gönderme.
+- DeepSeek'e secret, kabuk erişimi, subagent delegasyonu, commit, push veya geri alınamaz işlem verme. Yazma yalnız `mode: edit`, `role: implementer` ve seçilmiş hedef dosyalarla kontrollü promotion üzerinden yapılır.
+- Yerel kod analizi ile internet araştırmasını aynı DeepSeek çağrısında birleştirme. `researcher` rolü yalnızca web araçları; `analyst`, `reviewer` ve `planner` yerel salt-okunur araçlar; `implementer` ise seçilmiş dosyalarda kontrollü edit kullanır.
+- Gemini 3.8 Flash düşük maliyetli geniş bulgu adayı üretimi, web bağlamı toplama ve kamuya açık sayfa, video metni veya altyazı analizi için kullanılabilir. Güvenlik denetçisi, önceliklendirici, doğrulayıcı veya onay kapısı olarak kullanma; her iddiayı Sol, Terra, DeepSeek veya hedefli yerel testlerle bağımsız doğrula.
+- Gemini 3.8 Flash bulgularını hipotez olarak ele al; önem derecesini, satır referansını ve kapatılmış kod yolu iddiasını kaynakta doğrulamadan rapora kesin bulgu olarak yazma.
+- Gemini Flash yerleşik salt-okunur web araçlarıyla kamuya açık URL, sayfa, video metni ve altyazı inceleyebilir. Yerel dosya inceleme için yalnız yerleşik workspace okuma araçlarını kullanabilir; terminal komutu, MCP, yazma aracı, oturum açma, form gönderme veya başka etkileşimli web eylemleri verilemez.
+- Antigravity'de `permission denied` veya `headless mode cannot prompt` sonucu model hesabı, model erişim planı veya sağlayıcı arızasını tek başına kanıtlamaz. Araçsız kısa bir probe ile model erişimini ayrı doğrula; araç izni sorunlarını adaptör izin politikası olarak sınıflandır.
+- Antigravity salt-okunur çağrıları ortak ayar kilidi kullandığından paralel toplu Gemini çağrıları başlatma. İstek timeoutunu kuyruk beklemesini kapsayacak biçimde seç ve bağımsız işlerde diğer sağlayıcıları kullan.
+- Antigravity araç izinlerini aşmak için `--dangerously-skip-permissions` veya eşdeğer bir bypass kullanma.
+
+### Subagent seçim kapısı
+
+- Subagent çağrısını bir tool call gibi değerlendir: önce araç ihtiyacı, çıktı rolü ve gereken kanıt düzeyini sınıflandır; sonra bu sözleşmeye uyan tek sağlayıcıyı seç. Modeli yalnız maliyetine veya adına göre seçme.
+- Araçsız geniş risk veya fikir adayları için Gemini 3.8 Flash kullanılabilir; adayları ana orkestratör kaynakta doğrular ve gerektiğinde bağımsız bir modele ya da hedefli teste verir.
+- Dosya inceleme, komut çalıştırma, kaynak satırı doğrulama, önem derecelendirme ve nihai karar gerektiren görevleri Gemini Flash'a verme. Bu görevlerde DeepSeek Pro, Codex Sol/Terra veya yerel doğrulamayı seç.
+- Gemini Pro için de mevcut Antigravity headless araç sınırları geçerlidir. Araç gerektiren görevlerde bu sağlayıcıyı seçmeden önce izin sözleşmesini doğrula; aksi halde araçsız, açık bağlamı promptta verilmiş tekil görevlerle sınırla.
+- Kontrollü kod düzenleme yalnız seçilmiş dosyalar ve doğrulanabilir kabul kriterleriyle yetkili implementer yolundan yapılır. Aday üreten bir modelin sonucu doğrudan düzenleme veya onay gerekçesi olamaz.
+- `permission denied`, `authentication failure`, `rate_limited` veya `headless mode cannot prompt` sonucunda hata sınıfını görev kararından ayır. Aynı çağrıyı körlemesine tekrarlama; önce sağlayıcı erişimini, araç iznini ve kuyruk durumunu ayrı probelerle teşhis et.
 
 ## Skill kullanımı
 

@@ -134,6 +134,15 @@ test("AG-AC-07: edit mutation_state_unknown automatic retry yapmaz", () => {
   const result2 = shouldRetry("process_exit", "edit", 1, 3);
   assert.equal(result2.retryable, false);
 
+  assert.equal(shouldRetry("rate_limited", "edit", 1, 3).reason, "mutation_state_unknown");
+  assert.equal(shouldRetry("server", "edit", 1, 3).reason, "mutation_state_unknown");
+  assert.equal(shouldRetry("empty_output", "edit", 1, 3).reason, "mutation_state_unknown");
+  assert.equal(shouldRetry("output_limit", "edit", 1, 3).reason, "mutation_state_unknown");
+  assert.equal(shouldRetry("process_error", "edit", 1, 3).reason, "mutation_state_unknown");
+  assert.equal(shouldRetry("process_crash", "edit", 1, 3).reason, "mutation_state_unknown");
+  assert.equal(shouldRetry("schema_invalid", "edit", 1, 3).reason, "mutation_state_unknown");
+  assert.equal(shouldRetry("output_parse_invalid", "edit", 1, 3).reason, "mutation_state_unknown");
+
   assert.equal(isMutationStateUnknown("edit", "timeout"), true);
   assert.equal(isMutationStateUnknown("edit", "network"), true);
   assert.equal(isMutationStateUnknown("read_only", "timeout"), false);
@@ -253,6 +262,7 @@ test("AG-AC-15a: headless permission denial structured failure olur", () => {
 
   assert.equal(classification.valid, false);
   assert.equal(classification.errorClass, "permission_denied");
+  assert.match(classification.reason, /headless mode cannot prompt/i);
 });
 
 test("AG-AC-15b: JSON response alanı final sonucu döndürür ve boş yanıt reddedilir", () => {
@@ -264,20 +274,15 @@ test("AG-AC-15b: JSON response alanı final sonucu döndürür ve boş yanıt re
 });
 
 test("AG-AC-15c: read-only permission policy yalnız inceleme komutlarını allow eder", () => {
-  assert.deepEqual(READ_ONLY_PERMISSION_RULES.deny, ["write_file(*)"]);
-  assert.match(READ_ONLY_INSTRUCTION, /Do not call MCP or built-in file tools/i);
-  assert.match(READ_ONLY_INSTRUCTION, /allowlisted terminal commands/i);
-  assert.ok(READ_ONLY_PERMISSION_RULES.allow.includes("command(git diff)"));
-  assert.ok(READ_ONLY_PERMISSION_RULES.allow.includes("command(rg)"));
-  assert.ok(READ_ONLY_PERMISSION_RULES.allow.includes("command(Get-Location)"));
-  assert.ok(READ_ONLY_PERMISSION_RULES.allow.includes("command(pwd)"));
-  assert.ok(READ_ONLY_PERMISSION_RULES.allow.includes("command(ls)"));
-  assert.ok(READ_ONLY_PERMISSION_RULES.allow.includes("command(pwd; ls)"));
-  assert.ok(!READ_ONLY_PERMISSION_RULES.allow.includes("command(*)"));
+  assert.deepEqual(READ_ONLY_PERMISSION_RULES.allow, ["read_url(*)"]);
+  assert.deepEqual(READ_ONLY_PERMISSION_RULES.deny, ["command(*)", "unsandboxed(*)", "write_file(*)"]);
+  assert.match(READ_ONLY_INSTRUCTION, /built-in workspace read tools/i);
+  assert.match(READ_ONLY_INSTRUCTION, /Do not call MCP, terminal commands, or built-in write tools/i);
 });
 
 test("AGY-PERM-06: read-only yalnız dar mevcut izinleri ve MCP sunucusuz ortamı kabul eder", () => {
-  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["command(rg)"] } }), true);
+  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: [] } }), true);
+  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["command(rg)"] } }), false);
   assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["mcp(*)"] } }), false);
   assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["command(*)"] } }), false);
   assert.equal(hasNoConfiguredMcpServers({ code: 0, stdout: "No MCP servers configured.\n" }), true);
@@ -318,6 +323,28 @@ test("AGY-PERM-07/08: read-only settings mutex sırayla serbest bırakır", asyn
   assert.equal(secondEntered, true);
 });
 
+test("AGY-PERM-08a: settings mutex request deadline ile sinirlanir ve kuyrugu bozmaz", async () => {
+  const acquire = createSettingsLock();
+  const releaseFirst = await acquire();
+
+  await assert.rejects(
+    acquire(Date.now() + 30),
+    (error) => error.code === "SETTINGS_LOCK_TIMEOUT"
+  );
+
+  let thirdEntered = false;
+  const third = acquire(Date.now() + 500).then((release) => {
+    thirdEntered = true;
+    release();
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(thirdEntered, false);
+  releaseFirst();
+  await third;
+  assert.equal(thirdEntered, true);
+});
+
 test("AGY-PERM-09: canlı eski lock silinmez ve iki süreç ayarları geri yükler", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agy-cross-process-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -340,9 +367,16 @@ test("AGY-PERM-09: canlı eski lock silinmez ve iki süreç ayarları geri yükl
   });
 
   const first = launch("first");
-  await new Promise((resolve) => setTimeout(resolve, 500));
   const lockPath = path.join(settingsDirectory, "settings.lock");
-  assert.equal(fs.existsSync(lockPath), true);
+  await new Promise((resolve, reject) => {
+    const deadlineMs = Date.now() + 5000;
+    const inspectLock = () => {
+      if (fs.existsSync(lockPath)) return resolve();
+      if (Date.now() >= deadlineMs) return reject(new Error("first process did not acquire settings lock"));
+      setTimeout(inspectLock, 10);
+    };
+    inspectLock();
+  });
   const staleAt = new Date(Date.now() - 600000);
   fs.utimesSync(lockPath, staleAt, staleAt);
   const second = launch("second");
@@ -350,6 +384,50 @@ test("AGY-PERM-09: canlı eski lock silinmez ve iki süreç ayarları geri yükl
 
   const settings = fs.readFileSync(settingsPath, "utf8");
   assert.equal(settings, "{}");
+});
+
+test("AGY-PERM-09a: processler arasi lock beklemesi request timeout ile sinirlanir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agy-lock-timeout-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const settingsDirectory = path.join(root, ".gemini", "antigravity-cli");
+  fs.mkdirSync(settingsDirectory, { recursive: true });
+  const settingsPath = path.join(settingsDirectory, "settings.json");
+  fs.writeFileSync(settingsPath, "{}", "utf8");
+  const sleeperPath = path.join(root, "sleeper.js");
+  fs.writeFileSync(sleeperPath, "if (process.argv.includes('mcp')) { console.log('No MCP servers configured.'); process.exit(0); } setTimeout(() => { console.log(JSON.stringify({ response: 'done' })); }, 5000);", "utf8");
+  const adapterModule = pathToFileURL(path.resolve("subagent-bridge/src/adapters/antigravity-adapter.js")).href;
+  const createSource = (timeoutMs, printResult) => `import { createAntigravityAdapter } from ${JSON.stringify(adapterModule)}; const adapter = createAntigravityAdapter({ antigravity: { executable: process.execPath, execArgs: [${JSON.stringify(sleeperPath)}], defaultSandbox: false } }); const result = await adapter.execute({ executionId: process.argv[1], backend: "antigravity", prompt: "inspect", model: "gemini_pro", mode: "read_only", workspace: process.cwd(), delegationDepth: 0, caller: "test", timeoutMs: ${timeoutMs} }); if (${printResult}) process.stdout.write(JSON.stringify(result));`;
+  const launch = (executionId, timeoutMs, captureOutput) => new Promise((resolve, reject) => {
+    const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", createSource(timeoutMs, captureOutput), executionId], {
+      cwd: process.cwd(),
+      env: { ...process.env, HOME: root, USERPROFILE: root, TEMP: root, TMP: root },
+      stdio: captureOutput ? ["ignore", "pipe", "ignore"] : "ignore"
+    });
+    let stdout = "";
+    if (captureOutput) child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0 ? resolve(stdout) : reject(new Error(`child exited with ${code}`)));
+  });
+
+  const first = launch("holder", 8000, false);
+  const lockPath = path.join(settingsDirectory, "settings.lock");
+  await new Promise((resolve, reject) => {
+    const deadlineMs = Date.now() + 5000;
+    const inspectLock = () => {
+      if (fs.existsSync(lockPath)) return resolve();
+      if (Date.now() >= deadlineMs) return reject(new Error("holder did not acquire settings lock"));
+      setTimeout(inspectLock, 10);
+    };
+    inspectLock();
+  });
+
+  const secondResult = JSON.parse(await launch("waiter", 2000, true));
+  assert.equal(secondResult.ok, false);
+  assert.equal(secondResult.timedOut, true);
+  assert.equal(secondResult.reason, "timeout");
+  assert.equal(fs.existsSync(lockPath), true);
+  await first;
+  assert.equal(fs.readFileSync(settingsPath, "utf8"), "{}");
 });
 
 test("AG-AC-15e: provider execArgs çalışma zamanı argv önüne eklenir", () => {
@@ -420,12 +498,32 @@ test("AG-VERIFY-03: invalid model ALIAS correctly rejected", () => {
   assert.match(r.error, /unsupported model alias/i);
 });
 
-test("AG-VERIFY-04: provider_temporary_error mapped as retryable", () => {
-  const failure = classifyAntigravityError(
-    Object.assign(new Error("temporary provider error"), {}), null, "", ""
-  );
+test("AG-VERIFY-04: transient provider failures are classified for retry", () => {
+  const cases = [
+    ["RESOURCE_EXHAUSTED", "rate_limited", "resource_exhausted"],
+    ["HTTP 429 too many requests", "rate_limited", "rate_limited"],
+    ["HTTP 503 service unavailable", "server", "unavailable"],
+    ["HTTP 502 bad gateway", "server", "bad_gateway"],
+    ["HTTP 504 gateway timeout", "server", "gateway_timeout"],
+    ["HTTP 500 internal server error", "server", "internal_error"],
+    ["ECONNRESET", "network", "connection_reset"],
+    ["EAI_AGAIN", "network", "dns_failure"],
+    ["fetch failed", "network", "fetch_failed"]
+  ];
 
-  assert.ok(true);
+  for (const [stderr, errorClass, providerCode] of cases) {
+    const failure = classifyAntigravityError(null, 1, "", stderr);
+    assert.equal(failure.errorClass, errorClass);
+    assert.equal(failure.providerCode, providerCode);
+  }
+  assert.equal(classifyAntigravityError(null, 1, "", "authentication_failure").errorClass, "authentication_failure");
+  assert.equal(classifyAntigravityError(null, 1, "", "authentication_failure").providerCode, "unauthenticated");
+  assert.equal(classifyAntigravityError(null, 1, "", "HTTP 401 unauthorized").errorClass, "authentication_failure");
+  assert.equal(classifyAntigravityError(null, 1, "", "permission denied").providerCode, "permission_denied");
+  assert.equal(classifyAntigravityError(null, 1, "", "headless mode cannot prompt").providerCode, "permission_denied");
+  assert.equal(classifyAntigravityError(null, 0, '{"response":"429 authentication unavailable"}', "").valid, true);
+  assert.equal(classifyAntigravityError(null, null, '{"response":"complete"}', "", "SIGTERM").errorClass, "process_exit");
+  assert.equal(classifyAntigravityError(null, null, '{"response":"complete"}', "", "SIGTERM").providerCode, "process_exit");
 });
 
 test("AGY-EXEC-01: health ve execute aynı configured executable resolution kullanır", () => {
@@ -458,6 +556,14 @@ test("AGY-EXEC-03: absolute executable PATH resolution gerektirmez", async () =>
   try {
     const health = await adapter.healthCheck();
     assert.equal(health.installed, true);
+    assert.equal(health.authValid, null);
+    assert.deepEqual(health.probes, {
+      cli: "available",
+      modelAccess: "not_probed",
+      toolFreeResponse: "not_probed",
+      workspaceRead: "not_probed",
+      webRead: "not_probed"
+    });
     assert.equal(health.executable, process.execPath);
   } finally {
     process.env.PATH = originalPath;
@@ -468,5 +574,5 @@ test("AGY-EXEC-04: nested provider ENOENT çıktısı AGY executable missing say
   const classification = classifyAntigravityError(null, 1, "", "nested helper spawn ENOENT");
 
   assert.equal(classification.valid, false);
-  assert.equal(classification.errorClass, "non_zero_exit");
+  assert.equal(classification.errorClass, "process_exit");
 });

@@ -119,7 +119,13 @@ async function withFileLock(lockPath, callback) {
     } catch (error) {
       if (descriptor !== null) fs.closeSync(descriptor);
       descriptor = null;
-      if (error.code !== "EEXIST") throw error;
+      const lockContended = error.code === "EEXIST" || (error.code === "EPERM" && fs.existsSync(lockPath));
+      if (!lockContended && error.code === "EPERM") {
+        if (Date.now() >= deadline) throw new Error("project mirror lock unavailable");
+        await pause(10);
+        continue;
+      }
+      if (!lockContended) throw error;
       const first = readSafeLock(lockPath);
       await pause(10);
       const second = readSafeLock(lockPath);

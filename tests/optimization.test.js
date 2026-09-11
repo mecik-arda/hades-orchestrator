@@ -539,8 +539,8 @@ test("OPT-06: metrics dosyası sınırda rotasyon yapar", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-metrics-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const configuration = { statePaths: { logs: root }, observability: { maxMetricFileBytes: 120 } };
-  await appendRedactedRunMetric(configuration, { backend: "codex", recordedAt: "one", payload: "x".repeat(80) });
-  await appendRedactedRunMetric(configuration, { backend: "codex", recordedAt: "two", payload: "x".repeat(80) });
+  await appendRedactedRunMetric(configuration, { backend: "codex", recordedAt: "one", workspaceHash: crypto.createHash("sha256").update("one").digest("hex") });
+  await appendRedactedRunMetric(configuration, { backend: "codex", recordedAt: "two", workspaceHash: crypto.createHash("sha256").update("two").digest("hex") });
   const entries = fs.readdirSync(path.join(root, "metrics"));
   assert.equal(entries.some((entry) => entry.startsWith("codex-runs-") && entry.endsWith(".jsonl")), true);
   assert.equal(entries.includes("codex-runs.jsonl"), true);
@@ -553,7 +553,8 @@ test("OPT-06a: eşzamanlı processler metrics kaydı kaybetmez", async (t) => {
   const configuration = { statePaths: { logs: root }, observability: { maxMetricFileBytes: 65536 } };
   const metricsModule = pathToFileURL(path.resolve("subagent-bridge/src/metrics.js")).href;
   const writeMetric = (index) => new Promise((resolve, reject) => {
-    const source = `import { appendRedactedRunMetric } from ${JSON.stringify(metricsModule)}; await appendRedactedRunMetric(${JSON.stringify(configuration)}, { backend: "codex", index: ${index} });`;
+    const workspaceHash = crypto.createHash("sha256").update(`concurrent-${index}`).digest("hex");
+    const source = `import { appendRedactedRunMetric } from ${JSON.stringify(metricsModule)}; await appendRedactedRunMetric(${JSON.stringify(configuration)}, { backend: "codex", workspaceHash: ${JSON.stringify(workspaceHash)} });`;
     const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", source], { stdio: "ignore" });
     child.once("error", reject);
     child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`metric writer exited with ${code}`)));
@@ -562,7 +563,10 @@ test("OPT-06a: eşzamanlı processler metrics kaydı kaybetmez", async (t) => {
   const metricsPath = path.join(root, "metrics", "codex-runs.jsonl");
   const entries = fs.readFileSync(metricsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
   assert.equal(entries.length, 12);
-  assert.deepEqual(entries.map((entry) => entry.index).sort((left, right) => left - right), Array.from({ length: 12 }, (_, index) => index));
+  assert.deepEqual(
+    entries.map((entry) => entry.workspaceHash).sort(),
+    Array.from({ length: 12 }, (_, index) => crypto.createHash("sha256").update(`concurrent-${index}`).digest("hex")).sort()
+  );
   assert.equal(fs.existsSync(`${metricsPath}.lock`), false);
 });
 

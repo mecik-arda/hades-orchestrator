@@ -2,6 +2,16 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { appendProjectMirrorMetric } from "./project-runs.js";
+import {
+  capabilityFailureClassValues,
+  capabilityStatusValues,
+  failureStageValues,
+  outputSizeBucketValues,
+  processSignalValues,
+  providerCodeValues,
+  retryDecisionValues,
+  retryStopReasonValues
+} from "./schemas/core-schemas.js";
 
 function hashValue(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -13,6 +23,48 @@ function normalizeCost(value) {
 
 export const directEditFeedbackOutcomes = ["accepted", "minor_fix", "reverted", "security_concern"];
 export const routingFeedbackOutcomes = ["useful", "partial", "not_useful"];
+
+const tokenPattern = /^[a-z][a-z0-9_-]{0,63}$/;
+const hashPattern = /^[a-f0-9]{64}$/;
+
+function sanitizeDurationMs(value) {
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+}
+
+export function normalizeFailureStage(value) {
+  return failureStageValues.includes(value) ? value : null;
+}
+
+export function normalizeProviderCode(value) {
+  if (value === null || value === undefined) return null;
+  return providerCodeValues.includes(value) ? value : "unclassified";
+}
+
+export function normalizeProcessSignal(value) {
+  return processSignalValues.includes(value) ? value : null;
+}
+
+export function normalizeRetryDecision(value) {
+  return retryDecisionValues.includes(value) ? value : "not_applicable";
+}
+
+export function normalizeRetryStopReason(value) {
+  if (value === null || value === undefined) return null;
+  return retryStopReasonValues.includes(value) ? value : null;
+}
+
+export function normalizeOutputSizeBucket(value) {
+  return outputSizeBucketValues.includes(value) ? value : null;
+}
+
+export function outputSizeBucket(byteLength) {
+  if (!Number.isFinite(byteLength) || byteLength < 0) return null;
+  if (byteLength === 0) return "empty";
+  if (byteLength <= 1024) return "lte_1_kib";
+  if (byteLength <= 64 * 1024) return "lte_64_kib";
+  if (byteLength <= 1024 * 1024) return "lte_1_mib";
+  return "gt_1_mib";
+}
 
 function pause(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -58,6 +110,11 @@ export async function withMetricLock(lockPath, callback, options = {}) {
       if (descriptor !== null) fs.closeSync(descriptor);
       descriptor = null;
       const lockContended = error.code === "EEXIST" || (error.code === "EPERM" && fs.existsSync(lockPath));
+      if (!lockContended && error.code === "EPERM") {
+        if (Date.now() >= deadline) throw new Error("metric lock unavailable");
+        await pause(10);
+        continue;
+      }
       if (!lockContended) throw error;
       const first = readMetricLock(lockPath);
       await pause(10);
@@ -110,56 +167,256 @@ export function createRedactedRunMetric(checkpoint, backend = "deepseek") {
   };
 }
 
-const redactedTokenPattern = /^[a-z][a-z0-9_-]{0,63}$/;
-
 function sanitizeFailureClass(value) {
-  return typeof value === "string" && redactedTokenPattern.test(value) ? value : "process_exit";
+  return typeof value === "string" && tokenPattern.test(value) ? value : "unclassified_failure";
 }
 
 function sanitizeBackend(value) {
-  return typeof value === "string" && redactedTokenPattern.test(value) ? value : "subagent";
+  return typeof value === "string" && tokenPattern.test(value) ? value : "subagent";
+}
+
+function sanitizeHash(value) {
+  return typeof value === "string" && hashPattern.test(value) ? value : null;
+}
+
+function sanitizeProfile(value) {
+  return typeof value === "string" && tokenPattern.test(value) ? value : null;
+}
+
+const isoPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
+function sanitizeTimestamp(value) {
+  return typeof value === "string" && isoPattern.test(value) && Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+function sanitizeRecordedAt(value) {
+  return sanitizeTimestamp(value) ?? new Date().toISOString();
+}
+
+function sanitizeUsage(usage) {
+  const source = usage && typeof usage === "object" ? usage : {};
+  const sanitized = {};
+  for (const key of ["durationMs", "apiDurationMs", "turns"]) {
+    if (Number.isFinite(source[key]) && source[key] >= 0) sanitized[key] = source[key];
+  }
+  sanitized.totalCostUsd = Number.isFinite(source.totalCostUsd) && source.totalCostUsd >= 0 ? source.totalCostUsd : null;
+  return sanitized;
+}
+
+function sanitizeAttemptV1(attempt) {
+  const source = attempt && typeof attempt === "object" ? attempt : {};
+  const sanitized = {};
+  if (Number.isInteger(source.number) && source.number > 0) sanitized.number = source.number;
+  sanitized.failureClass = source.failureClass === null || source.failureClass === undefined ? null : sanitizeFailureClass(source.failureClass);
+  if (Number.isInteger(source.exitCode)) sanitized.exitCode = source.exitCode;
+  for (const key of ["durationMs", "apiDurationMs", "turns", "retryDelayMs"]) {
+    if (Number.isFinite(source[key]) && source[key] >= 0) sanitized[key] = source[key];
+  }
+  sanitized.totalCostUsd = Number.isFinite(source.totalCostUsd) && source.totalCostUsd >= 0 ? source.totalCostUsd : null;
+  return sanitized;
+}
+
+function sanitizeAttemptV2(attempt) {
+  const source = attempt && typeof attempt === "object" ? attempt : {};
+  const sanitized = {};
+  if (Number.isInteger(source.number) && source.number > 0) sanitized.number = source.number;
+  sanitized.failureClass = source.failureClass === null || source.failureClass === undefined ? null : sanitizeFailureClass(source.failureClass);
+  sanitized.failureStage = normalizeFailureStage(source.failureStage);
+  sanitized.providerCode = normalizeProviderCode(source.providerCode);
+  sanitized.exitCode = Number.isInteger(source.exitCode) ? source.exitCode : null;
+  sanitized.signal = normalizeProcessSignal(source.signal);
+  sanitized.retryDecision = normalizeRetryDecision(source.retryDecision);
+  sanitized.retryStopReason = normalizeRetryStopReason(source.retryStopReason);
+  sanitized.settingsLockWaitMs = sanitizeDurationMs(source.settingsLockWaitMs);
+  sanitized.providerExecutionMs = sanitizeDurationMs(source.providerExecutionMs);
+  sanitized.stdoutBucket = normalizeOutputSizeBucket(source.stdoutBucket);
+  sanitized.stderrBucket = normalizeOutputSizeBucket(source.stderrBucket);
+  sanitized.durationMs = sanitizeDurationMs(source.durationMs) ?? 0;
+  sanitized.totalCostUsd = Number.isFinite(source.totalCostUsd) && source.totalCostUsd >= 0 ? source.totalCostUsd : null;
+  return sanitized;
 }
 
 export function createRedactedExecutionMetric({ executionId, workspace, mode, profile, metricBackend, result }) {
-  const adapterAttempts = Number.isInteger(result.metrics?.adapterAttempts)
-    ? result.metrics.adapterAttempts
-    : (result.metrics?.retries || 0) + 1;
-  const attempts = Array.isArray(result.metrics?.attempts)
-    ? result.metrics.attempts.map((attempt) => ({
-      number: attempt.number,
-      failureClass: sanitizeFailureClass(attempt.failureClass),
-      exitCode: attempt.exitCode,
-      durationMs: attempt.durationMs,
-      totalCostUsd: attempt.totalCostUsd,
-      retryDelayMs: null
-    }))
-    : Array.from({ length: adapterAttempts }, (_, index) => ({
-      number: index + 1,
-      failureClass: result.ok ? null : sanitizeFailureClass(result.reason),
-      exitCode: result.exitCode,
-      durationMs: result.durationMs,
-      totalCostUsd: Number.isFinite(result.metrics?.totalCostUsd) ? result.metrics.totalCostUsd : null,
-      retryDelayMs: null
-    }));
+  const attempts = (Array.isArray(result.metrics?.attempts) ? result.metrics.attempts : []).map(sanitizeAttemptV2);
+  const lastAttempt = attempts.at(-1) || null;
   return {
+    schemaVersion: 2,
     recordedAt: new Date().toISOString(),
     backend: metricBackend || result.backend,
-    modelHash: hashValue(result.resolvedModel || result.model),
+    modelHash: hashValue(result.resolvedModel || result.model || "unavailable"),
     executionIdHash: hashValue(executionId),
-    workspaceHash: hashValue(workspace),
-    mode,
-    profile: profile || null,
+    workspaceHash: hashValue(workspace || "unavailable"),
+    mode: mode === "edit" ? "edit" : "read_only",
+    profile: sanitizeProfile(profile),
     outcomeStatus: result.ok ? "completed" : "failed",
-    failureClass: result.ok ? null : result.reason || "process_exit",
+    failureClass: result.ok ? null : (lastAttempt ? lastAttempt.failureClass : sanitizeFailureClass(result.reason)),
+    failureStage: result.ok ? null : (lastAttempt?.failureStage ?? null),
+    providerCode: result.ok ? null : (lastAttempt?.providerCode ?? null),
+    retryStopReason: result.ok ? null : (lastAttempt?.retryStopReason ?? null),
     usage: {
-      durationMs: result.durationMs,
-      totalCostUsd: Number.isFinite(result.metrics?.totalCostUsd) ? result.metrics.totalCostUsd : null
+      durationMs: sanitizeDurationMs(result.durationMs),
+      totalCostUsd: Number.isFinite(result.metrics?.totalCostUsd) && result.metrics.totalCostUsd >= 0 ? result.metrics.totalCostUsd : null
     },
     attempts,
-    retries: result.metrics?.retries || 0,
-    queueWaitMs: result.metrics?.queueWaitMs || 0,
+    retries: Number.isInteger(result.metrics?.retries) && result.metrics.retries >= 0 ? result.metrics.retries : 0,
+    queueWaitMs: Number.isFinite(result.metrics?.queueWaitMs) && result.metrics.queueWaitMs >= 0 ? result.metrics.queueWaitMs : 0,
     cacheHit: result.metrics?.cacheHit === true
   };
+}
+
+function sanitizeEvaluation(evaluation) {
+  const source = evaluation && typeof evaluation === "object" ? evaluation : {};
+  const sanitized = {};
+  for (const key of ["caseCount", "abstentionAccuracy", "averageEstimatedContextTokens", "mrr", "aggregateNdcg"]) {
+    if (Number.isFinite(source[key]) && source[key] >= 0) sanitized[key] = source[key];
+  }
+  if (Array.isArray(source.cutoffs)) sanitized.cutoffs = source.cutoffs.filter((value) => Number.isFinite(value) && value >= 0).slice(0, 20);
+  return sanitized;
+}
+
+function sanitizeExecutionMetricV1(metric) {
+  const sanitized = {
+    recordedAt: sanitizeRecordedAt(metric.recordedAt),
+    backend: sanitizeBackend(metric.backend)
+  };
+  for (const key of ["modelHash", "executionIdHash", "workspaceHash", "runIdHash", "taskIdHash"]) {
+    const value = sanitizeHash(metric[key]);
+    if (value) sanitized[key] = value;
+  }
+  if (metric.agent === "deepseek") sanitized.agent = "deepseek";
+  if (["analyst", "researcher", "reviewer", "planner"].includes(metric.role)) sanitized.role = metric.role;
+  if (["read_only", "edit", "not_applicable"].includes(metric.mode)) sanitized.mode = metric.mode;
+  const profile = sanitizeProfile(metric.profile);
+  if (profile) sanitized.profile = profile;
+  if (["completed", "failed"].includes(metric.outcomeStatus)) sanitized.outcomeStatus = metric.outcomeStatus;
+  sanitized.failureClass = metric.failureClass === null || metric.failureClass === undefined ? null : sanitizeFailureClass(metric.failureClass);
+  if (metric.usage && typeof metric.usage === "object") sanitized.usage = sanitizeUsage(metric.usage);
+  if (metric.evaluation && typeof metric.evaluation === "object") sanitized.evaluation = sanitizeEvaluation(metric.evaluation);
+  if (Array.isArray(metric.attempts)) sanitized.attempts = metric.attempts.slice(0, 100).map(sanitizeAttemptV1);
+  if (Number.isInteger(metric.retries) && metric.retries >= 0) sanitized.retries = metric.retries;
+  if (Number.isFinite(metric.queueWaitMs) && metric.queueWaitMs >= 0) sanitized.queueWaitMs = metric.queueWaitMs;
+  if (typeof metric.cacheHit === "boolean") sanitized.cacheHit = metric.cacheHit;
+  return sanitized;
+}
+
+function sanitizeExecutionMetricV2(metric) {
+  const usage = metric.usage && typeof metric.usage === "object" ? metric.usage : {};
+  const attempts = Array.isArray(metric.attempts) ? metric.attempts.slice(0, 100).map(sanitizeAttemptV2) : [];
+  const lastAttempt = attempts.at(-1) || null;
+  const failed = metric.outcomeStatus === "failed";
+  return {
+    schemaVersion: 2,
+    recordedAt: sanitizeRecordedAt(metric.recordedAt),
+    backend: sanitizeBackend(metric.backend),
+    modelHash: sanitizeHash(metric.modelHash) || hashValue("model-unavailable"),
+    executionIdHash: sanitizeHash(metric.executionIdHash) || hashValue("execution-unavailable"),
+    workspaceHash: sanitizeHash(metric.workspaceHash) || hashValue("workspace-unavailable"),
+    mode: metric.mode === "edit" ? "edit" : "read_only",
+    profile: sanitizeProfile(metric.profile),
+    outcomeStatus: failed ? "failed" : "completed",
+    failureClass: failed ? (lastAttempt ? lastAttempt.failureClass : (metric.failureClass === null || metric.failureClass === undefined ? null : sanitizeFailureClass(metric.failureClass))) : null,
+    failureStage: failed ? (lastAttempt ? lastAttempt.failureStage : normalizeFailureStage(metric.failureStage)) : null,
+    providerCode: failed ? (lastAttempt ? lastAttempt.providerCode : normalizeProviderCode(metric.providerCode)) : null,
+    retryStopReason: failed ? (lastAttempt ? lastAttempt.retryStopReason : normalizeRetryStopReason(metric.retryStopReason)) : null,
+    usage: {
+      durationMs: sanitizeDurationMs(usage.durationMs),
+      totalCostUsd: Number.isFinite(usage.totalCostUsd) && usage.totalCostUsd >= 0 ? usage.totalCostUsd : null
+    },
+    attempts,
+    retries: attempts.length > 0 ? Math.max(0, attempts.length - 1) : (Number.isInteger(metric.retries) && metric.retries >= 0 ? metric.retries : 0),
+    queueWaitMs: Number.isFinite(metric.queueWaitMs) && metric.queueWaitMs >= 0 ? metric.queueWaitMs : 0,
+    cacheHit: metric.cacheHit === true
+  };
+}
+
+function sanitizeVersionText(value) {
+  if (typeof value !== "string") return null;
+  const match = /\b[vV]?\d+(?:\.\d+){1,3}\b/.exec(value);
+  return match ? match[0] : null;
+}
+
+function sanitizeProbeStatusMap(probes) {
+  const source = probes && typeof probes === "object" ? probes : {};
+  const sanitized = {};
+  if (["available", "unavailable"].includes(source.cli)) sanitized.cli = source.cli;
+  for (const key of ["modelAccess", "toolFreeResponse", "workspaceRead", "webRead"]) {
+    if (capabilityStatusValues.includes(source[key])) sanitized[key] = source[key];
+  }
+  return Object.keys(sanitized).length > 0 ? sanitized : null;
+}
+
+function sanitizeCapabilityProbes(capabilityProbes) {
+  const source = capabilityProbes && typeof capabilityProbes === "object" ? capabilityProbes : {};
+  const sanitized = {};
+  for (const [model, probe] of Object.entries(source)) {
+    if (!tokenPattern.test(model) || !probe || typeof probe !== "object") continue;
+    sanitized[model] = {
+      modelAccess: capabilityStatusValues.includes(probe.modelAccess) ? probe.modelAccess : "not_probed",
+      toolFreeResponse: capabilityStatusValues.includes(probe.toolFreeResponse) ? probe.toolFreeResponse : "not_probed",
+      workspaceRead: capabilityStatusValues.includes(probe.workspaceRead) ? probe.workspaceRead : "not_probed",
+      webRead: capabilityStatusValues.includes(probe.webRead) ? probe.webRead : "not_probed",
+      failureClass: probe.failureClass === null || probe.failureClass === undefined
+        ? null
+        : (capabilityFailureClassValues.includes(probe.failureClass) ? probe.failureClass : "unclassified"),
+      checkedAt: sanitizeTimestamp(probe.checkedAt)
+    };
+  }
+  return sanitized;
+}
+
+function sanitizeHealthSnapshotMetric(metric) {
+  const sanitizedAdapters = {};
+  const adapters = metric.adapters && typeof metric.adapters === "object" ? metric.adapters : {};
+  for (const [adapterId, entry] of Object.entries(adapters)) {
+    if (!tokenPattern.test(adapterId) || !entry || typeof entry !== "object") continue;
+    const sanitizedEntry = {
+      installed: entry.installed === true,
+      version: sanitizeVersionText(entry.version),
+      authValid: typeof entry.authValid === "boolean" ? entry.authValid : null,
+      error: entry.error === "unavailable" ? "unavailable" : null
+    };
+    const probes = sanitizeProbeStatusMap(entry.probes);
+    if (probes) sanitizedEntry.probes = probes;
+    const capabilityProbes = sanitizeCapabilityProbes(entry.capabilityProbes);
+    if (Object.keys(capabilityProbes).length > 0) sanitizedEntry.capabilityProbes = capabilityProbes;
+    sanitizedAdapters[adapterId] = sanitizedEntry;
+  }
+  return {
+    recordType: "health_snapshot",
+    recordedAt: sanitizeRecordedAt(metric.recordedAt),
+    backend: sanitizeBackend(metric.backend),
+    adapters: sanitizedAdapters
+  };
+}
+
+function sanitizeFeedbackMetric(metric, recordType) {
+  const allowedOutcomes = recordType === "direct_edit_feedback" ? directEditFeedbackOutcomes : routingFeedbackOutcomes;
+  if (!allowedOutcomes.includes(metric.outcome)) throw new Error("invalid feedback outcome");
+  const executionIdHash = sanitizeHash(metric.executionIdHash);
+  if (!executionIdHash) throw new Error("invalid feedback execution id hash");
+  return {
+    recordType,
+    recordedAt: sanitizeRecordedAt(metric.recordedAt),
+    backend: sanitizeBackend(metric.backend),
+    executionIdHash,
+    outcome: metric.outcome
+  };
+}
+
+function sanitizeRecordTypeMetric(metric) {
+  if (metric.recordType === "health_snapshot") return sanitizeHealthSnapshotMetric(metric);
+  if (metric.recordType === "direct_edit_feedback") return sanitizeFeedbackMetric(metric, "direct_edit_feedback");
+  if (metric.recordType === "routing_feedback") return sanitizeFeedbackMetric(metric, "routing_feedback");
+  return {
+    recordType: typeof metric.recordType === "string" && tokenPattern.test(metric.recordType) ? metric.recordType : "unknown_record",
+    recordedAt: sanitizeRecordedAt(metric.recordedAt),
+    backend: sanitizeBackend(metric.backend)
+  };
+}
+
+function sanitizeRunMetric(metric) {
+  if (Object.hasOwn(metric, "recordType") && typeof metric.recordType === "string") return sanitizeRecordTypeMetric(metric);
+  return Object.hasOwn(metric, "schemaVersion") && metric.schemaVersion === 2 ? sanitizeExecutionMetricV2(metric) : sanitizeExecutionMetricV1(metric);
 }
 
 function metricRecords(metricsDirectory, periodStart = 0) {
@@ -494,8 +751,8 @@ export function pruneMetricFiles(configuration, now = Date.now()) {
 export async function appendRedactedRunMetric(configuration, metric, options = {}) {
   const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
   fs.mkdirSync(metricsDirectory, { recursive: true });
-  const safeBackend = sanitizeBackend(metric.backend);
-  const redactedMetric = { ...metric, backend: safeBackend, failureClass: metric.failureClass ? sanitizeFailureClass(metric.failureClass) : metric.failureClass };
+  const redactedMetric = sanitizeRunMetric(metric);
+  const safeBackend = sanitizeBackend(redactedMetric.backend);
   const metricsPath = path.join(metricsDirectory, `${safeBackend}-runs.jsonl`);
   const serialized = `${JSON.stringify(redactedMetric)}\n`;
   await withMetricLock(`${metricsPath}.lock`, async () => {
@@ -507,7 +764,7 @@ export async function appendRedactedRunMetric(configuration, metric, options = {
     fs.appendFileSync(metricsPath, serialized, "utf8");
   });
   const mirror = options.workspace
-    ? await appendProjectMirrorMetric(configuration, options.workspace, metric)
+    ? await appendProjectMirrorMetric(configuration, options.workspace, redactedMetric)
     : { written: false, reason: "not_requested" };
   return { written: true, path: metricsPath, mirror };
 }

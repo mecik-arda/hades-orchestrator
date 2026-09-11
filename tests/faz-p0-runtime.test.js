@@ -434,7 +434,45 @@ test("P0-EDIT-EXIT: provider non-zero exit maps to unknown mutation state", asyn
   assert.equal(result.ok, false);
   assert.equal(result.reason, "mutation_state_unknown");
   assert.equal(result.retryable, false);
+  assert.equal(result.metrics.attempts.at(-1).failureClass, "process_exit");
+  assert.equal(result.metrics.attempts.at(-1).retryDecision, "stop");
+  assert.equal(result.metrics.attempts.at(-1).retryStopReason, "mutation_state_unknown");
   assert.equal(attempts, 1);
+});
+
+test("P0-DIAG: runtime adapter attempt tanısını ve retry kararını attempt kaydına taşır", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-p0-diagnostics-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = createConfiguration(root, root);
+  configuration.orchestration = { circuitBreaker: { failureThreshold: 5, windowMs: 60000, openMs: 30000 } };
+  const antigravity = createFakeAdapter("antigravity", async (request) => ({
+    ...failureResult("antigravity", request.model, "process failed", "process_exit"),
+    metrics: {
+      retries: 0,
+      totalCostUsd: 0,
+      diagnostics: {
+        failureStage: "provider_execution",
+        providerCode: "process_exit",
+        settingsLockWaitMs: 5,
+        providerExecutionMs: 25,
+        stdoutBytes: 0,
+        stderrBytes: 2048
+      }
+    }
+  }));
+  const runtime = createBridgeRuntime({ configuration, adapters: { antigravity }, sleep: async () => {} });
+  const result = await runtime.run({ target: "gemini_flash_3_8", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  const record = result.metrics.attempts.at(-1);
+  assert.equal(result.ok, false);
+  assert.equal(record.failureClass, "process_exit");
+  assert.equal(record.failureStage, "provider_execution");
+  assert.equal(record.providerCode, "process_exit");
+  assert.equal(record.retryDecision, "stop");
+  assert.equal(record.retryStopReason, "non_retryable_failure_class");
+  assert.equal(record.settingsLockWaitMs, 5);
+  assert.equal(record.providerExecutionMs, 25);
+  assert.equal(record.stdoutBucket, "empty");
+  assert.equal(record.stderrBucket, "lte_64_kib");
 });
 
 test("P0-EXECUTION-ID: duplicate active execution IDs are rejected", async (t) => {
@@ -622,6 +660,8 @@ test("P0-HEALTH: runtime returns canonical adapter health", async (t) => {
   await runtime.health();
   assert.deepEqual(Object.keys(health.adapters).sort(), ["antigravity", "claude_code", "codex", "opencode"]);
   assert.ok(Object.values(health.adapters).every((entry) => entry.health.installed));
+  assert.ok(Object.hasOwn(health.circuits, "antigravity"));
+  assert.ok(Object.hasOwn(health.circuits, "antigravity:gemini_flash_3_8"));
   const healthMetricsPath = path.join(root, "logs", "metrics", "bridge-health-runs.jsonl");
   assert.equal(fs.readFileSync(healthMetricsPath, "utf8").trim().split("\n").length, 1);
 });
@@ -661,6 +701,22 @@ test("P0-CIRCUIT: named provider circuit açıldığında fallback yapmadan fail
   assert.equal(second.reason, "provider_circuit_open");
   assert.equal(codexAttempts, 2);
   assert.equal(antigravityAttempts, 0);
+});
+
+test("P0-CIRCUIT: Antigravity circuit modeli diğer Gemini modellerinden ayırır", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-p0-antigravity-circuit-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = createConfiguration(root, root);
+  configuration.orchestration = { circuitBreaker: { failureThreshold: 1, windowMs: 60000, openMs: 30000 } };
+  const antigravity = createFakeAdapter("antigravity", async (request) => request.model === "gemini_flash_3_7"
+    ? failureResult("antigravity", request.model, "network error", "network")
+    : successResult("antigravity", request.model));
+  const runtime = createBridgeRuntime({ configuration, adapters: { antigravity }, sleep: async () => {} });
+  await runtime.run({ target: "gemini_flash_3_7", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  const blocked = await runtime.run({ target: "gemini_flash_3_7", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  const available = await runtime.run({ target: "gemini_flash_3_8", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  assert.equal(blocked.reason, "provider_circuit_open");
+  assert.equal(available.ok, true);
 });
 
 test("P0-FALLBACK: yalnız read-only task profile policy hedeflerine geçer", async (t) => {

@@ -1,7 +1,7 @@
 import { classifyProcessFailure, isRetryableFailure, calculateRetryDelayMs } from "../retry.js";
 
 export function shouldRetry(failureClass, mode, attemptNumber, maxAttempts, budgetConstraints = {}) {
-  if (mode === "edit" && ["timeout", "process_exit", "network"].includes(failureClass)) {
+  if (mode === "edit" && ["timeout", "process_exit", "non_zero_exit", "process_crash", "network", "server", "rate_limited", "empty_output", "output_limit", "output_parse_invalid", "schema_invalid", "process_error"].includes(failureClass)) {
     return { retryable: false, reason: "mutation_state_unknown" };
   }
 
@@ -28,7 +28,7 @@ export function shouldRetry(failureClass, mode, attemptNumber, maxAttempts, budg
 }
 
 export function isMutationStateUnknown(mode, failureClass) {
-  return mode === "edit" && ["timeout", "process_exit", "network"].includes(failureClass);
+  return mode === "edit" && ["timeout", "process_exit", "non_zero_exit", "process_crash", "network", "server", "rate_limited", "empty_output", "output_limit", "output_parse_invalid", "schema_invalid", "process_error"].includes(failureClass);
 }
 
 export {

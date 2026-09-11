@@ -22,7 +22,17 @@ import { remainingDurationMs, resolveReliabilityBudget } from "../services/relia
 import { shouldRetry } from "../services/retry-service.js";
 import { createWorkspaceCoordinator } from "../services/workspace-coordinator.js";
 import { classifyProcessFailure, isRetryableFailure } from "../retry.js";
-import { appendRedactedRunMetric, createRedactedExecutionMetric, getCostBudgetSnapshot, reserveCostBudget, settleCostBudget } from "../metrics.js";
+import {
+  appendRedactedRunMetric,
+  createRedactedExecutionMetric,
+  getCostBudgetSnapshot,
+  normalizeFailureStage,
+  normalizeProcessSignal,
+  normalizeProviderCode,
+  outputSizeBucket,
+  reserveCostBudget,
+  settleCostBudget
+} from "../metrics.js";
 import { resolveRuntimeRoute } from "./router.js";
 
 const runtimeRunRequestSchema = z.object({
@@ -72,6 +82,10 @@ function configuredModels(configuration, backend) {
     ];
   }
   return [];
+}
+
+function circuitKey(route) {
+  return route.backend === "antigravity" ? `${route.backend}:${route.model}` : route.backend;
 }
 
 export function canonicalizeTrustedWorkspace(trustedWorkspace) {
@@ -180,7 +194,8 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
       route = resolveRuntimeRoute(rawRequest, runtimeConfiguration);
     } catch {
     }
-    const admission = route ? await circuitBreaker.beforeCall(route.backend) : { allowed: true, state: "unavailable" };
+    const providerCircuitKey = route ? circuitKey(route) : null;
+    const admission = providerCircuitKey ? await circuitBreaker.beforeCall(providerCircuitKey) : { allowed: true, state: "unavailable" };
     if (!admission.allowed) {
       return createRuntimeFailure(route.backend, route.model, "provider circuit is open", { reason: "provider_circuit_open" });
     }
@@ -190,9 +205,9 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
       const attemptRecords = Array.isArray(result.metrics?.attempts) ? result.metrics.attempts : [];
       const failureClass = attemptRecords.at(-1)?.failureClass || result.reason;
       if (result.ok || (admission.probe && !isRetryableFailure(failureClass))) {
-        await circuitBreaker.recordSuccess(route.backend);
+        await circuitBreaker.recordSuccess(providerCircuitKey);
       } else if (isRetryableFailure(failureClass)) {
-        await circuitBreaker.recordFailure(route.backend);
+        await circuitBreaker.recordFailure(providerCircuitKey);
       }
     }
     if (result.reason !== "duplicate_execution_id") {
@@ -447,12 +462,16 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             const validation = input.resultValidator(result.result);
             if (!validation.ok) {
               schemaValidationIssues = Array.isArray(validation.validationIssues) ? validation.validationIssues : [];
+              const adapterDiagnostics = result.metrics?.diagnostics;
               result = createRuntimeFailure(route.backend, route.model, "adapter returned an invalid structured result", {
                 durationMs: Date.now() - startedAt,
                 retries: attemptNumber - 1,
                 adapterAttempts: attemptNumber,
                 reason: validation.errorClass,
-                metrics: { totalCostUsd: result.metrics?.totalCostUsd ?? null }
+                metrics: {
+                  totalCostUsd: result.metrics?.totalCostUsd ?? null,
+                  diagnostics: { ...(adapterDiagnostics || {}), failureStage: "result_parse" }
+                }
               });
             }
           }
@@ -469,13 +488,26 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
           totalCostUsd += attemptCostUsd;
           if (!costKnown) reservedCostUsd += budget.maxUnknownAttemptCostUsd || 0;
           const failureClass = result.ok ? null : classifyReturnedFailure(result);
-          attemptRecords.push({
+          const diagnostics = result.metrics?.diagnostics || null;
+          const attemptRecord = {
             number: attemptNumber,
             failureClass,
-            exitCode: result.exitCode,
-            durationMs: result.durationMs,
+            failureStage: ["schema_invalid", "output_parse_invalid"].includes(failureClass)
+              ? "result_parse"
+              : normalizeFailureStage(diagnostics?.failureStage),
+            providerCode: normalizeProviderCode(diagnostics?.providerCode),
+            exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
+            signal: normalizeProcessSignal(result.metrics?.signal),
+            retryDecision: "not_applicable",
+            retryStopReason: null,
+            settingsLockWaitMs: Number.isInteger(diagnostics?.settingsLockWaitMs) ? diagnostics.settingsLockWaitMs : null,
+            providerExecutionMs: Number.isInteger(diagnostics?.providerExecutionMs) ? diagnostics.providerExecutionMs : null,
+            stdoutBucket: outputSizeBucket(diagnostics?.stdoutBytes),
+            stderrBucket: outputSizeBucket(diagnostics?.stderrBytes),
+            durationMs: Number.isInteger(result.durationMs) ? result.durationMs : 0,
             totalCostUsd: costKnown ? attemptCostUsd : null
-          });
+          };
+          attemptRecords.push(attemptRecord);
           lastResult = withRuntimeMetrics(result, attemptNumber - 1, {
             queueWaitMs: grant.queueWaitMs,
             cacheHit: false,
@@ -488,7 +520,11 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
              return lastResult;
            }
           if (["schema_invalid", "output_parse_invalid"].includes(failureClass) && input.maxSchemaRepairAttempts !== undefined) {
-            if (schemaRepairAttempts >= input.maxSchemaRepairAttempts) return lastResult;
+            if (schemaRepairAttempts >= input.maxSchemaRepairAttempts) {
+              attemptRecord.retryDecision = "stop";
+              attemptRecord.retryStopReason = "schema_repair_exhausted";
+              return lastResult;
+            }
             schemaRepairAttempts += 1;
           }
           const retryDecision = shouldRetry(failureClass, input.mode, attemptNumber, budget.maxAttempts, {
@@ -498,6 +534,8 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             baseDelayMs: budget.baseRetryDelayMs,
             maxDelayMs: budget.maxRetryDelayMs
           });
+          attemptRecord.retryDecision = retryDecision.retryable ? "retry" : "stop";
+          attemptRecord.retryStopReason = retryDecision.retryable ? null : retryDecision.reason;
           if (!retryDecision.retryable) {
             if (retryDecision.reason === "mutation_state_unknown") {
               return { ...lastResult, retryable: false, reason: "mutation_state_unknown" };
@@ -516,19 +554,28 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
           }
           const failureClass = classifyProcessFailure({ error, stderr: "", stdout: "", code: null }) || "process_error";
           reservedCostUsd += budget.maxUnknownAttemptCostUsd || 0;
-          attemptRecords.push({
-            number: attemptNumber,
-            failureClass,
-            exitCode: null,
-            durationMs: Date.now() - startedAt,
-            totalCostUsd: null
-          });
           const retryPolicy = shouldRetry(failureClass, input.mode, attemptNumber, budget.maxAttempts, {
             maxRetryCostUsd: budget.maxRetryCostUsd,
             currentCost: totalCostUsd + reservedCostUsd,
             maxRetryCostReserveUsd: budget.maxRetryCostReserveUsd,
             baseDelayMs: budget.baseRetryDelayMs,
             maxDelayMs: budget.maxRetryDelayMs
+          });
+          attemptRecords.push({
+            number: attemptNumber,
+            failureClass,
+            failureStage: null,
+            providerCode: null,
+            exitCode: null,
+            signal: null,
+            retryDecision: retryPolicy.retryable ? "retry" : "stop",
+            retryStopReason: retryPolicy.retryable ? null : retryPolicy.reason,
+            settingsLockWaitMs: null,
+            providerExecutionMs: null,
+            stdoutBucket: null,
+            stderrBucket: null,
+            durationMs: Date.now() - startedAt,
+            totalCostUsd: null
           });
           const retryDecision = retryPolicy;
           lastResult = createRuntimeFailure(route.backend, route.model, error.message, {
@@ -555,10 +602,15 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     }
   }
 
-  async function health(backendIds = Object.keys(runtimeAdapters)) {
+  async function health(backendIds = Object.keys(runtimeAdapters), options = {}) {
     const selectedIds = [...new Set(backendIds)].sort();
     const cacheKey = selectedIds.join(",");
-    return healthCache.check(cacheKey, async () => {
+    const probeModels = Array.isArray(options.probeModels) ? [...new Set(options.probeModels)] : [];
+    const probeCapabilities = Array.isArray(options.probeCapabilities) ? [...new Set(options.probeCapabilities)] : [];
+    if ((probeModels.length > 0) !== (probeCapabilities.length > 0)) {
+      throw new Error("probeModels and probeCapabilities must be provided together");
+    }
+    const build = async () => {
       const selectedAdapters = selectedIds.map((backendId) => runtimeAdapters[backendId]).filter(Boolean);
       const entries = await Promise.all(selectedAdapters.map(async (adapter) => {
         try {
@@ -571,7 +623,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               allowedModes: resolveAllowedModes(agentConfiguration, adapter.capabilities)
             },
             configuredModels: configuredModels(runtimeConfiguration, adapter.id),
-            health: await adapter.healthCheck()
+            health: await adapter.healthCheck(probeModels.length > 0 ? { recoverStaleSettings: false } : undefined)
           }];
         } catch (error) {
           return [adapter.id, {
@@ -582,11 +634,25 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               allowedModes: resolveAllowedModes(runtimeConfiguration[adapter.id], adapter.capabilities)
             },
             configuredModels: configuredModels(runtimeConfiguration, adapter.id),
-            health: { installed: false, version: null, authValid: false, executable: runtimeConfiguration[adapter.id]?.executable || adapter.id, error: error.message }
+            health: { installed: false, version: null, authValid: null, executable: runtimeConfiguration[adapter.id]?.executable || adapter.id, error: error.message }
           }];
         }
       }));
-      const circuits = await circuitBreaker.snapshot(selectedIds);
+      if (probeModels.length > 0) {
+        const entry = entries.find(([adapterId]) => adapterId === "antigravity");
+        const probeAdapter = runtimeAdapters.antigravity;
+        if (entry && typeof probeAdapter?.probeCapabilities === "function") {
+          const capabilityProbes = {};
+          for (const model of probeModels) {
+            capabilityProbes[model] = await probeAdapter.probeCapabilities({ model, capabilities: probeCapabilities });
+          }
+          entry[1] = { ...entry[1], health: { ...entry[1].health, capabilityProbes } };
+        }
+      }
+      const circuitIds = selectedAdapters.flatMap((adapter) => adapter.id === "antigravity"
+        ? ["antigravity", ...configuredModels(runtimeConfiguration, adapter.id).map(({ requestedModel }) => `antigravity:${requestedModel}`)]
+        : [adapter.id]);
+      const circuits = await circuitBreaker.snapshot(circuitIds);
       const costBudget = await getCostBudgetSnapshot(runtimeConfiguration);
       const result = {
         services: {
@@ -611,13 +677,17 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             installed: entry.health.installed === true,
             version: entry.health.version || null,
             authValid: typeof entry.health.authValid === "boolean" ? entry.health.authValid : null,
+            probes: entry.health.probes,
+            capabilityProbes: entry.health.capabilityProbes,
             error: entry.health.error ? "unavailable" : null
           }]))
         });
       } catch {
       }
       return result;
-    });
+    };
+    if (probeModels.length > 0) return build();
+    return healthCache.check(cacheKey, build);
   }
 
   async function runDeepSeek(input, trustedWorkspace, abortSignal) {

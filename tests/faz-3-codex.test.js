@@ -12,6 +12,13 @@ import {
   createFailureSubagentResult, createSuccessSubagentResult
 } from "../subagent-bridge/src/schemas/core-schemas.js";
 
+test("CODEX-DIAG-09: bilinmeyen exit code genel sınıfa düşer ve kodu korur", () => {
+  const classification = classifyCodexError(null, 42, "", "");
+  assert.equal(classification.valid, false);
+  assert.equal(classification.errorClass, "non_zero_exit");
+  assert.match(classification.reason, /42/);
+});
+
 test("CX-AC-01: CodexAdapter AgentAdapter kontratını uygular", () => {
   const adapter = createAdapter("codex", {
     canRead: true, canWrite: true,

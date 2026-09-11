@@ -347,6 +347,7 @@ const agentConfigSchema = z.object({
   executable: z.string().min(1).refine((value) => !forbiddenExecutableNames.has(path.basename(value).toLocaleLowerCase("en-US")), "command interpreters are not allowed as executables"),
   execArgs: z.array(z.string()).optional(),
   timeoutMs: z.number().int().positive().optional(),
+  probeTimeoutMs: z.number().int().positive().optional(),
   maxRetries: z.number().int().min(0).max(10).optional(),
   maxOutputBytes: z.number().int().positive().optional(),
   defaultSandbox: z.boolean().optional(),

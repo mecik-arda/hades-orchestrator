@@ -1,6 +1,6 @@
 import { createProviderEnvironment, runProcess, createExecutionHandle, killProcessTree } from "../services/execution-service.js";
 import { createAdapter } from "./agent-adapter-base.js";
-import { createFailureSubagentResult, createSuccessSubagentResult } from "../schemas/core-schemas.js";
+import { createFailureSubagentResult, createSuccessSubagentResult, capabilityFailureClassValues } from "../schemas/core-schemas.js";
 import { prependExecutionMetadata } from "../services/execution-metadata.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -20,28 +20,18 @@ const READ_ONLY_INSTRUCTION = `
 You MUST NOT create, modify, or delete any files in the workspace.
 You MUST NOT execute any commands that change the filesystem state.
 You may only read, analyze, and report on existing files.
-Do not call MCP or built-in file tools. Use only the allowlisted terminal commands to inspect files.
-If a terminal command is necessary, run one allowlisted command at a time without chaining, pipelines, or redirection.
+Use only built-in workspace read tools to inspect files.
+Do not call MCP, terminal commands, or built-in write tools.
 If asked to write or modify files, decline and explain that you are in read-only mode.
 `;
 
 const READ_ONLY_PERMISSION_RULES = {
   allow: [
-    "command(git status)",
-    "command(git diff)",
-    "command(git log)",
-    "command(git show)",
-    "command(git ls-files)",
-    "command(git rev-parse)",
-    "command(rg)",
-    "command(Get-ChildItem)",
-    "command(Get-Location)",
-    "command(dir)",
-    "command(pwd)",
-    "command(ls)",
-    "command(pwd; ls)"
+    "read_url(*)"
   ],
   deny: [
+    "command(*)",
+    "unsandboxed(*)",
     "write_file(*)"
   ]
 };
@@ -54,12 +44,32 @@ const AGY_SETTINGS_SENTINEL = path.join(os.tmpdir(), "agy-bridge-readonly-sentin
 const AGY_SETTINGS_LOCK_PATH = path.join(AGY_SETTINGS_DIR, "settings.lock");
 export function createSettingsLock() {
   let settingsMutex = Promise.resolve();
-  return async function acquireSettingsLock() {
+  return async function acquireSettingsLock(deadlineMs = Infinity) {
     let release;
     const previous = settingsMutex;
-    settingsMutex = new Promise((resolve) => { release = resolve; });
-    await previous;
-    return release;
+    const current = new Promise((resolve) => { release = resolve; });
+    settingsMutex = previous.then(() => current);
+    let timeoutHandle;
+    try {
+      if (Number.isFinite(deadlineMs)) {
+        const remainingMs = deadlineMs - Date.now();
+        if (remainingMs <= 0) throw createSettingsLockTimeoutError();
+        await Promise.race([
+          previous,
+          new Promise((_, reject) => {
+            timeoutHandle = setTimeout(() => reject(createSettingsLockTimeoutError()), remainingMs);
+          })
+        ]);
+      } else {
+        await previous;
+      }
+      return release;
+    } catch (error) {
+      release();
+      throw error;
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
   };
 }
 
@@ -89,9 +99,14 @@ function readSettingsLockOwner() {
   }
 }
 
-async function acquireSettingsFileLock() {
+function createSettingsLockTimeoutError() {
+  return Object.assign(new Error("read-only settings lock unavailable before request timeout"), {
+    code: "SETTINGS_LOCK_TIMEOUT"
+  });
+}
+
+async function acquireSettingsFileLock(deadlineMs) {
   const ownerId = crypto.randomUUID();
-  const deadline = Date.now() + 60000;
   while (true) {
     try {
       const descriptor = fs.openSync(AGY_SETTINGS_LOCK_PATH, "wx");
@@ -113,8 +128,9 @@ async function acquireSettingsFileLock() {
         }
       } catch {
       }
-      if (Date.now() >= deadline) throw new Error("read-only settings lock unavailable");
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 0) throw createSettingsLockTimeoutError();
+      await new Promise((resolve) => setTimeout(resolve, Math.min(50, remainingMs)));
     }
   }
 }
@@ -156,15 +172,14 @@ function enableReadOnlyEnforcement() {
     originalSettings = fs.readFileSync(AGY_SETTINGS_PATH);
     const settings = JSON.parse(originalSettings.toString("utf8"));
     if (!hasSafeReadOnlyPermissionBaseline(settings)) return null;
+    settings.allowNonWorkspaceAccess = false;
     settings.permissions ||= {};
     settings.permissions.allow ||= [];
     settings.permissions.deny ||= [];
-
     const additions = {
       allow: READ_ONLY_PERMISSION_RULES.allow.filter((rule) => !settings.permissions.allow.includes(rule)),
       deny: READ_ONLY_PERMISSION_RULES.deny.filter((rule) => !settings.permissions.deny.includes(rule))
     };
-
     settings.permissions.allow.push(...additions.allow);
     settings.permissions.deny.push(...additions.deny);
     fs.writeFileSync(AGY_SETTINGS_PATH, JSON.stringify(settings, null, 2));
@@ -202,8 +217,8 @@ function disableReadOnlyEnforcement(enforcement) {
         if (Object.keys(settings.permissions).length === 0) {
           delete settings.permissions;
         }
-        fs.writeFileSync(AGY_SETTINGS_PATH, JSON.stringify(settings, null, 2));
       }
+      fs.writeFileSync(AGY_SETTINGS_PATH, JSON.stringify(settings, null, 2));
     }
 
     if (fs.existsSync(AGY_SETTINGS_SENTINEL)) {
@@ -288,43 +303,87 @@ function buildAntigravityArgs(request, config) {
   return { executable, args };
 }
 
-function classifyAntigravityError(error, exitCode, stdout, stderr) {
+function classifyAntigravityError(error, exitCode, stdout, stderr, signal = null) {
   const errorMessage = error ? String(error.message || error).toLocaleLowerCase("en-US") : "";
-  const output = `${stderr || ""} ${stdout || ""}`.toLocaleLowerCase("en-US");
+  const output = `${stderr || ""} ${exitCode !== 0 ? stdout || "" : ""}`.toLocaleLowerCase("en-US");
 
   if (/timed out|timeout|zaman aşımı/i.test(errorMessage)) {
-    return { valid: false, errorClass: "timeout", reason: "execution timed out" };
+    return { valid: false, errorClass: "timeout", providerCode: "timeout", reason: "execution timed out" };
   }
 
   if (/output limit|bytes/i.test(errorMessage)) {
-    return { valid: false, errorClass: "output_limit", reason: "output exceeded limit" };
+    return { valid: false, errorClass: "output_limit", providerCode: "output_limit", reason: "output exceeded limit" };
   }
 
   if (error?.code === "ENOENT" || /executable not found|enoent|command not found|does not exist/i.test(errorMessage)) {
-    return { valid: false, errorClass: "executable_missing", reason: "antigravity executable not found" };
+    return { valid: false, errorClass: "executable_missing", providerCode: "executable_missing", reason: "antigravity executable not found" };
   }
 
   if (/permission denied|permission_denied|tool required the ["'].*["'] permission|headless mode cannot prompt|auto-denied/i.test(errorMessage + output)) {
-    return { valid: false, errorClass: "permission_denied", reason: "permission denied" };
+    if (/headless mode cannot prompt/i.test(errorMessage + output)) {
+      return { valid: false, errorClass: "permission_denied", providerCode: "permission_denied", reason: "headless mode cannot prompt" };
+    }
+    if (/tool required the ["'].*["'] permission|auto-denied/i.test(errorMessage + output)) {
+      return { valid: false, errorClass: "permission_denied", providerCode: "permission_denied", reason: "tool permission denied" };
+    }
+    return { valid: false, errorClass: "permission_denied", providerCode: "permission_denied", reason: "permission denied" };
   }
 
-  if (/rate limit|429|quota exceeded/i.test(errorMessage + output)) {
-    return { valid: false, errorClass: "rate_limited", reason: "provider rate limited" };
+  if (/rate[ _-]?limit|429|quota exceeded|resource[ _-]?exhausted/i.test(errorMessage + output)) {
+    const providerCode = /resource[ _-]?exhausted/i.test(errorMessage + output) ? "resource_exhausted" : "rate_limited";
+    return { valid: false, errorClass: "rate_limited", providerCode, reason: "provider rate limited" };
   }
 
-  if (/unauthorized|auth|authentication|invalid.*token|api[._]key/i.test(errorMessage + output)) {
-    return { valid: false, errorClass: "provider_auth", reason: "authentication failure" };
+  if (/unauthorized|auth|authentication|invalid.*token|api[._]key|\b401\b/i.test(errorMessage + output)) {
+    return { valid: false, errorClass: "authentication_failure", providerCode: "unauthenticated", reason: "authentication failure" };
+  }
+
+  if (/\b5\d\d\b|unavailable|service unavailable|internal server error|bad gateway|gateway timeout/i.test(errorMessage + output)) {
+    const providerCode = /\bbad gateway\b|\b502\b/i.test(errorMessage + output)
+      ? "bad_gateway"
+      : /\bgateway timeout\b|\b504\b/i.test(errorMessage + output)
+        ? "gateway_timeout"
+        : /\binternal server error\b|\b500\b/i.test(errorMessage + output)
+          ? "internal_error"
+          : "unavailable";
+    return { valid: false, errorClass: "server", providerCode, reason: "provider service unavailable" };
+  }
+
+  if (/econn|enotfound|eai_again|socket|network|fetch failed|connection reset/i.test(errorMessage + output)) {
+    const providerCode = /econnreset|connection reset/i.test(errorMessage + output)
+      ? "connection_reset"
+      : /enotfound|eai_again|\bdns\b/i.test(errorMessage + output)
+        ? "dns_failure"
+        : /fetch failed/i.test(errorMessage + output)
+          ? "fetch_failed"
+          : "network_error";
+    return { valid: false, errorClass: "network", providerCode, reason: "provider network failure" };
+  }
+
+  if (signal) {
+    return { valid: false, errorClass: "process_exit", providerCode: "process_exit", reason: "provider process terminated unexpectedly" };
   }
 
   if (exitCode !== null && exitCode !== 0) {
-    return { valid: false, errorClass: "non_zero_exit", reason: `process exited with code ${exitCode}` };
+    return { valid: false, errorClass: "process_exit", providerCode: "process_exit", reason: `process exited with code ${exitCode}` };
   }
 
   if (error) {
-    return { valid: false, errorClass: "process_error", reason: errorMessage || "process error" };
+    return { valid: false, errorClass: "process_error", providerCode: "process_error", reason: errorMessage || "process error" };
   }
 
-  return { valid: true };
+  return { valid: true, providerCode: null };
+}
+
+function createAttemptDiagnostics(failureStage, providerCode = null, timings = {}) {
+  return {
+    failureStage: failureStage || null,
+    providerCode: providerCode || null,
+    settingsLockWaitMs: Number.isInteger(timings.settingsLockWaitMs) ? timings.settingsLockWaitMs : null,
+    providerExecutionMs: Number.isInteger(timings.providerExecutionMs) ? timings.providerExecutionMs : null,
+    stdoutBytes: Number.isInteger(timings.stdoutBytes) ? timings.stdoutBytes : null,
+    stderrBytes: Number.isInteger(timings.stderrBytes) ? timings.stderrBytes : null
+  };
 }
 
 function extractAntigravityResult(stdout) {
@@ -342,43 +401,80 @@ function extractAntigravityResult(stdout) {
   }
 }
 
-function mapCategoryToSubagentError(errorClass, reason, backend, model, durationMs, retries) {
+function mapCategoryToSubagentError(errorClass, error, backend, model, durationMs, retries, exitCode = null, signal = null, diagnostics = null) {
   const base = {
     ok: false,
     backend,
     model,
     result: null,
-    error: reason,
-    reason,
+    error,
+    reason: errorClass,
     durationMs,
-    metrics: { retries }
+    metrics: { retries, signal, ...(diagnostics ? { diagnostics } : {}) }
   };
 
   switch (errorClass) {
     case "timeout":
       return { ...base, retryable: false, timedOut: true, exitCode: null };
     case "output_limit":
-      return { ...base, retryable: false, timedOut: false, exitCode: 1 };
+      return { ...base, retryable: false, timedOut: false, exitCode };
     case "executable_missing":
       return { ...base, retryable: false, timedOut: false, exitCode: null };
     case "permission_denied":
     case "policy_violation":
-      return { ...base, retryable: false, timedOut: false, exitCode: 1 };
+      return { ...base, retryable: false, timedOut: false, exitCode };
     case "rate_limited":
-      return { ...base, retryable: true, timedOut: false, exitCode: 1 };
-    case "provider_auth":
-      return { ...base, retryable: false, timedOut: false, exitCode: 1 };
-    case "provider_temporary_error":
-      return { ...base, retryable: true, timedOut: false, exitCode: 1 };
+      return { ...base, retryable: true, timedOut: false, exitCode };
+    case "authentication_failure":
+      return { ...base, retryable: false, timedOut: false, exitCode };
+    case "server":
+    case "network":
+      return { ...base, retryable: true, timedOut: false, exitCode };
     case "empty_output":
       return { ...base, retryable: true, timedOut: false, exitCode: 0 };
-    case "non_zero_exit":
+    case "process_exit":
     case "process_error":
-    case "process_crash":
-      return { ...base, retryable: false, timedOut: false, exitCode: 1 };
+      return { ...base, retryable: false, timedOut: false, exitCode };
     default:
-      return { ...base, retryable: false, timedOut: false, exitCode: 1 };
+      return { ...base, retryable: false, timedOut: false, exitCode };
   }
+}
+
+const PROBE_CAPABILITIES = ["modelAccess", "toolFreeResponse", "workspaceRead", "webRead"];
+const DEFAULT_PROBE_TIMEOUT_MS = 300000;
+const WEB_READ_PROBE_URL = "https://example.com";
+const WEB_READ_PROBE_MARKER = /example domain/i;
+
+function classifyProbeFailure(errorClass) {
+  return capabilityFailureClassValues.includes(errorClass) ? errorClass : "unclassified";
+}
+
+function probeFailureStatus(failureClass) {
+  return failureClass === "permission_denied" || failureClass === "policy_violation" ? "not_probed" : "unavailable";
+}
+
+function runCapabilityProbeProcess(executable, execArgs, { workspace, model, prompt, timeoutMs }) {
+  return runProcess(executable, [
+    ...execArgs,
+    "--output-format", "json",
+    "--model", model,
+    "--add-dir", workspace,
+    "--sandbox",
+    "--mode", "plan",
+    "--print",
+    `${READ_ONLY_INSTRUCTION}\n${prompt}`
+  ], {
+    cwd: workspace,
+    timeoutMs,
+    maxOutputBytes: 262144,
+    env: createProviderEnvironment("antigravity")
+  });
+}
+
+function probeResponse(processResult) {
+  const classification = classifyAntigravityError(null, processResult.code, processResult.stdout, processResult.stderr, processResult.signal);
+  if (!classification.valid) return { failureClass: classifyProbeFailure(classification.errorClass), text: "" };
+  return { failureClass: null, text: extractAntigravityResult(processResult.stdout) || "" };
 }
 
 export function createAntigravityAdapter(configuration) {
@@ -392,8 +488,8 @@ export function createAntigravityAdapter(configuration) {
   return {
     ...adapter,
 
-    async healthCheck() {
-      recoverStaleSettings();
+    async healthCheck(options = {}) {
+      if (options.recoverStaleSettings !== false) recoverStaleSettings();
       try {
         const { executable, execArgs } = resolveAntigravityCommand(configuration);
         const result = await runProcess(
@@ -404,18 +500,104 @@ export function createAntigravityAdapter(configuration) {
         return {
           installed: result.code === 0,
           version: result.stdout.trim() || result.stderr.trim() || null,
-          authValid: result.code === 0,
-          executable
+          authValid: null,
+          executable,
+          probes: {
+            cli: result.code === 0 ? "available" : "unavailable",
+            modelAccess: "not_probed",
+            toolFreeResponse: "not_probed",
+            workspaceRead: "not_probed",
+            webRead: "not_probed"
+          }
         };
       } catch (error) {
         return {
           installed: false,
           version: null,
-          authValid: false,
+          authValid: null,
           executable: resolveAntigravityCommand(configuration).executable,
+          probes: {
+            cli: "unavailable",
+            modelAccess: "not_probed",
+            toolFreeResponse: "not_probed",
+            workspaceRead: "not_probed",
+            webRead: "not_probed"
+          },
           error: error.message
         };
       }
+    },
+
+    async probeCapabilities({ model, capabilities, timeoutMs } = {}) {
+      const requested = Array.isArray(capabilities) ? PROBE_CAPABILITIES.filter((capability) => capabilities.includes(capability)) : [];
+      const result = {
+        modelAccess: "not_probed",
+        toolFreeResponse: "not_probed",
+        workspaceRead: "not_probed",
+        webRead: "not_probed",
+        failureClass: null,
+        checkedAt: new Date().toISOString()
+      };
+      const recordFailure = (failureClass) => {
+        if (result.failureClass === null) result.failureClass = failureClass;
+      };
+      const resolved = resolveModel(model);
+      if (!resolved.valid) {
+        for (const capability of requested) result[capability] = "unavailable";
+        recordFailure("invalid_model");
+        return result;
+      }
+      if (requested.length === 0) return result;
+      const { executable, execArgs } = resolveAntigravityCommand(configuration);
+      const probeTimeoutMs = Number.isInteger(timeoutMs) && timeoutMs > 0
+        ? timeoutMs
+        : (configuration?.antigravity?.probeTimeoutMs || DEFAULT_PROBE_TIMEOUT_MS);
+      const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "agy-capability-probe-"));
+      const runProbe = async (prompt) => probeResponse(await runCapabilityProbeProcess(executable, execArgs, { workspace, model: resolved.model, prompt, timeoutMs: probeTimeoutMs }));
+      const applyOutcome = (capability, outcome, expected) => {
+        if (outcome.failureClass) {
+          const status = probeFailureStatus(outcome.failureClass);
+          result[capability] = status;
+          if (status === "unavailable") recordFailure(outcome.failureClass);
+          return;
+        }
+        if (expected) {
+          result[capability] = "available";
+          return;
+        }
+        result[capability] = "unavailable";
+        recordFailure("unclassified");
+      };
+      try {
+        if (requested.includes("modelAccess") || requested.includes("toolFreeResponse")) {
+          const outcome = await runProbe("Reply with exactly READY and nothing else.");
+          for (const capability of ["modelAccess", "toolFreeResponse"]) {
+            if (!requested.includes(capability)) continue;
+            applyOutcome(capability, outcome, outcome.text.includes("READY"));
+          }
+        }
+        if (requested.includes("workspaceRead")) {
+          const marker = `PROBE-${crypto.randomUUID()}`;
+          fs.writeFileSync(path.join(workspace, "probe.txt"), marker, "utf8");
+          const outcome = await runProbe("Read the file probe.txt in the workspace and reply with its exact contents and nothing else.");
+          applyOutcome("workspaceRead", outcome, outcome.text.includes(marker));
+        }
+        if (requested.includes("webRead")) {
+          const outcome = await runProbe(`Fetch ${WEB_READ_PROBE_URL} with the read_url tool and reply with the page heading and nothing else.`);
+          applyOutcome("webRead", outcome, WEB_READ_PROBE_MARKER.test(outcome.text));
+        }
+      } catch (error) {
+        const classification = classifyAntigravityError(error, null, "", "");
+        const failureClass = classifyProbeFailure(classification.errorClass);
+        const status = probeFailureStatus(failureClass);
+        if (status === "unavailable") recordFailure(failureClass);
+        for (const capability of requested) {
+          if (result[capability] === "not_probed") result[capability] = status;
+        }
+      } finally {
+        fs.rmSync(workspace, { recursive: true, force: true });
+      }
+      return result;
     },
 
     async execute(request) {
@@ -427,50 +609,91 @@ export function createAntigravityAdapter(configuration) {
           error: model.error,
           durationMs: Date.now() - startedAt,
           retryable: false,
-          exitCode: 1
+          exitCode: 1,
+          reason: "invalid_model",
+          metrics: { diagnostics: createAttemptDiagnostics("mcp_preflight", "invalid_model") }
         });
       }
 
-        const timeoutMs = request.timeoutMs || configuration?.antigravity?.timeoutMs || 300000;
-        const { executable, execArgs } = resolveAntigravityCommand(configuration);
-        const sandbox = configuration?.antigravity?.defaultSandbox !== false;
+      const timeoutMs = request.timeoutMs || configuration?.antigravity?.timeoutMs || 300000;
+      const requestDeadlineMs = startedAt + timeoutMs;
+      const { executable, execArgs } = resolveAntigravityCommand(configuration);
+      const sandbox = configuration?.antigravity?.defaultSandbox !== false;
 
       const isReadOnly = request.mode === "read_only";
       let readOnlyEnforcement = null;
       let releaseSettingsLock = null;
       let releaseSettingsFileLock = null;
+      let settingsLockWaitMs = null;
+      let settingsLockStartedAt = null;
+      let providerExecutionMs = null;
+      let providerStartedAt = null;
+      let readOnlyStage = "mcp_preflight";
 
       if (isReadOnly) {
-        const mcpStatus = await runProcess(
-          executable,
-          [...execArgs, "mcp", "list"],
-          { timeoutMs: 15000, maxOutputBytes: 65536, env: createProviderEnvironment("antigravity") }
-        );
-        if (!hasNoConfiguredMcpServers(mcpStatus)) {
-          return createFailureSubagentResult("antigravity", model.model, {
-            error: "read-only MCP isolation unavailable",
-            retryable: false,
-            exitCode: 1,
-            durationMs: Date.now() - startedAt,
-            reason: "read_only_mcp_isolation_unavailable"
-          });
-        }
-        releaseSettingsLock = await acquireSettingsLock();
-        releaseSettingsFileLock = await acquireSettingsFileLock();
-        recoverStaleSettings(true);
-        readOnlyEnforcement = enableReadOnlyEnforcement();
-        if (!readOnlyEnforcement) {
-          releaseSettingsFileLock();
-          releaseSettingsFileLock = null;
-          releaseSettingsLock();
-          releaseSettingsLock = null;
-          return createFailureSubagentResult("antigravity", model.model, {
-            error: "read-only enforcement unavailable",
-            retryable: false,
-            exitCode: 1,
-            durationMs: Date.now() - startedAt,
-            reason: "read_only_enforcement_unavailable"
-          });
+        try {
+          const mcpTimeoutMs = Math.min(15000, requestDeadlineMs - Date.now());
+          if (mcpTimeoutMs <= 0) throw createSettingsLockTimeoutError();
+          const mcpStatus = await runProcess(
+            executable,
+            [...execArgs, "mcp", "list"],
+            { timeoutMs: mcpTimeoutMs, maxOutputBytes: 65536, env: createProviderEnvironment("antigravity") }
+          );
+          if (!hasNoConfiguredMcpServers(mcpStatus)) {
+            return createFailureSubagentResult("antigravity", model.model, {
+              error: "read-only MCP isolation unavailable",
+              retryable: false,
+              exitCode: 1,
+              durationMs: Date.now() - startedAt,
+              reason: "read_only_mcp_isolation_unavailable",
+              metrics: { diagnostics: createAttemptDiagnostics("mcp_preflight") }
+            });
+          }
+          readOnlyStage = "settings_lock";
+          settingsLockStartedAt = Date.now();
+          releaseSettingsLock = await acquireSettingsLock(requestDeadlineMs);
+          releaseSettingsFileLock = await acquireSettingsFileLock(requestDeadlineMs);
+          settingsLockWaitMs = Date.now() - settingsLockStartedAt;
+          readOnlyStage = "settings_enforcement";
+          recoverStaleSettings(true);
+          readOnlyEnforcement = enableReadOnlyEnforcement();
+          if (!readOnlyEnforcement) {
+            releaseSettingsFileLock();
+            releaseSettingsFileLock = null;
+            releaseSettingsLock();
+            releaseSettingsLock = null;
+            return createFailureSubagentResult("antigravity", model.model, {
+              error: "read-only enforcement unavailable",
+              retryable: false,
+              exitCode: 1,
+              durationMs: Date.now() - startedAt,
+              reason: "read_only_enforcement_unavailable",
+              metrics: { diagnostics: createAttemptDiagnostics("settings_enforcement", null, { settingsLockWaitMs }) }
+            });
+          }
+        } catch (error) {
+          if (releaseSettingsFileLock) releaseSettingsFileLock();
+          if (releaseSettingsLock) releaseSettingsLock();
+          if (settingsLockWaitMs === null && settingsLockStartedAt !== null) settingsLockWaitMs = Date.now() - settingsLockStartedAt;
+          const settingsLockTimedOut = error?.code === "SETTINGS_LOCK_TIMEOUT";
+          if (settingsLockTimedOut || /timed out|timeout/i.test(error.message || "")) {
+            return createFailureSubagentResult("antigravity", model.model, {
+              error: "execution timed out",
+              retryable: false,
+              timedOut: true,
+              exitCode: null,
+              durationMs: Date.now() - startedAt,
+              reason: "timeout",
+              metrics: { diagnostics: createAttemptDiagnostics(readOnlyStage, "timeout", { settingsLockWaitMs }) }
+            });
+          }
+          const classification = classifyAntigravityError(error, null, "", "");
+          return mapCategoryToSubagentError(
+            classification.errorClass, classification.reason || error.message,
+            "antigravity", model.model,
+            Date.now() - startedAt, 0, null, null,
+            createAttemptDiagnostics(readOnlyStage, classification.providerCode, { settingsLockWaitMs })
+          );
         }
       }
 
@@ -500,27 +723,37 @@ export function createAntigravityAdapter(configuration) {
         activeExecutionHandles.set(request.executionId, handle);
 
         try {
+          const providerTimeoutMs = isReadOnly ? requestDeadlineMs - Date.now() : timeoutMs;
+          if (providerTimeoutMs <= 0) throw createSettingsLockTimeoutError();
+          providerStartedAt = Date.now();
           const processResult = await runProcess(
             executable,
             args,
             {
               cwd: request.workspace,
-              timeoutMs,
+              timeoutMs: providerTimeoutMs,
               maxOutputBytes: configuration?.antigravity?.maxOutputBytes || 8388608,
               env: createProviderEnvironment("antigravity"),
               abortController: handle.abortController,
               onSpawn: (child) => handle.attachChild(child)
             }
           );
+          providerExecutionMs = Date.now() - providerStartedAt;
 
           activeExecutionHandles.delete(request.executionId);
 
-          const classification = classifyAntigravityError(null, processResult.code, processResult.stdout, processResult.stderr);
+          const classification = classifyAntigravityError(null, processResult.code, processResult.stdout, processResult.stderr, processResult.signal);
           if (!classification.valid) {
             return mapCategoryToSubagentError(
               classification.errorClass, classification.reason,
               "antigravity", model.model,
-              Date.now() - startedAt, 0
+              Date.now() - startedAt, 0, processResult.code, processResult.signal,
+              createAttemptDiagnostics("provider_execution", classification.providerCode, {
+                settingsLockWaitMs,
+                providerExecutionMs,
+                stdoutBytes: Buffer.byteLength(processResult.stdout, "utf8"),
+                stderrBytes: Buffer.byteLength(processResult.stderr, "utf8")
+              })
             );
           }
 
@@ -529,16 +762,31 @@ export function createAntigravityAdapter(configuration) {
             return mapCategoryToSubagentError(
               "empty_output", "provider returned an empty result",
               "antigravity", model.model,
-              Date.now() - startedAt, 0
+              Date.now() - startedAt, 0, 0, null,
+              createAttemptDiagnostics("result_parse", "empty_output", {
+                settingsLockWaitMs,
+                providerExecutionMs,
+                stdoutBytes: Buffer.byteLength(processResult.stdout, "utf8"),
+                stderrBytes: Buffer.byteLength(processResult.stderr, "utf8")
+              })
             );
           }
 
           return createSuccessSubagentResult("antigravity", model.model, {
             result: resultText,
-            durationMs: Date.now() - startedAt
+            durationMs: Date.now() - startedAt,
+            metrics: {
+              diagnostics: createAttemptDiagnostics(null, null, {
+                settingsLockWaitMs,
+                providerExecutionMs,
+                stdoutBytes: Buffer.byteLength(processResult.stdout, "utf8"),
+                stderrBytes: Buffer.byteLength(processResult.stderr, "utf8")
+              })
+            }
           });
         } catch (error) {
           activeExecutionHandles.delete(request.executionId);
+          if (providerExecutionMs === null && providerStartedAt !== null) providerExecutionMs = Date.now() - providerStartedAt;
 
           const aborted = error.name === "AbortError" || handle.abortController.signal.aborted;
           if (aborted) {
@@ -548,7 +796,8 @@ export function createAntigravityAdapter(configuration) {
               timedOut: false,
               exitCode: null,
               durationMs: Date.now() - startedAt,
-              reason: "cancelled"
+              reason: "cancelled",
+              metrics: { diagnostics: createAttemptDiagnostics("provider_execution", null, { settingsLockWaitMs, providerExecutionMs }) }
             });
           }
 
@@ -559,7 +808,9 @@ export function createAntigravityAdapter(configuration) {
               retryable: false,
               timedOut: true,
               exitCode: null,
-              durationMs: Date.now() - startedAt
+              durationMs: Date.now() - startedAt,
+              reason: "timeout",
+              metrics: { diagnostics: createAttemptDiagnostics("provider_execution", "timeout", { settingsLockWaitMs, providerExecutionMs }) }
             });
           }
 
@@ -567,18 +818,19 @@ export function createAntigravityAdapter(configuration) {
           return mapCategoryToSubagentError(
             classification.errorClass, classification.reason || error.message,
             "antigravity", model.model,
-            Date.now() - startedAt, 0
+            Date.now() - startedAt, 0, null, null,
+            createAttemptDiagnostics("provider_execution", classification.providerCode, { settingsLockWaitMs, providerExecutionMs })
           );
         }
       } finally {
         if (readOnlyEnforcement) {
           disableReadOnlyEnforcement(readOnlyEnforcement);
         }
-        if (releaseSettingsLock) {
-          releaseSettingsLock();
-        }
         if (releaseSettingsFileLock) {
           releaseSettingsFileLock();
+        }
+        if (releaseSettingsLock) {
+          releaseSettingsLock();
         }
       }
     },

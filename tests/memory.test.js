@@ -509,3 +509,50 @@ test("audit retention yalnız süresi geçmiş döndürülmüş journal dosyalar
   assert.equal(fs.existsSync(recentPath), true);
   assert.equal(fs.existsSync(activePath), true);
 });
+
+test("kalıcı hafıza taraması ataya işaret eden dizin symlinkini izlemez", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-symlink-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  storePersistentMemory(configuration, createMemoryInput());
+  const resourcesDirectory = path.join(vaultRootPath, "03_Resources");
+  try {
+    fs.symlinkSync(vaultRootPath, path.join(resourcesDirectory, "loop"), "dir");
+  } catch {
+    context.skip("symlink oluşturma bu ortamda desteklenmiyor");
+    return;
+  }
+  const searchResult = searchPersistentMemory(configuration, { query: "Codex", limit: 10 });
+  assert.equal(searchResult.matches.length, 1);
+  assert.equal(searchResult.matches[0].relativePath, "03_Resources/Orkestrasyon/Hafiza.md");
+  assert.doesNotThrow(() => reviewPersistentMemory(configuration, { now: "2026-08-11T00:00:00.000Z" }));
+});
+
+test("kalıcı hafıza araması eşit skorda yol sırasına göre kararlı döner", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-stable-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/Beta.md", title: "Beta", content: "Codex notu" }));
+  storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/Alpha.md", title: "Alpha", content: "Codex notu" }));
+  const first = searchPersistentMemory(configuration, { query: "Codex", limit: 10 });
+  const second = searchPersistentMemory(configuration, { query: "Codex", limit: 10 });
+  assert.equal(first.matches.length, 2);
+  assert.equal(second.matches.length, 2);
+  assert.deepEqual(first.matches.map((match) => match.relativePath), ["03_Resources/Alpha.md", "03_Resources/Beta.md"]);
+  assert.deepEqual(second.matches.map((match) => match.relativePath), ["03_Resources/Alpha.md", "03_Resources/Beta.md"]);
+});
+
+test("kalıcı hafıza NFC ve NFD biçimindeki sorguyu aynı notla eşleştirir", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-unicode-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const stored = storePersistentMemory(configuration, createMemoryInput({
+    relativePath: "03_Resources/Kaf\u00e9.md",
+    title: "Kaf\u00e9 Notu",
+    content: "Men\u00fc d\u00fczenlemesi tamamland\u0131."
+  }));
+  assert.equal(stored.created, true);
+  const searchResult = searchPersistentMemory(configuration, { query: "Kafe\u0301", limit: 5 });
+  assert.equal(searchResult.matches.length, 1);
+  assert.equal(searchResult.matches[0].relativePath, "03_Resources/Kaf\u00e9.md");
+});

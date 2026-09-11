@@ -12,6 +12,13 @@ import {
   createFailureSubagentResult, createSuccessSubagentResult
 } from "../subagent-bridge/src/schemas/core-schemas.js";
 
+test("CC-DIAG-15: bilinmeyen exit code genel sınıfa düşer ve kodu korur", () => {
+  const classification = classifyClaudeError(null, 42, "", "", null);
+  assert.equal(classification.valid, false);
+  assert.equal(classification.errorClass, "non_zero_exit");
+  assert.match(classification.reason, /42/);
+});
+
 test("CC-AC-01: ClaudeCodeAdapter AgentAdapter kontratını uygular", () => {
   const adapter = createAdapter("claude_code", {
     canRead: true, canWrite: true,

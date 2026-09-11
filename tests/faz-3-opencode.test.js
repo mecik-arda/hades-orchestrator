@@ -154,6 +154,28 @@ test("OC-AC-11: parseOpenCodeOutput malformed", () => {
   assert.equal(parsed.ok, false);
 });
 
+test("OC-AC-11a: parseOpenCodeOutput gürültülü stdout içindeki geçerli satırları ayrıştırır", () => {
+  const noisyOutput = [
+    "opencode başlatılıyor...",
+    "deprecation warning: eski yapılandırma anahtarı",
+    '{"type":"text","part":{"id":"p","type":"text","text":"Önemli sonuç"}}',
+    '{"type":"text","part":{"id":"p","type":"text","text":"yarım kalan satır"',
+    "random log satırı",
+    '{"type":"step_finish","part":{"tokens":{"total":40,"input":10,"output":30}}}'
+  ].join("\n");
+  const parsed = parseOpenCodeOutput(noisyOutput);
+  assert.equal(parsed.ok, true);
+  assert.match(parsed.text, /Önemli sonuç/);
+  assert.equal(parsed.usage.tokens.total, 40);
+});
+
+test("OC-AC-14c: bilinmeyen exit code genel sınıfa düşer ve kodu korur", () => {
+  const classification = classifyOpenCodeError(null, 42, "", "");
+  assert.equal(classification.valid, false);
+  assert.equal(classification.errorClass, "non_zero_exit");
+  assert.match(classification.reason, /42/);
+});
+
 test("OC-AC-12: classifyOpenCodeError executable missing", () => {
   const err = new Error("ENOENT: command not found");
   const classification = classifyOpenCodeError(err, null, "", "");
