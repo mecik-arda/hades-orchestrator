@@ -21,7 +21,7 @@ npm run verify:ci
 ## Değişiklik kuralları
 
 - Her değişiklik için davranışı kanıtlayan bir test ekleyin veya güncelleyin; test olmadan kabul edilmez.
-- Read-only izin kapsamını, sandbox davranışını, retry politikasını veya provider yönlendirmesini değiştiren katkılar güvenlik sınırına dokunur; gerekçe PR açıklamasında verilmeli ve regression testleri eklenmelidir.
+- Read-only izin kapsamını, sandbox davranışını, retry politikasını, redakte telemetri allowlist'ini veya provider yönlendirmesini değiştiren katkılar güvenlik sınırına dokunur; gerekçe PR açıklamasında verilmeli ve regression testleri eklenmelidir.
 - Secret, API anahtarı veya kişisel yol içeren dosya commit etmeyin; kişisel değerler yapılandırma şablonlarına placeholder olarak girilir.
 - Kod ve commit mesajlarında açıklayıcı Türkçe kullanın; emoji veya gündelik ikon kullanmayın.
 - Gereksiz yorum, devre dışı bırakılmış kod ve TODO bırakmayın.

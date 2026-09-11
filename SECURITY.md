@@ -2,6 +2,8 @@
 
 Bu proje çoklu model yürütücülerini (Codex, Antigravity, OpenCode tabanlı sağlayıcılar) koordine eden bir köprüdür. İzin sınırları ve sandbox davranışı güvenlik sınırı olarak kabul edilir; bunları gevşeten değişiklikler güvenlik açığı sayılır.
 
+Redakte telemetri de güvenlik sınırıdır: execution metrikleri explicit allowlist ile yazılır; prompt, araç çıktısı, URL, workspace yolu, execution ID, task ID ve secret kaydedilmez.
+
 ## Güvenlik açığı bildirimi
 
 Herkese açık bir güvenlik açığı bulursanız bunu public issue veya PR ile bildirmeyin. E-posta veya GitHub Security Advisory üzerinden iletin. Raporunuzda şunları belirtin:

@@ -32,6 +32,8 @@ Bu projede ana orkestratör ve son karar verici, OpenCode oturumunda aktif kulla
 - Gemini Flash yerleşik salt-okunur web araçlarıyla kamuya açık URL, sayfa, video metni ve altyazı inceleyebilir. Yerel dosya inceleme için yalnız yerleşik workspace okuma araçlarını kullanabilir; terminal komutu, MCP, yazma aracı, oturum açma, form gönderme veya başka etkileşimli web eylemleri verilemez.
 - Antigravity'de `permission denied` veya `headless mode cannot prompt` sonucu model hesabı, model erişim planı veya sağlayıcı arızasını tek başına kanıtlamaz. Araçsız kısa bir probe ile model erişimini ayrı doğrula; araç izni sorunlarını adaptör izin politikası olarak sınıflandır.
 - Antigravity salt-okunur çağrıları ortak ayar kilidi kullandığından paralel toplu Gemini çağrıları başlatma. İstek timeoutunu kuyruk beklemesini kapsayacak biçimde seç ve bağımsız işlerde diğer sağlayıcıları kullan.
+- Antigravity circuit breaker'ı model bazlıdır (`antigravity:<model>`); bir modelin geçici hatası diğer Gemini modellerini kapatmaz.
+- Antigravity capability probe'ları yalnız `check_antigravity_subagent` üzerinden opt-in `probeModels` ve `probeCapabilities` ile çalıştırılır; probe kullanıcı ayarlarına veya workspace'e yazmaz, izin reddi `not_probed` olarak raporlanır.
 - Antigravity araç izinlerini aşmak için `--dangerously-skip-permissions` veya eşdeğer bir bypass kullanma.
 
 ### Subagent seçim kapısı

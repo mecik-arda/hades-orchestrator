@@ -9,7 +9,7 @@ Tek bir yapay zeka modelinin (God Model) tüm görevleri aynı anda, aynı konu�
 Subagent kullanımı **bağlam izolasyonu (context isolation)** sağlar: Her ajan yalnızca kendisine verilen **dar görevle** ilgilenir ve temiz bir zihinle çalışıp sadece "damıtılmış (compress)" sonucu ana modele iletir.
 
 ### Mimari Desenler (Architectural Patterns)
-*   **Orkestratör - İşçi (Supervisor/Worker):** Projemizdeki mimarinin karşılığıdır. OpenCode oturumunda aktif kullanılan ana model planı yapar, işi parçalara böler. DeepSeek, GLM veya Gemini gibi ajanlara spesifik görevler (Örn: "Şu scripti yaz", "Bu hatayı araştır") verir.
+*   **Orkestratör - İşçi (Supervisor/Worker):** Projemizdeki mimarinin karşılığıdır. OpenCode oturumunda aktif kullanılan ana model planı yapar, işi parçalara böler. DeepSeek ve Codex gibi ajanlara dar kapsamlı görevler (Örn: "Bu hatayı araştır") verir; Gemini/Antigravity yalnız salt-okunur web ve workspace analizi için kullanılır, kod yazma görevi verilmez.
 *   **Pipeline (Boru Hattı):** Bir ajanın çıktısının, doğrudan diğerinin girdisi olduğu sıralı sistemlerdir.
 *   **Swarm (Sürü):** Aynı problemin birden fazla bağımsız ajana verilip sonuçların oylandığı/birleştirildiği yapılardır.
 

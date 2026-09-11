@@ -45,7 +45,7 @@ Runtime policy’si `~/.config/subagent-bridge/config.json`, executable ve adapt
 
 ## Doğrulanmış taban
 
-Paket `hades-orchestrator@2.1.0`, çalışma zamanı Node.js 20.9+ ve ESM’dir; CI Node.js 22/24 kullanır. Kanonik kayıt `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, isteğe bağlı görünüm `<workspace>/.hades/runs.jsonl` altındadır. Güncel regresyon `313/313 PASS`; `npm run verify`, `npm run verify:ci` ve `npm run smoke` başarılıdır.
+Paket `hades-orchestrator@2.2.0`, çalışma zamanı Node.js 20.9+ ve ESM’dir; CI Node.js 22/24 kullanır. Kanonik kayıt `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, isteğe bağlı görünüm `<workspace>/.hades/runs.jsonl` altındadır. Güncel regresyon `411/411 PASS`; `npm run verify`, `npm run verify:ci` ve `npm run smoke` başarılıdır.
 
 ## Hızlı başlangıç
 
@@ -130,7 +130,7 @@ Backup `~/.config/subagent-bridge/backups/` altında oluşturulur; rollback içi
 
 ### Doğrulanmış sağlayıcı matrisi
 
-Antigravity/Gemini Pro ve Flash, Codex, DeepSeek V4 Pro/Flash ve GLM 5.2 doğrulanmıştır. GLM 5.2 HighSpeed abonelik yetkisi bekler; OpenCode bağımsız backend’i yapılandırmaya, Claude Code auth’a, Kimi/Qwen katalog girdisine bağlıdır.
+Antigravity/Gemini Pro ve Flash, Codex ve DeepSeek V4 Pro/Flash doğrulanmıştır. GLM aboneliği pasif olduğundan GLM model, profil ve fallback'leri çağrılmaz; Codex Luna hızlı fiyat/performans uygulayıcı, Terra dengeli edit, Sol zor hata ayıklama ve denetim modelidir. OpenCode bağımsız backend’i yapılandırmaya, Claude Code auth’a, Kimi/Qwen katalog girdisine bağlıdır.
 
 ### Antigravity sözleşmesi
 
@@ -145,6 +145,10 @@ claude_sonnet     → claude-sonnet-4-6
 ```
 
 Salt-okunur çağrı `--add-dir`, `deny write_file(*)` ve `no command(*)` politikalarıyla sınırlanır. `agy mcp list` sonucu `No MCP servers configured.` olmalıdır; harici MCP, kalıcı geniş izin, mutasyon ve network probe reddedilir. Ayarlar PID lock ile serileştirilir ve geri yüklenir.
+
+Kanonik hata sınıfları `rate_limited`, `authentication_failure`, `permission_denied`, `timeout`, `server`, `network`, `process_exit`, `process_error` ve `output_limit`’tir; gerçek `exitCode` ve `signal` korunur. Provider circuit anahtarı Antigravity’de model bazlıdır (`antigravity:<model>`), böylece bir modelin geçici hatası diğer Gemini modellerini kapatmaz.
+
+`check_antigravity_subagent`, opt-in `probeModels` ve `probeCapabilities` ile model başına `modelAccess`, `toolFreeResponse`, `workspaceRead` ve `webRead` yeteneklerini seri ve yan etkisiz ölçer. `authValid: null` probe yapılmadığını ifade eder; `--version` başarısı auth başarısı sayılmaz. İzin reddi `unavailable` yerine `not_probed` raporlanır. Varsayılan probe zaman aşımı 300 sn’dir ve `antigravity.probeTimeoutMs` ile ayarlanır.
 
 ### Codex sözleşmesi
 
@@ -173,7 +177,7 @@ Gemini Pro ve Codex gerçek file-backed sonuçla çağrıldı; timeout override,
 
 ### Test tabanı
 
-Güncel dondurulmuş regresyon tabanı `313/313 PASS`’tir; zamanlamaya duyarlı ağır doğrulamalar aynı makinede sıralı çalıştırılmalıdır.
+Güncel dondurulmuş regresyon tabanı `411/411 PASS`’tir; zamanlamaya duyarlı ağır doğrulamalar aynı makinede sıralı çalıştırılmalıdır.
 
 ### Bilinen engelleyici olmayan maddeler
 
@@ -265,6 +269,8 @@ DeepSeek sonucu Zod ile doğrulanır; geçici hatalarda retry, circuit breaker v
 ```
 
 Kayıtlar prompt, cevap, diff, workspace veya dosya yolu, task ID ve secret içermez. İsteğe bağlı `<workspace>/.hades/runs.jsonl` mirror’ı `npm run runs:mirror -- enable|status|view|disable|clear --confirm` ile yönetilir.
+
+Execution metrikleri `execution_metric_v2` explicit allowlist’i ile yazılır; `failureStage`, `providerCode`, gerçek `exitCode`, `signal`, `retryDecision`, `retryStopReason`, `settingsLockWaitMs`, `providerExecutionMs` ve stdout/stderr boyut kovaları taşınır. `recent-runs` strict v1/v2 okuyucusudur ve operatör görünümünde yalnız son attempt tanısı gösterilir; tam attempt dizisi machine metric’te kalır.
 
 ## Mimari dokümanlar
 

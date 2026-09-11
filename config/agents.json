@@ -57,8 +57,9 @@
                                        "executable":  "agy",
                                        "timeoutMs":  900000,
                                        "maxRetries":  1,
-                                       "maxOutputBytes":  8388608,
-                                       "defaultSandbox":  true,
+                                        "maxOutputBytes":  8388608,
+                                        "probeTimeoutMs":  300000,
+                                        "defaultSandbox":  true,
                                        "defaultMode":  "read_only",
                                        "allowedModes":  [
                                                             "read_only",
