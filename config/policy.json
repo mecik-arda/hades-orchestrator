@@ -108,6 +108,7 @@
                         "maxRetryCostReserveUsd":  0.1,
                         "maxUnknownAttemptCostUsd":  0.1,
                         "monthlyCostLimitUsd":  50,
+                        "costBudgetEnforced":  true,
                         "warningThresholdPercent":  80
                     },
     "observability":  {
@@ -169,13 +170,15 @@
                                                                          "target":  "gemini_flash",
                                                                          "mode":  "read_only",
                                                                          "priority":  25,
-                                                                         "cacheable":  true
+                                                                         "cacheable":  true,
+                                                                         "webEvidenceRequired":  true
                                                                      },
                                                "web_research":  {
                                                                     "target":  "gemini_pro",
                                                                     "mode":  "read_only",
                                                                     "priority":  20,
-                                                                    "cacheable":  true
+                                                                    "cacheable":  true,
+                                                                    "webEvidenceRequired":  true
                                                                 },
                                                "file_audit":  {
                                                                   "target":  "gemini_pro",
@@ -338,6 +341,13 @@
                                                 "ttlMs":  600000,
                                                 "maxEntryBytes":  262144,
                                                 "maxEntries":  100
-                                            }
+                                            },
+                          "slo":  {
+                                                "windowDays":  7,
+                                                "minimumRuns":  20,
+                                                "availabilityTarget":  0.95,
+                                                "latencyP95Ms":  600000
+                                            },
+                          "webIntentHeuristics":  true
                       }
 }

@@ -69,12 +69,15 @@ const attemptSchemaV2 = z.object({
 }).strict();
 const executionSchemaV2 = z.object({
   schemaVersion: z.literal(2),
+  manifestVersion: z.literal(2).optional(),
   recordedAt: z.string().datetime(),
   backend: backendSchema,
   modelHash: hashSchema,
+  requestedModelHash: hashSchema.optional(),
   executionIdHash: hashSchema,
   workspaceHash: hashSchema,
   mode: modeSchema,
+  accessMode: modeSchema.optional(),
   profile: tokenSchema.optional().nullable(),
   outcomeStatus: outcomeSchema,
   failureClass: nullableTokenSchema,
@@ -85,7 +88,15 @@ const executionSchemaV2 = z.object({
   attempts: z.array(attemptSchemaV2).max(100),
   retries: z.number().int().nonnegative(),
   queueWaitMs: finiteNonnegativeSchema,
-  cacheHit: z.boolean()
+  cacheHit: z.boolean(),
+  capability: z.object({
+    canRead: z.boolean(),
+    canWrite: z.boolean(),
+    supportsSandbox: z.boolean(),
+    supportsModelSelection: z.boolean()
+  }).strict().nullable().optional(),
+  artifactHashes: z.array(hashSchema).max(100).nullable().optional(),
+  webEvidenceRepair: z.boolean().optional()
 }).strict();
 const legacySchema = z.object({
   recordedAt: z.string().datetime(),
@@ -195,6 +206,10 @@ function lastAttemptDiagnosis(attempts, fallback = {}) {
     exitCode: lastAttempt.exitCode ?? null,
     signal: lastAttempt.signal ?? null
   };
+}
+
+export function validateRunManifestRecord(value) {
+  return executionSchemaV2.safeParse(value);
 }
 
 function normalizeRun(record) {

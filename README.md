@@ -49,7 +49,7 @@ The runtime policy is loaded from `~/.config/subagent-bridge/config.json`; execu
 
 ## Verified baseline
 
-The package is `hades-orchestrator@2.2.0`, the runtime is Node.js 20.9+ and ESM; CI uses Node.js 22/24. The canonical record lives under `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, with the optional view at `<workspace>/.hades/runs.jsonl`. The current regression is `411/411 PASS`; `npm run verify`, `npm run verify:ci` and `npm run smoke` succeed.
+The package is `hades-orchestrator@2.2.0`, the runtime is Node.js 20.9+ and ESM; CI uses Node.js 22/24. The canonical record lives under `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, with the optional view at `<workspace>/.hades/runs.jsonl`. The current regression is `517/517 PASS`; `npm run verify`, `npm run verify:ci` and `npm run smoke` succeed.
 
 ## Quick start
 
@@ -86,7 +86,7 @@ The active workspace is not derived from the package location, configuration or 
 
 ### Personal configuration
 
-It passes `configVersion: 2` schema validation; unknown or missing fields are rejected. Providers are constrained by `defaultMode`/`allowedModes`. `reliability.monthlyCostLimitUsd: 50` and `warningThresholdPercent: 80` are enforced; `npm run budget` shows the current state. Codex `allowNonGitWorkspace` is enabled only through the personal machine config; DeepSeek preserves denied-root and Zod validation without requiring a Git repository.
+It passes `configVersion: 2` schema validation; unknown or missing fields are rejected. Providers are constrained by `defaultMode`/`allowedModes`. `reliability.monthlyCostLimitUsd: 50` and `warningThresholdPercent: 80` are enforced; `npm run budget` shows the current state. Set `reliability.costBudgetEnforced: false` to disable hard-cap enforcement while spend tracking and snapshots stay active; the default is enforced. Codex `allowNonGitWorkspace` is enabled only through the personal machine config; DeepSeek preserves denied-root and Zod validation without requiring a Git repository.
 
 ### Canonical routing
 
@@ -163,7 +163,7 @@ read_only  → codex exec --sandbox read-only
 edit       → codex exec --sandbox workspace-write
 ```
 
-The normal flow contains no sandbox or approval bypass. Edit tools apply only selected files in a disposable workspace with hash checks, secret scanning and rollback-supported promotion; test, build, script, package manager and mutating shell commands are forbidden.
+The normal flow contains no sandbox or approval bypass. Edit tools apply only selected files in a disposable workspace with hash checks, secret scanning and rollback-supported promotion; test, build, script, package manager and mutating shell commands are forbidden. High-impact promotions stay fail-closed until the orchestrator approves the stored prepared edit; multi-file application provides handled-error rollback. Interrupted promotion artifacts block new applications until manual recovery: inspect the `.tmp` and `.tmp.backup` artifacts in the target directories, restore a `.backup` over its source when needed, then remove the artifacts before retrying.
 
 ### Shared invariants
 
@@ -181,7 +181,7 @@ Gemini Pro and Codex were invoked with real file-backed results; timeout overrid
 
 ### Test baseline
 
-The current frozen regression baseline is `411/411 PASS`; timing-sensitive heavy verifications must run serially on the same machine.
+The current frozen regression baseline is `517/517 PASS`; timing-sensitive heavy verifications must run serially on the same machine.
 
 ### Known non-blocking items
 
@@ -346,7 +346,7 @@ Runtime policy’si `~/.config/subagent-bridge/config.json`, executable ve adapt
 
 ## Doğrulanmış taban
 
-Paket `hades-orchestrator@2.2.0`, çalışma zamanı Node.js 20.9+ ve ESM’dir; CI Node.js 22/24 kullanır. Kanonik kayıt `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, isteğe bağlı görünüm `<workspace>/.hades/runs.jsonl` altındadır. Güncel regresyon `411/411 PASS`; `npm run verify`, `npm run verify:ci` ve `npm run smoke` başarılıdır.
+Paket `hades-orchestrator@2.2.0`, çalışma zamanı Node.js 20.9+ ve ESM’dir; CI Node.js 22/24 kullanır. Kanonik kayıt `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, isteğe bağlı görünüm `<workspace>/.hades/runs.jsonl` altındadır. Güncel regresyon `515/515 PASS`; `npm run verify`, `npm run verify:ci` ve `npm run smoke` başarılıdır.
 
 ## Hızlı başlangıç
 
@@ -383,7 +383,7 @@ Aktif workspace package konumundan, config’ten veya runtime CWD’den türetil
 
 ### Kişisel yapılandırma
 
-`configVersion: 2` şema doğrulamasından geçer; bilinmeyen veya eksik alan reddedilir. Provider’lar `defaultMode`/`allowedModes` ile sınırlıdır. `reliability.monthlyCostLimitUsd: 50` ve `warningThresholdPercent: 80` uygulanır; `npm run budget` anlık durumu gösterir. Codex `allowNonGitWorkspace` yalnız kişisel machine config ile açılır; DeepSeek Git repository zorunluluğu olmadan denied-root ve Zod doğrulamasını korur.
+`configVersion: 2` şema doğrulamasından geçer; bilinmeyen veya eksik alan reddedilir. Provider’lar `defaultMode`/`allowedModes` ile sınırlıdır. `reliability.monthlyCostLimitUsd: 50` ve `warningThresholdPercent: 80` uygulanır; `npm run budget` anlık durumu gösterir. `reliability.costBudgetEnforced: false` hard-cap uygulamasını devre dışı bırakır; harcama takibi ve anlık görünüm aktif kalır, varsayılan uygulanır. Codex `allowNonGitWorkspace` yalnız kişisel machine config ile açılır; DeepSeek Git repository zorunluluğu olmadan denied-root ve Zod doğrulamasını korur.
 
 ### Kanonik yönlendirme
 
@@ -460,7 +460,7 @@ read_only  → codex exec --sandbox read-only
 edit       → codex exec --sandbox workspace-write
 ```
 
-Normal akış sandbox veya approval bypass içermez. Edit araçları disposable workspace’te yalnız seçili dosyaları hash kontrolü, secret taraması ve rollback destekli promotion ile uygular; test, build, script, paket yöneticisi ve mutasyon yapan shell komutları yasaktır.
+Normal akış sandbox veya approval bypass içermez. Edit araçları disposable workspace’te yalnız seçili dosyaları hash kontrolü, secret taraması ve rollback destekli promotion ile uygular; test, build, script, paket yöneticisi ve mutasyon yapan shell komutları yasaktır. Yüksek etkili promotion, orkestratör saklanan prepared edit’i onaylayana kadar fail-closed kalır; çok dosyalı uygulama işlenen hatalarda geri alınır. Kesintiye uğramış promotion artifaktları manuel kurtarma tamamlanana kadar yeni uygulamaları engeller: hedef dizinlerdeki `.tmp` ve `.tmp.backup` artifaktlarını inceleyin, gerekiyorsa `.backup` dosyasını hedefinin üzerine geri taşıyın ve yeniden denemeden önce artifaktları kaldırın.
 
 ### Ortak değişmezler
 
@@ -478,7 +478,7 @@ Gemini Pro ve Codex gerçek file-backed sonuçla çağrıldı; timeout override,
 
 ### Test tabanı
 
-Güncel dondurulmuş regresyon tabanı `411/411 PASS`’tir; zamanlamaya duyarlı ağır doğrulamalar aynı makinede sıralı çalıştırılmalıdır.
+Güncel dondurulmuş regresyon tabanı `515/515 PASS`’tir; zamanlamaya duyarlı ağır doğrulamalar aynı makinede sıralı çalıştırılmalıdır.
 
 ### Bilinen engelleyici olmayan maddeler
 

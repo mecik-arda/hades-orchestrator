@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "2026-09-13-live-v2",
+  "minimumRepetitions": 3,
+  "thresholds": {
+    "schemaPassRate": 0.67,
+    "sourceAccuracy": 0.67,
+    "failureClassificationAccuracy": 0.67,
+    "maxP95DurationMs": 600000,
+    "maxAverageCostUsd": 0.5,
+    "editReadinessRate": 0.67
+  },
+  "tasks": [
+    {
+      "id": "live-candidate-generation",
+      "taskClass": "candidate_generation",
+      "candidate": "gemini_flash",
+      "target": "gemini_flash",
+      "model": "gemini_flash",
+      "prompt": "Return exactly one JSON object and nothing else. The object must contain only the key candidates, whose value is an array of three short strings about local-first agent orchestration. Do not use tools, Markdown, code fences, or prose.",
+      "expected": {
+        "json": true,
+        "jsonKeys": ["candidates"],
+        "jsonShape": {
+          "candidates": "array"
+        },
+        "allowExtraKeys": false
+      }
+    },
+    {
+      "id": "live-sourced-analysis",
+      "taskClass": "sourced_analysis",
+      "candidate": "deepseek_pro",
+      "target": "opencode",
+      "model": "deepseek/deepseek-v4-pro",
+      "prompt": "Return exactly one JSON object with keys status (the string completed) and sourceMarker (the string LIVE-SOURCE-MARKER-9). Include no extra keys and no prose.",
+      "expected": {
+        "json": true,
+        "jsonKeys": ["status", "sourceMarker"],
+        "jsonShape": {
+          "status": "string",
+          "sourceMarker": "string"
+        },
+        "jsonExact": {
+          "status": "completed",
+          "sourceMarker": "LIVE-SOURCE-MARKER-9"
+        },
+        "sourceMarker": "LIVE-SOURCE-MARKER-9"
+      }
+    },
+    {
+      "id": "live-strict-schema",
+      "taskClass": "strict_schema",
+      "candidate": "deepseek_pro",
+      "target": "opencode",
+      "model": "deepseek/deepseek-v4-pro",
+      "prompt": "Return exactly one JSON object with keys status (the string completed), summary (short string), findings (empty array), proposed_steps (empty array), risks (empty array), questions (empty array), requires_human_approval (boolean false). Use no extra keys, no Markdown, no code fences, and no prose outside JSON.",
+      "expected": {
+        "json": true,
+        "jsonKeys": ["status", "summary", "findings", "proposed_steps", "risks", "questions", "requires_human_approval"],
+        "jsonShape": {
+          "status": "string",
+          "summary": "string",
+          "findings": "array",
+          "proposed_steps": "array",
+          "risks": "array",
+          "questions": "array",
+          "requires_human_approval": "boolean"
+        },
+        "jsonExact": {
+          "status": "completed",
+          "requires_human_approval": false
+        }
+      }
+    },
+    {
+      "id": "live-edit-readiness-deepseek",
+      "taskClass": "controlled_edit_readiness",
+      "candidate": "deepseek_pro",
+      "target": "opencode",
+      "model": "deepseek/deepseek-v4-pro",
+      "prompt": "Seçili dosyaya tam olarak şu satırı ekle: export function pilotMarker() { return 1; } Mevcut fonksiyonları değiştirme.",
+      "edit": {
+        "files": ["pilot-workspace/src/sum.js"],
+        "contextFiles": [],
+        "acceptanceCriteria": ["Yalnız seçili dosyada değişiklik üret", "Yeni pilotMarker fonksiyonu eklenir", "Mevcut fonksiyonlar bozulmaz"]
+      }
+    },
+    {
+      "id": "live-edit-readiness-luna",
+      "taskClass": "controlled_edit_readiness",
+      "candidate": "luna",
+      "target": "codex",
+      "model": "gpt-5.6-luna",
+      "profile": "luna_implementation",
+      "prompt": "Seçili dosyaya tam olarak şu satırı ekle: export function pilotMarker() { return 1; } Mevcut fonksiyonları değiştirme.",
+      "edit": {
+        "files": ["pilot-workspace/src/sum.js"],
+        "contextFiles": [],
+        "acceptanceCriteria": ["Yalnız seçili dosyada değişiklik üret", "Yeni pilotMarker fonksiyonu eklenir", "Mevcut fonksiyonlar bozulmaz"]
+      }
+    },
+    {
+      "id": "live-edit-readiness-terra",
+      "taskClass": "controlled_edit_readiness",
+      "candidate": "terra",
+      "target": "codex",
+      "model": "gpt-5.6-terra",
+      "profile": "implementation",
+      "prompt": "Seçili dosyaya tam olarak şu satırı ekle: export function pilotMarker() { return 1; } Mevcut fonksiyonları değiştirme.",
+      "edit": {
+        "files": ["pilot-workspace/src/sum.js"],
+        "contextFiles": [],
+        "acceptanceCriteria": ["Yalnız seçili dosyada değişiklik üret", "Yeni pilotMarker fonksiyonu eklenir", "Mevcut fonksiyonlar bozulmaz"]
+      }
+    },
+    {
+      "id": "live-critical-review",
+      "taskClass": "critical_review",
+      "candidate": "sol",
+      "target": "codex",
+      "model": "gpt-5.6-sol",
+      "prompt": "Return exactly one JSON object with the single key status whose value is the string completed. No extra keys, no prose, no Markdown.",
+      "expected": {
+        "json": true,
+        "jsonKeys": ["status"],
+        "jsonShape": {
+          "status": "string"
+        },
+        "jsonExact": {
+          "status": "completed"
+        },
+        "allowExtraKeys": false
+      }
+    }
+  ]
+}

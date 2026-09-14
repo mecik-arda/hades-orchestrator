@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfiguration } from "../subagent-bridge/src/config.js";
 import { getCostBudgetSnapshot, pruneMetricFiles } from "../subagent-bridge/src/metrics.js";
+import { summarizeSlo } from "../subagent-bridge/src/services/slo-service.js";
 
 function readMetricFile(metricsPath) {
   return fs.readFileSync(metricsPath, "utf8").split("\n").filter(Boolean).flatMap((line) => {
@@ -14,8 +15,11 @@ function readMetricFile(metricsPath) {
   });
 }
 
-export function summarizeMetrics(records) {
+export function summarizeMetrics(records, sloPolicy) {
+  const slo = summarizeSlo(records, sloPolicy);
   const healthRecords = records.filter((record) => record.recordType === "health_snapshot").sort((left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt)).slice(-100);
+  const liveObservationRecords = records.filter((record) => record.recordType === "live_observation").sort((left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt));
+  const modelFitRecords = records.filter((record) => record.recordType === "model_fit_evaluation").sort((left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt));
   const directEditFeedback = new Map(records
     .filter((record) => record.recordType === "direct_edit_feedback" && record.executionIdHash)
     .map((record) => [record.executionIdHash, record.outcome]));
@@ -122,6 +126,39 @@ export function summarizeMetrics(records) {
   for (const aggregate of Object.values(healthByAdapter)) {
     aggregate.availabilityRate = aggregate.observations > 0 ? Number((aggregate.available / aggregate.observations).toFixed(4)) : 0;
   }
+  const liveObservations = {};
+  for (const record of liveObservationRecords) {
+    const model = record.model || "unknown";
+    const aggregate = liveObservations[model] ||= {
+      observationCount: 0,
+      lastObservedAt: null,
+      modelAccess: "not_probed",
+      toolFreeResponse: "not_probed",
+      workspaceRead: "not_probed",
+      webRead: "not_probed",
+      failureClass: null
+    };
+    aggregate.observationCount += 1;
+    aggregate.lastObservedAt = record.recordedAt;
+    for (const capability of ["modelAccess", "toolFreeResponse", "workspaceRead", "webRead"]) {
+      if (record.capabilities && typeof record.capabilities[capability] === "string") aggregate[capability] = record.capabilities[capability];
+    }
+    aggregate.failureClass = record.failureClass ?? null;
+  }
+  const modelFitByTaskClass = {};
+  for (const record of modelFitRecords) {
+    const taskClass = record.taskClass || "unknown_task_class";
+    const aggregate = modelFitByTaskClass[taskClass] ||= { observationCount: 0, candidates: {} };
+    aggregate.observationCount += 1;
+    const candidate = aggregate.candidates[record.modelHash] ||= { observationCount: 0, lastObservedAt: null, evidenceType: "synthetic_fixture", promotionEligible: false, coverageComplete: false, thresholdsPassed: 0, lastRepetitionCount: 0 };
+    candidate.observationCount += 1;
+    candidate.lastObservedAt = record.recordedAt;
+    candidate.evidenceType = record.evidenceType === "live_observation" ? "live_observation" : candidate.evidenceType;
+    candidate.promotionEligible = record.promotionEligible === true;
+    candidate.coverageComplete = record.coverageComplete === true;
+    candidate.thresholdsPassed += record.thresholdsPassed === true ? 1 : 0;
+    candidate.lastRepetitionCount = record.repetitionCount;
+  }
   return {
     runCount: summary.runCount,
     averageDurationMs: summary.runCount > 0 ? Math.round(summary.totalDurationMs / summary.runCount) : 0,
@@ -136,10 +173,16 @@ export function summarizeMetrics(records) {
       observationCount: healthRecords.length,
       byAdapter: healthByAdapter
     },
+    liveObservations,
+    modelFitEvaluation: {
+      observationCount: modelFitRecords.length,
+      byTaskClass: modelFitByTaskClass
+    },
     directEditBaseline,
     routingEvaluation: {
       byProfile: routingByProfile
-    }
+    },
+    slo
   };
 }
 
@@ -161,5 +204,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
   const prunedFiles = process.argv.includes("--prune") ? pruneMetricFiles(configuration) : 0;
   const records = readMetricsDirectory(metricsDirectory);
-  console.log(JSON.stringify({ ...summarizeMetrics(records), budget, metricsDirectory, prunedFiles }, null, 2));
+  console.log(JSON.stringify({ ...summarizeMetrics(records, configuration.orchestration?.slo), budget, metricsDirectory, prunedFiles }, null, 2));
 }

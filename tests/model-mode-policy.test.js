@@ -86,7 +86,7 @@ test("MODEL-01: runtime requested ve resolved model kimliğini ayırır", async 
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const runtime = createBridgeRuntime({
     configuration: configuration(root),
-    adapters: { antigravity: fakeAdapter("antigravity", async () => createSuccessSubagentResult("antigravity", "gemini-3.1-pro-high", { result: "ok" })) }
+    adapters: { antigravity: fakeAdapter("antigravity", async () => createSuccessSubagentResult("antigravity", "gemini-3.1-pro-high", { result: "ok", webEvidence: null })) }
   });
   const result = await runtime.run({ target: "gemini_pro", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
   assert.equal(result.requestedModel, "gemini_pro");

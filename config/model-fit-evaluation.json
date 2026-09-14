@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "2026-09-12-v1",
+  "minimumRepetitions": 3,
+  "thresholds": {
+    "schemaPassRate": 0.66,
+    "sourceAccuracy": 0.95,
+    "failureClassificationAccuracy": 1,
+    "maxP95DurationMs": 5000,
+    "maxAverageCostUsd": 0.01,
+    "editReadinessRate": 1
+  },
+  "tasks": [
+    {
+      "id": "candidate-generation-baseline",
+      "taskClass": "candidate_generation",
+      "candidate": "gemini_flash",
+      "repetitions": [
+        { "repetition": 1, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "durationMs": 1100, "costUsd": 0.001 },
+        { "repetition": 2, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "durationMs": 1250, "costUsd": 0.001 },
+        { "repetition": 3, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "durationMs": 1180, "costUsd": 0.001 }
+      ]
+    },
+    {
+      "id": "sourced-analysis-baseline",
+      "taskClass": "sourced_analysis",
+      "candidate": "deepseek_pro",
+      "repetitions": [
+        { "repetition": 1, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "durationMs": 2100, "costUsd": 0.004 },
+        { "repetition": 2, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "durationMs": 2300, "costUsd": 0.004 },
+        { "repetition": 3, "schemaPass": true, "sourceAccuracy": 0.98, "failureClass": "none", "failureClassificationCorrect": true, "durationMs": 2200, "costUsd": 0.004 }
+      ]
+    },
+    {
+      "id": "strict-schema-baseline",
+      "taskClass": "strict_schema",
+      "candidate": "deepseek_pro",
+      "repetitions": [
+        { "repetition": 1, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "durationMs": 1700, "costUsd": 0.003 },
+        { "repetition": 2, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "durationMs": 1650, "costUsd": 0.003 },
+        { "repetition": 3, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "durationMs": 1800, "costUsd": 0.003 }
+      ]
+    },
+    {
+      "id": "luna-edit-readiness-baseline",
+      "taskClass": "controlled_edit_readiness",
+      "candidate": "luna",
+      "repetitions": [
+        { "repetition": 1, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "editReady": true, "durationMs": 2800, "costUsd": 0.006 },
+        { "repetition": 2, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "editReady": true, "durationMs": 3000, "costUsd": 0.006 },
+        { "repetition": 3, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "editReady": true, "durationMs": 2900, "costUsd": 0.006 }
+      ]
+    },
+    {
+      "id": "terra-edit-readiness-baseline",
+      "taskClass": "controlled_edit_readiness",
+      "candidate": "terra",
+      "repetitions": [
+        { "repetition": 1, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "editReady": true, "durationMs": 3100, "costUsd": 0.007 },
+        { "repetition": 2, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "editReady": true, "durationMs": 3200, "costUsd": 0.007 },
+        { "repetition": 3, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "editReady": true, "durationMs": 3050, "costUsd": 0.007 }
+      ]
+    },
+    {
+      "id": "critical-review-baseline",
+      "taskClass": "critical_review",
+      "candidate": "sol",
+      "repetitions": [
+        { "repetition": 1, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "durationMs": 3600, "costUsd": 0.009 },
+        { "repetition": 2, "schemaPass": true, "sourceAccuracy": 1, "failureClass": "none", "failureClassificationCorrect": true, "durationMs": 3900, "costUsd": 0.009 },
+        { "repetition": 3, "schemaPass": false, "sourceAccuracy": 1, "failureClass": "timeout", "failureClassificationCorrect": true, "durationMs": 4800, "costUsd": 0.009 }
+      ]
+    }
+  ]
+}

@@ -9,13 +9,16 @@ import { createOpenCodeAdapter } from "../adapters/opencode-adapter.js";
 import { buildDeepSeekEditPrompt, checkDeepSeek, createDeepSeekCheckpoint, createDeepSeekEditCheckpoint, createDeepSeekRuntimeRequest, resolveDeepSeekModel, writeDeepSeekCheckpoint } from "../deepseek.js";
 import { buildGlmEditPrompt, buildGlmProfileReadOnlyPrompt, buildGlmSchemaRepairPrompt, checkGlm, createGlmCheckpoint, createGlmRuntimeRequest, normalizeOpenCodeGlmResult, resolveGlmModel, writeGlmCheckpoint } from "../glm.js";
 import { buildCatalogEditPrompt, buildCatalogReadOnlyPrompt, checkCatalogProvider, resolveCatalogModel } from "../catalog-provider.js";
-import { createFailureSubagentResult, subagentExecutionRequestSchema, validateControlledEditResult, validateSubagentResult } from "../schemas/core-schemas.js";
+import { capabilityFailureClassValues, capabilityProbeSchema, capabilityStatusValues, createFailureSubagentResult, healthResultSchema, subagentExecutionRequestSchema, validateControlledEditResult, validateSubagentResult } from "../schemas/core-schemas.js";
 import { checkCapability } from "../services/capability-service.js";
 import { createDelegationGuard } from "../services/delegation-guard.js";
 import { createExecutionId } from "../services/execution-service.js";
 import { createHealthCache } from "../services/health-service.js";
 import { checkModePolicy, resolveAllowedModes } from "../services/mode-policy.js";
-import { containsSecretLikeValue, provisionDisposableWorkspace } from "../services/disposable-workspace.js";
+import { containsSecretLikeAddedValue, containsSecretLikeValue, applyPreparedChanges, detectRecoveryArtifacts, provisionDisposableWorkspace } from "../services/disposable-workspace.js";
+import { calculateChangeSetHash, classifyChangeSet, isOrchestratorApprovableClass } from "../services/approval-boundary.js";
+import { createPreparedEditRegistry } from "../services/prepared-edit-registry.js";
+import { containsHttpUrl, containsSensitiveWebValue, containsWebMarkup, detectWebIntent, normalizeUntrustedWebEvidence, providerWebEvidenceCarrierSchema } from "../web-evidence.js";
 import { createProviderCircuitBreaker } from "../services/provider-circuit-breaker.js";
 import { createReadOnlyResultCache } from "../services/read-only-cache.js";
 import { remainingDurationMs, resolveReliabilityBudget } from "../services/reliability-budget.js";
@@ -47,6 +50,7 @@ const runtimeRunRequestSchema = z.object({
   profile: z.string().min(1).max(64).optional(),
   executionId: z.string().min(1).optional(),
   abortSignal: z.any().optional(),
+  webEvidenceRequired: z.boolean().optional(),
   metricBackend: z.enum(["glm", "kimi", "qwen"]).optional(),
   resultValidator: z.function().optional(),
   schemaRepairPrompt: z.string().min(1).max(70000).optional(),
@@ -85,7 +89,71 @@ function configuredModels(configuration, backend) {
 }
 
 function circuitKey(route) {
-  return route.backend === "antigravity" ? `${route.backend}:${route.model}` : route.backend;
+  if (route.backend === "opencode") return `${route.backend}:${route.model}`;
+  return route.backend === "antigravity"
+    ? `${route.backend}:${ANTIGRAVITY_MODEL_MAP[route.model] || route.model}`
+    : route.backend;
+}
+
+function isContentValidationFailure(failureClass) {
+  return ["schema_invalid", "output_parse_invalid"].includes(failureClass);
+}
+
+function capabilityFailureClass(failureClass) {
+  if (!failureClass) return null;
+  const mapping = {
+    auth_invalid: "authentication_failure",
+    model_access_denied: "invalid_model",
+    model_unavailable: "invalid_model",
+    invalid_model: "invalid_model",
+    provider_circuit_open: "server",
+    non_zero_exit: "process_exit",
+    schema_invalid: "process_error",
+    output_parse_invalid: "empty_output",
+    queue_unavailable: "server"
+  };
+  const normalized = mapping[failureClass] || failureClass;
+  return capabilityFailureClassValues.includes(normalized) ? normalized : "unclassified";
+}
+
+function normalizeCapabilityProbe(probe) {
+  const source = probe && typeof probe === "object" ? probe : {};
+  const projected = {
+    modelAccess: capabilityStatusValues.includes(source.modelAccess) ? source.modelAccess : "not_probed",
+    toolFreeResponse: capabilityStatusValues.includes(source.toolFreeResponse) ? source.toolFreeResponse : "not_probed",
+    workspaceRead: capabilityStatusValues.includes(source.workspaceRead) ? source.workspaceRead : "not_probed",
+    webRead: capabilityStatusValues.includes(source.webRead) ? source.webRead : "not_probed",
+    failureClass: source.failureClass === null || source.failureClass === undefined
+      ? null
+      : (capabilityFailureClassValues.includes(source.failureClass) ? source.failureClass : "unclassified"),
+    checkedAt: capabilityProbeSchema.shape.checkedAt.safeParse(source.checkedAt ?? null).success ? source.checkedAt ?? null : null
+  };
+  return capabilityProbeSchema.parse(projected);
+}
+
+function normalizeHealthResult(health) {
+  const source = health && typeof health === "object" ? health : {};
+  const sourceProbes = source.probes && typeof source.probes === "object" ? source.probes : {};
+  const probes = {
+    ...(sourceProbes.cli === "available" || sourceProbes.cli === "unavailable" ? { cli: sourceProbes.cli } : {}),
+    ...Object.fromEntries(["modelAccess", "toolFreeResponse", "workspaceRead", "webRead"]
+      .filter((key) => capabilityStatusValues.includes(sourceProbes[key]))
+      .map((key) => [key, sourceProbes[key]]))
+  };
+  const sourceCapabilityProbes = source.capabilityProbes && typeof source.capabilityProbes === "object" ? source.capabilityProbes : {};
+  const capabilityProbes = Object.fromEntries(Object.entries(sourceCapabilityProbes)
+    .filter(([model]) => /^[a-z][a-z0-9._-]{0,63}$/.test(model))
+    .map(([model, probe]) => [model, normalizeCapabilityProbe(probe)]));
+  const versionMatch = typeof source.version === "string" ? /\b[vV]?\d+(?:\.\d+){1,3}\b/.exec(source.version) : null;
+  return healthResultSchema.parse({
+    installed: source.installed === true,
+    version: versionMatch ? versionMatch[0] : null,
+    authValid: typeof source.authValid === "boolean" ? source.authValid : null,
+    executable: source.executable ? "configured" : "unavailable",
+    ...(Object.keys(probes).length > 0 ? { probes } : {}),
+    ...(Object.keys(capabilityProbes).length > 0 ? { capabilityProbes } : {}),
+    ...(source.error ? { error: "unavailable" } : {})
+  });
 }
 
 export function canonicalizeTrustedWorkspace(trustedWorkspace) {
@@ -101,6 +169,28 @@ export function canonicalizeTrustedWorkspace(trustedWorkspace) {
 
 export function fingerprintTrustedWorkspace(trustedWorkspace) {
   return crypto.createHash("sha256").update(canonicalizeTrustedWorkspace(trustedWorkspace)).digest("hex");
+}
+
+export function captureSourceState(trustedWorkspace, relativePaths) {
+  const sourceWorkspace = canonicalizeTrustedWorkspace(trustedWorkspace);
+  return [...new Set(relativePaths)].map((relativePath) => {
+    const normalizedPath = relativePath.replaceAll("\\", "/");
+    const candidatePath = path.resolve(sourceWorkspace, ...normalizedPath.split("/"));
+    const relativeCandidate = path.relative(sourceWorkspace, candidatePath);
+    if (!normalizedPath || relativeCandidate.startsWith("..") || path.isAbsolute(relativeCandidate)) throw new Error("approval source path rejected");
+    if (!fs.existsSync(candidatePath)) return { relativePath: normalizedPath, state: "absent" };
+    const status = fs.lstatSync(candidatePath);
+    if (!status.isFile() || status.isSymbolicLink() || status.nlink !== 1) throw new Error("approval source file rejected");
+    return { relativePath: normalizedPath, state: "present", sha256: crypto.createHash("sha256").update(fs.readFileSync(candidatePath)).digest("hex") };
+  }).sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+}
+
+export function hashSourceState(sourceStateEntries) {
+  return crypto.createHash("sha256").update(JSON.stringify(sourceStateEntries)).digest("hex");
+}
+
+export function fingerprintSourceState(trustedWorkspace, relativePaths) {
+  return hashSourceState(captureSourceState(trustedWorkspace, relativePaths));
 }
 
 function createRuntimeFailure(backend, model, error, overrides = {}) {
@@ -151,6 +241,46 @@ function withModelIdentity(result, requestedModel) {
   };
 }
 
+function normalizeProviderResult(result, { requireCarrier = false, allowPlainRepair = false, rejectRestricted = false, webIntentHeuristics = false, webIntentPrompt = null } = {}) {
+  if (!result || typeof result !== "object") return result;
+  let evidenceCandidate = Object.hasOwn(result, "webEvidence") ? result.webEvidence : undefined;
+  let resultText = result.result;
+  let plainRepaired = false;
+  if (requireCarrier && result.ok === true && evidenceCandidate === undefined && Object.hasOwn(result, "result")) {
+    try {
+      if (typeof resultText !== "string") throw new Error("web evidence result wrapper is invalid");
+      const parsed = JSON.parse(resultText);
+      const carrierValidation = providerWebEvidenceCarrierSchema.safeParse(parsed);
+      if (!carrierValidation.success) throw new Error("web evidence result wrapper is invalid");
+      evidenceCandidate = carrierValidation.data.webEvidence;
+      resultText = carrierValidation.data.result;
+    } catch (error) {
+      const repairable = allowPlainRepair
+        && typeof resultText === "string"
+        && resultText.trim().length > 0
+        && !containsHttpUrl(resultText)
+        && !containsSensitiveWebValue(resultText)
+        && !containsWebMarkup(resultText)
+        && !(webIntentHeuristics && detectWebIntent(webIntentPrompt, resultText));
+      if (!repairable) {
+        throw error.message === "web evidence result wrapper is invalid"
+          ? error
+          : new Error("web evidence result wrapper is invalid");
+      }
+      evidenceCandidate = null;
+      plainRepaired = true;
+    }
+  }
+  if ((rejectRestricted && (containsHttpUrl(resultText) || containsSensitiveWebValue(resultText) || containsWebMarkup(resultText))) || (evidenceCandidate !== undefined && containsSensitiveWebValue(resultText))) throw new Error("provider result contains restricted content");
+  if (evidenceCandidate === undefined) return result;
+  return {
+    ...result,
+    result: resultText,
+    webEvidence: evidenceCandidate === null ? null : normalizeUntrustedWebEvidence(evidenceCandidate),
+    ...(plainRepaired ? { metrics: { ...(result.metrics || {}), webEvidenceRepair: true } } : {})
+  };
+}
+
 export function createBridgeRuntime({ configuration, statePaths, host = {}, adapters, sleep, legacyHealthChecker } = {}) {
   if (!configuration) {
     throw new Error("runtime configuration is required");
@@ -170,6 +300,11 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     staleLockMs: scheduler.staleLockMs,
     leaseHeartbeatMs: scheduler.leaseHeartbeatMs,
     maxQueuedPerWorkspace: scheduler.maxQueuedPerWorkspace
+  });
+  const preparedEditRegistry = createPreparedEditRegistry({
+    ttlMs: runtimeConfiguration.approval?.ttlMs,
+    maxEntries: runtimeConfiguration.approval?.maxEntries,
+    maxTotalBytes: runtimeConfiguration.approval?.maxTotalBytes
   });
   const readOnlyCache = createReadOnlyResultCache({
     ...runtimeConfiguration.orchestration?.readOnlyCache
@@ -201,11 +336,17 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     }
     const result = await runInternal({ ...rawRequest, executionId });
     if (route?.glm) result.metricBackend = "glm";
+    const routeAdapters = route ? runtimeAdapters[route.backend] : null;
+    if (routeAdapters?.capabilities) {
+      result.metrics = { ...(result.metrics || {}), capability: routeAdapters.capabilities };
+    }
     if (route) {
       const attemptRecords = Array.isArray(result.metrics?.attempts) ? result.metrics.attempts : [];
       const failureClass = attemptRecords.at(-1)?.failureClass || result.reason;
       if (result.ok || (admission.probe && !isRetryableFailure(failureClass))) {
         await circuitBreaker.recordSuccess(providerCircuitKey);
+      } else if (isContentValidationFailure(failureClass)) {
+        await circuitBreaker.recordNeutral(providerCircuitKey);
       } else if (isRetryableFailure(failureClass)) {
         await circuitBreaker.recordFailure(providerCircuitKey);
       }
@@ -244,6 +385,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
         target: fallback.target,
         model: fallback.model,
         profile: undefined,
+        ...(profile?.webEvidenceRequired === true ? { webEvidenceRequired: true } : {}),
         executionId: fallbackExecutionId
       }, fallbackExecutionId);
     }
@@ -277,6 +419,9 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     } catch (error) {
       return createRuntimeFailure(input.target, input.model || "default", error.message);
     }
+    let webEvidenceMode = input.webEvidenceRequired === true
+      ? "strict"
+      : (route.backend === "antigravity" && input.mode === "read_only" ? "repair" : "off");
     if (route.glm) {
       input.caller = input.mode === "edit" ? "glm_edit" : "glm_opencode";
       input.metricBackend = "glm";
@@ -314,11 +459,13 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
       return createRuntimeFailure(route.backend, route.model, `adapter unavailable: ${route.backend}`);
     }
     const profile = input.profile ? runtimeConfiguration.orchestration?.taskProfiles?.[input.profile] : null;
+    if (profile?.webEvidenceRequired === true && webEvidenceMode === "repair") webEvidenceMode = "strict";
     if (input.target === "profile" && (!profile || profile.mode !== input.mode)) {
       return createRuntimeFailure(route.backend, route.model, "task profile mode does not match request");
     }
     const controlledEditPilot = ["deepseek_edit_pilot", "glm_edit_pilot", "kimi_edit_pilot", "qwen_edit_pilot"].includes(input.caller) && route.backend === "opencode" && input.mode === "edit";
     const controlledEditExecution = ["codex_edit", "controlled_edit", "deepseek_edit", "deepseek_edit_pilot", "glm_edit", "glm_edit_pilot", "kimi_edit", "kimi_edit_pilot", "qwen_edit", "qwen_edit_pilot"].includes(input.caller) && input.mode === "edit";
+    if (input.mode === "edit" && !controlledEditExecution) return createRuntimeFailure(route.backend, route.model, "edit mode requires a controlled edit caller", { reason: "mode_not_allowed" });
     const providerModeConfiguration = controlledEditPilot
       ? { ...runtimeConfiguration[route.backend], defaultMode: "edit", allowedModes: ["edit"] }
       : runtimeConfiguration[route.backend];
@@ -447,6 +594,26 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             ].join("\n")
             : request.prompt;
           let result = await adapter.execute({ ...requestValidation.data, prompt, timeoutMs: Math.min(timeoutMs, remainingMs) });
+          try {
+            result = normalizeProviderResult(result, {
+              requireCarrier: webEvidenceMode === "strict" || webEvidenceMode === "repair",
+              allowPlainRepair: webEvidenceMode === "repair",
+              rejectRestricted: webEvidenceMode !== "off",
+              webIntentHeuristics: runtimeConfiguration.orchestration?.webIntentHeuristics === true,
+              webIntentPrompt: request.prompt
+            });
+            if ((webEvidenceMode === "strict" || webEvidenceMode === "repair") && result.ok === true && Object.hasOwn(result, "result") && !Object.hasOwn(result, "webEvidence")) {
+              throw new Error("web evidence carrier is required");
+            }
+          } catch {
+            result = createRuntimeFailure(route.backend, route.model, "provider returned invalid web evidence", {
+              durationMs: Date.now() - startedAt,
+              retries: attemptNumber - 1,
+              adapterAttempts: attemptNumber,
+              reason: "web_evidence_invalid",
+              metrics: { diagnostics: { failureStage: "result_parse", providerCode: null, settingsLockWaitMs: null, providerExecutionMs: null, stdoutBytes: null, stderrBytes: null } }
+            });
+          }
           const resultValidation = validateSubagentResult(result);
           if (!resultValidation.success) {
             result = createRuntimeFailure(route.backend, route.model, "adapter returned an invalid result", {
@@ -508,10 +675,11 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             totalCostUsd: costKnown ? attemptCostUsd : null
           };
           attemptRecords.push(attemptRecord);
+          const knownAttemptCosts = attemptRecords.length > 0 && attemptRecords.every((attempt) => Number.isFinite(attempt.totalCostUsd));
           lastResult = withRuntimeMetrics(result, attemptNumber - 1, {
             queueWaitMs: grant.queueWaitMs,
             cacheHit: false,
-            totalCostUsd,
+            totalCostUsd: knownAttemptCosts ? totalCostUsd : null,
             adapterAttempts: attemptNumber,
             attempts: attemptRecords
           });
@@ -584,7 +752,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             adapterAttempts: attemptNumber,
             timedOut: failureClass === "timeout",
             reason: retryDecision.reason === "mutation_state_unknown" ? "mutation_state_unknown" : failureClass,
-            metrics: { totalCostUsd, attempts: attemptRecords }
+            metrics: { totalCostUsd: attemptRecords.every((attempt) => Number.isFinite(attempt.totalCostUsd)) ? totalCostUsd : null, attempts: attemptRecords }
           });
           if (!retryDecision.retryable) return lastResult;
           await wait(retryDecision.delayMs || 0);
@@ -623,7 +791,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               allowedModes: resolveAllowedModes(agentConfiguration, adapter.capabilities)
             },
             configuredModels: configuredModels(runtimeConfiguration, adapter.id),
-            health: await adapter.healthCheck(probeModels.length > 0 ? { recoverStaleSettings: false } : undefined)
+            health: normalizeHealthResult(await adapter.healthCheck(probeModels.length > 0 ? { recoverStaleSettings: false } : undefined))
           }];
         } catch (error) {
           return [adapter.id, {
@@ -634,7 +802,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               allowedModes: resolveAllowedModes(runtimeConfiguration[adapter.id], adapter.capabilities)
             },
             configuredModels: configuredModels(runtimeConfiguration, adapter.id),
-            health: { installed: false, version: null, authValid: null, executable: runtimeConfiguration[adapter.id]?.executable || adapter.id, error: error.message }
+            health: normalizeHealthResult({ installed: false, version: null, authValid: null, executable: "unavailable", error: "unavailable" })
           }];
         }
       }));
@@ -644,13 +812,31 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
         if (entry && typeof probeAdapter?.probeCapabilities === "function") {
           const capabilityProbes = {};
           for (const model of probeModels) {
-            capabilityProbes[model] = await probeAdapter.probeCapabilities({ model, capabilities: probeCapabilities });
+            const probe = normalizeCapabilityProbe(await probeAdapter.probeCapabilities({ model, capabilities: probeCapabilities }));
+            capabilityProbes[model] = probe;
+            try {
+              await appendRedactedRunMetric(runtimeConfiguration, {
+                recordType: "live_observation",
+                recordedAt: new Date().toISOString(),
+                backend: "antigravity",
+                model,
+                capabilities: {
+                  modelAccess: probe.modelAccess,
+                  toolFreeResponse: probe.toolFreeResponse,
+                  workspaceRead: probe.workspaceRead,
+                  webRead: probe.webRead
+                },
+                failureClass: probe.failureClass,
+                checkedAt: probe.checkedAt
+              });
+            } catch {
+            }
           }
           entry[1] = { ...entry[1], health: { ...entry[1].health, capabilityProbes } };
         }
       }
-      const circuitIds = selectedAdapters.flatMap((adapter) => adapter.id === "antigravity"
-        ? ["antigravity", ...configuredModels(runtimeConfiguration, adapter.id).map(({ requestedModel }) => `antigravity:${requestedModel}`)]
+      const circuitIds = selectedAdapters.flatMap((adapter) => ["antigravity", "opencode"].includes(adapter.id)
+        ? [adapter.id, ...new Set(configuredModels(runtimeConfiguration, adapter.id).map(({ resolvedModel }) => `${adapter.id}:${resolvedModel}`))]
         : [adapter.id]);
       const circuits = await circuitBreaker.snapshot(circuitIds);
       const costBudget = await getCostBudgetSnapshot(runtimeConfiguration);
@@ -790,7 +976,8 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
         promote: true,
         attempts: [createControlledEditAttempt(provider, input.model)],
         prompt: buildCatalogEditPrompt(input, provider),
-        providerLabel: provider === "kimi" ? "Kimi" : "Qwen"
+        providerLabel: provider === "kimi" ? "Kimi" : "Qwen",
+        riskSignals: input.riskSignals
       });
     }
     return run({
@@ -820,6 +1007,10 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     return new Set(["rate_limited", "network", "timeout", "process_exit", "process_error", "provider_temporary_error", "provider_circuit_open", "mutation_state_unknown", "auth_invalid", "model_unavailable", "model_access_denied", "executable_missing"]).has(failureClass);
   }
 
+  function buildProfileEditPrompt(input) {
+    return [input.objective, `Düzenlenebilecek dosyalar: ${input.files.join(", ")}`, `Salt-okunur bağlam dosyaları: ${(input.contextFiles || []).join(", ") || "yok"}`, "Kabul kriterleri:", ...input.acceptanceCriteria.map((criterion, index) => `${index + 1}. ${criterion}`), "Yalnız seçilmiş dosyaları düzenle. Seçilmiş dosyaları ve bağlam dosyalarını incelemek için salt-okunur dosya komutları kullanabilirsin. Test, build, script, paket yöneticisi veya dosya mutasyonu yapan shell komutu çalıştırma; doğrulamayı ana orkestratör yapacak. Dış dizin, secret veya başka subagent kullanma."].join("\n");
+  }
+
   async function runProfileEdit(input, trustedWorkspace, abortSignal) {
     const profile = runtimeConfiguration.orchestration?.taskProfiles?.[input.profile];
     if (!profile || profile.mode !== "edit") throw new Error("edit task profile is required");
@@ -827,47 +1018,125 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     return executeControlledEdit(input, trustedWorkspace, abortSignal, {
       promote: true,
       attempts: targets.map((target) => createControlledEditAttempt(target.target, target.model)),
-      prompt: [input.objective, `Düzenlenebilecek dosyalar: ${input.files.join(", ")}`, `Salt-okunur bağlam dosyaları: ${input.contextFiles.join(", ") || "yok"}`, "Kabul kriterleri:", ...input.acceptanceCriteria.map((criterion, index) => `${index + 1}. ${criterion}`), "Yalnız seçilmiş dosyaları düzenle. Seçilmiş dosyaları ve bağlam dosyalarını incelemek için salt-okunur dosya komutları kullanabilirsin. Test, build, script, paket yöneticisi veya dosya mutasyonu yapan shell komutu çalıştırma; doğrulamayı ana orkestratör yapacak. Dış dizin, secret veya başka subagent kullanma."].join("\n"),
-      providerLabel: input.profile
+      prompt: buildProfileEditPrompt(input),
+      providerLabel: input.profile,
+      riskSignals: input.riskSignals
+    });
+  }
+
+  async function runProfileEditPilot(input, trustedWorkspace, abortSignal) {
+    const profile = runtimeConfiguration.orchestration?.taskProfiles?.[input.profile];
+    if (!profile || profile.mode !== "edit") throw new Error("edit task profile is required");
+    if (profile.target !== "codex") throw new Error("edit pilot profile target must be codex");
+    if (input.model !== undefined && profile.model !== input.model) throw new Error("edit pilot model does not match profile");
+    return executeControlledEdit(input, trustedWorkspace, abortSignal, {
+      promote: false,
+      attempts: [createControlledEditAttempt(profile.target, profile.model)],
+      prompt: buildProfileEditPrompt(input),
+      providerLabel: input.profile,
+      riskSignals: input.riskSignals
     });
   }
 
   async function executeControlledEdit(input, trustedWorkspace, abortSignal, options) {
     const { promote, attempts, prompt, providerLabel } = options;
     const sourceWorkspace = canonicalizeTrustedWorkspace(trustedWorkspace);
-    const sourceLockId = promote ? createExecutionId() : null;
+    const executionId = createExecutionId();
+    const executionIdHash = crypto.createHash("sha256").update(executionId).digest("hex");
+    const sourceLockId = promote ? executionId : null;
     if (sourceLockId && !await coordinator.acquire(sourceWorkspace, "edit", sourceLockId)) return { status: "failed", backend: "bridge", model: attempts[0].model, requestedModel: input.model, resolvedModel: attempts[0].model, accessMode: "edit", summary: `${providerLabel} edit source workspace lock unavailable`, failureClass: "workspace_lock_unavailable", filesChanged: [], diff: "", applied: false, fallbacks: 0, cleanupCompleted: true };
     let finalPayload;
     let allCleanupCompleted = true;
     let fallbackCount = 0;
     let completed = false;
     let terminalFailure = false;
+    let observedCostUsd = 0;
+    let costObserved = true;
     try {
       for (let index = 0; index < attempts.length; index += 1) {
         const attempt = attempts[index];
         let disposable;
         try {
-          disposable = provisionDisposableWorkspace(runtimeConfiguration, sourceWorkspace, [...input.files, ...input.contextFiles], input.files, attempt.editAgentName);
+          const contextFiles = input.contextFiles || [];
+          disposable = provisionDisposableWorkspace(runtimeConfiguration, sourceWorkspace, [...input.files, ...contextFiles], input.files, attempt.editAgentName);
           const runtimeResult = await run({ target: attempt.target, prompt, model: attempt.model, mode: "edit", trustedWorkspace: disposable.workspace, caller: attempt.caller, delegationDepth: 0, metricBackend: attempt.metricBackend, timeoutMs: input.timeout_seconds ? input.timeout_seconds * 1000 : attempt.timeoutMs || runtimeConfiguration[attempt.target]?.timeoutMs || runtimeConfiguration.opencode?.timeoutMs, maxSchemaRepairAttempts: 0, abortSignal });
+          const attemptCostUsd = runtimeResult.metrics?.totalCostUsd;
+          if (Number.isFinite(attemptCostUsd)) observedCostUsd += attemptCostUsd;
+          else if (runtimeResult.metrics?.cacheHit !== true) costObserved = false;
           let changes = disposable.collectChanges();
+          const changeSetHash = calculateChangeSetHash(changes.changes);
+          const approvalClass = classifyChangeSet(changes.changes, options.riskSignals);
+          const approvalRequired = approvalClass !== "low_impact";
           const summary = runtimeResult.ok ? runtimeResult.result || `${attempt.providerLabel} edit completed` : runtimeResult.error || `${attempt.providerLabel} edit failed`;
-          const secretDetected = containsSecretLikeValue(summary) || containsSecretLikeValue(changes.diff);
+          const secretDetected = containsSecretLikeValue(summary) || containsSecretLikeAddedValue(changes.diff);
           const noChanges = runtimeResult.ok && changes.filesChanged.length === 0;
           if (secretDetected) {
             finalPayload = { status: "failed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary: `${attempt.providerLabel} edit output rejected by secret policy`, failureClass: "secret_detected", filesChanged: [], diff: "", applied: false, fallbacks: fallbackCount };
             terminalFailure = true;
           } else if (runtimeResult.ok && !noChanges) {
-            if (promote) changes = disposable.promoteChanges();
-            finalPayload = { status: "completed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary, failureClass: null, filesChanged: changes.filesChanged, diff: changes.diff, applied: promote && changes.applied === true, fallbacks: fallbackCount };
-            completed = true;
+            if (promote && approvalRequired) {
+              const orchestratorApprovable = isOrchestratorApprovableClass(approvalClass);
+              let approvalRequestId;
+              let approvalExpiresAt;
+              let classificationStable = true;
+              if (orchestratorApprovable) {
+                const prepared = disposable.capturePreparedChanges();
+                classificationStable = calculateChangeSetHash(prepared.changes) === changeSetHash && classifyChangeSet(prepared.changes, options.riskSignals) === approvalClass;
+                if (classificationStable) {
+                  const sourceStateEntries = captureSourceState(sourceWorkspace, prepared.filesChanged);
+                  const stored = preparedEditRegistry.store({
+                    executionIdHash,
+                    changeSetHash,
+                    approvalClass,
+                    workspaceHash: fingerprintTrustedWorkspace(sourceWorkspace),
+                    sourceStateHash: hashSourceState(sourceStateEntries),
+                    changedPaths: prepared.filesChanged,
+                    sourceStateEntries,
+                    changes: prepared.changes,
+                    filesChanged: prepared.filesChanged,
+                    diff: prepared.diff,
+                    backend: runtimeResult.backend,
+                    model: runtimeResult.model,
+                    requestedModel: input.model,
+                    resolvedModel: runtimeResult.resolvedModel,
+                    providerLabel: attempt.providerLabel
+                  });
+                  approvalRequestId = stored.approvalRequestId;
+                  approvalExpiresAt = stored.expiresAt;
+                }
+              }
+              if (!classificationStable) {
+                finalPayload = { status: "failed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary: `${attempt.providerLabel} edit workspace changed during classification`, failureClass: "pilot_failed", filesChanged: [], diff: "", applied: false, fallbacks: fallbackCount, executionIdHash };
+              } else {
+                finalPayload = { status: "failed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary: orchestratorApprovable ? `${attempt.providerLabel} edit requires explicit approval` : `${attempt.providerLabel} edit requires operator approval outside the orchestrator channel`, failureClass: "approval_required", filesChanged: changes.filesChanged, diff: changes.diff, applied: false, fallbacks: fallbackCount, executionIdHash, changeSetHash, approvalClass, approvalRequired: true, ...(approvalRequestId ? { approvalRequestId, approvalExpiresAt } : {}) };
+              }
+              terminalFailure = true;
+            } else if (promote) {
+              const prepared = disposable.capturePreparedChanges();
+              const stable = calculateChangeSetHash(prepared.changes) === changeSetHash && classifyChangeSet(prepared.changes, options.riskSignals) === approvalClass;
+              if (!stable) {
+                finalPayload = { status: "failed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary: `${attempt.providerLabel} edit workspace changed during classification`, failureClass: "pilot_failed", filesChanged: [], diff: "", applied: false, fallbacks: fallbackCount, executionIdHash };
+                terminalFailure = true;
+              } else {
+                const outcome = applyPreparedChanges(sourceWorkspace, prepared.changes, prepared.expectedStates);
+                if (outcome.cleanupFailed === true) allCleanupCompleted = false;
+                finalPayload = { status: "completed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary, failureClass: null, filesChanged: prepared.filesChanged, diff: prepared.diff, applied: true, fallbacks: fallbackCount, executionIdHash, changeSetHash, approvalClass, approvalRequired: false, preview: false };
+                completed = true;
+              }
+            } else {
+              finalPayload = { status: "completed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary, failureClass: null, filesChanged: changes.filesChanged, diff: changes.diff, applied: false, fallbacks: fallbackCount, executionIdHash, changeSetHash, approvalClass, approvalRequired, preview: true };
+              completed = true;
+            }
           } else {
             const failureClass = noChanges ? "no_changes" : runtimeResult.reason || "execution_failed";
-            finalPayload = { status: "failed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary: noChanges ? `${attempt.providerLabel} edit completed without file changes` : summary, failureClass, filesChanged: changes.filesChanged, diff: changes.diff, applied: false, fallbacks: fallbackCount };
+            finalPayload = { status: "failed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary: noChanges ? `${attempt.providerLabel} edit completed without file changes` : summary, failureClass, filesChanged: changes.filesChanged, diff: changes.diff, applied: false, fallbacks: fallbackCount, executionIdHash, changeSetHash, approvalClass, approvalRequired: false };
             if (!controlledFallbackAllowed(failureClass) || index === attempts.length - 1) terminalFailure = true;
             else fallbackCount += 1;
           }
         } catch (error) {
-          finalPayload = { status: "failed", backend: attempt.target, model: attempt.model, requestedModel: input.model, resolvedModel: attempt.model, accessMode: "edit", summary: error.message, failureClass: "pilot_failed", filesChanged: [], diff: "", applied: false, fallbacks: fallbackCount };
+          if (error.cleanupIncomplete === true) allCleanupCompleted = false;
+          costObserved = false;
+          finalPayload = { status: "failed", backend: attempt.target, model: attempt.model, requestedModel: input.model, resolvedModel: attempt.model, accessMode: "edit", summary: error.message, failureClass: error.failureClass || "pilot_failed", filesChanged: [], diff: "", applied: false, fallbacks: fallbackCount, executionIdHash };
           break;
         } finally {
           try {
@@ -881,9 +1150,16 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     } finally {
       if (sourceLockId) coordinator.release(sourceLockId);
     }
-    const completedPayload = !allCleanupCompleted
-      ? { ...finalPayload, status: "failed", summary: `${providerLabel} edit cleanup failed`, failureClass: "cleanup_failed", cleanupCompleted: false }
-      : { ...finalPayload, cleanupCompleted: true };
+    let completedPayload;
+    if (allCleanupCompleted) {
+      completedPayload = { ...finalPayload, cleanupCompleted: true };
+    } else if (finalPayload.status === "completed" && finalPayload.preview !== true) {
+      completedPayload = { ...finalPayload, status: "failed", failureClass: "cleanup_failed", summary: `${finalPayload.summary}; ${providerLabel} edit cleanup failed`, cleanupCompleted: false };
+    } else {
+      const primaryFailureClass = finalPayload.status === "failed" && finalPayload.failureClass === null ? "cleanup_failed" : finalPayload.failureClass;
+      completedPayload = { ...finalPayload, failureClass: primaryFailureClass, summary: `${finalPayload.summary}; ${providerLabel} edit cleanup failed`, cleanupCompleted: false };
+    }
+    if (costObserved) completedPayload = { ...completedPayload, metrics: { totalCostUsd: Number(observedCostUsd.toFixed(6)) } };
     const validation = validateControlledEditResult(completedPayload);
     if (validation.success) return validation.data;
     return {
@@ -905,7 +1181,217 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
 
   async function executeControlledOpenCodeEdit(input, trustedWorkspace, abortSignal, options) {
     const { promote, resolvedModel, caller, editAgentName, providerLabel, timeoutMs, metricBackend } = options;
-    return executeControlledEdit(input, trustedWorkspace, abortSignal, { promote, attempts: [{ target: "opencode", model: resolvedModel, caller, editAgentName, providerLabel, metricBackend, timeoutMs }], prompt: providerLabel === "GLM" ? buildGlmEditPrompt(input) : buildDeepSeekEditPrompt(input), providerLabel });
+    return executeControlledEdit(input, trustedWorkspace, abortSignal, { promote, attempts: [{ target: "opencode", model: resolvedModel, caller, editAgentName, providerLabel, metricBackend, timeoutMs }], prompt: providerLabel === "GLM" ? buildGlmEditPrompt(input) : buildDeepSeekEditPrompt(input), providerLabel, riskSignals: input.riskSignals });
+  }
+
+  function approvalInvalidResult(summary, request = {}) {
+    return validateControlledEditResult({
+      status: "failed",
+      backend: request.backend || "bridge",
+      model: request.model || "unknown",
+      ...(request.requestedModel ? { requestedModel: request.requestedModel } : {}),
+      ...(request.resolvedModel !== undefined ? { resolvedModel: request.resolvedModel } : {}),
+      accessMode: "edit",
+      summary,
+      failureClass: "approval_invalid",
+      filesChanged: [],
+      diff: "",
+      applied: false,
+      fallbacks: 0,
+      cleanupCompleted: true,
+      approvalRequired: false
+    }).data;
+  }
+
+  async function approvePreparedEdit(input, trustedWorkspace) {
+    const sourceWorkspace = canonicalizeTrustedWorkspace(trustedWorkspace);
+    const request = preparedEditRegistry.peek(input.approvalRequestId);
+    if (!request) return approvalInvalidResult("prepared edit approval request is unknown or expired");
+    if (!isOrchestratorApprovableClass(request.approvalClass)) return approvalInvalidResult("prepared edit approval class is not available in the orchestrator channel", request);
+    const lockId = createExecutionId();
+    if (!await coordinator.acquire(sourceWorkspace, "edit", lockId)) return validateControlledEditResult({
+      status: "failed",
+      backend: request.backend,
+      model: request.model,
+      requestedModel: request.requestedModel,
+      resolvedModel: request.resolvedModel,
+      accessMode: "edit",
+      summary: "prepared edit approval source workspace lock unavailable",
+      failureClass: "workspace_lock_unavailable",
+      filesChanged: [],
+      diff: "",
+      applied: false,
+      fallbacks: 0,
+      cleanupCompleted: true,
+      approvalRequired: false
+    }).data;
+    try {
+      let workspaceHash;
+      try {
+        workspaceHash = fingerprintTrustedWorkspace(sourceWorkspace);
+      } catch {
+        return approvalInvalidResult("prepared edit approval source binding could not be verified", request);
+      }
+      if (workspaceHash !== request.workspaceHash) return approvalInvalidResult("prepared edit approval source binding does not match", request);
+      let sourceStateEntries;
+      try {
+        sourceStateEntries = captureSourceState(sourceWorkspace, request.changedPaths);
+      } catch {
+        preparedEditRegistry.invalidate(input.approvalRequestId);
+        return approvalInvalidResult("prepared edit approval source binding could not be verified", request);
+      }
+      const recoveryScan = detectRecoveryArtifacts(sourceWorkspace, request.changedPaths);
+      if (recoveryScan.affectedPaths.length > 0 || recoveryScan.scanFailed) {
+        return validateControlledEditResult({
+          status: "failed",
+          backend: request.backend,
+          model: request.model,
+          requestedModel: request.requestedModel,
+          resolvedModel: request.resolvedModel,
+          accessMode: "edit",
+          summary: recoveryScan.scanFailed ? "prepared edit approval recovery scan could not complete" : "prepared edit approval requires manual recovery of interrupted promotion artifacts",
+          failureClass: "recovery_required",
+          filesChanged: [],
+          diff: "",
+          applied: false,
+          fallbacks: 0,
+          cleanupCompleted: true,
+          approvalRequired: false
+        }).data;
+      }
+      const consumed = preparedEditRegistry.consume(input.approvalRequestId, {
+        executionIdHash: request.executionIdHash,
+        changeSetHash: request.changeSetHash,
+        approvalClass: request.approvalClass,
+        workspaceHash,
+        sourceStateHash: hashSourceState(sourceStateEntries)
+      });
+      if (!consumed) {
+        preparedEditRegistry.invalidate(input.approvalRequestId);
+        return approvalInvalidResult("prepared edit approval source binding does not match", request);
+      }
+      let releasedForRecovery = false;
+      try {
+        if (calculateChangeSetHash(consumed.changes) !== consumed.changeSetHash) return approvalInvalidResult("prepared edit approval record integrity check failed", request);
+        const outcome = applyPreparedChanges(sourceWorkspace, consumed.changes, consumed.sourceStateEntries);
+        if (outcome.cleanupFailed === true) {
+          return validateControlledEditResult({
+            status: "failed",
+            backend: consumed.backend,
+            model: consumed.model,
+            requestedModel: consumed.requestedModel,
+            resolvedModel: consumed.resolvedModel,
+            accessMode: "edit",
+            summary: `${consumed.providerLabel} approved edit applied but cleanup failed`,
+            failureClass: "cleanup_failed",
+            filesChanged: consumed.filesChanged,
+            diff: consumed.diff,
+            applied: true,
+            fallbacks: 0,
+            cleanupCompleted: false,
+            executionIdHash: consumed.executionIdHash,
+            changeSetHash: consumed.changeSetHash,
+            approvalClass: consumed.approvalClass,
+            approvalRequired: false
+          }).data;
+        }
+        return validateControlledEditResult({
+          status: "completed",
+          backend: consumed.backend,
+          model: consumed.model,
+          requestedModel: consumed.requestedModel,
+          resolvedModel: consumed.resolvedModel,
+          accessMode: "edit",
+          summary: `${consumed.providerLabel} approved edit applied`,
+          failureClass: null,
+          filesChanged: consumed.filesChanged,
+          diff: consumed.diff,
+          applied: true,
+          fallbacks: 0,
+          cleanupCompleted: true,
+          executionIdHash: consumed.executionIdHash,
+          changeSetHash: consumed.changeSetHash,
+          approvalClass: consumed.approvalClass,
+          approvalRequired: false,
+          preview: false
+        }).data;
+      } catch (error) {
+        if (error.failureClass === "recovery_required") {
+          preparedEditRegistry.release(input.approvalRequestId);
+          releasedForRecovery = true;
+        }
+        return validateControlledEditResult({
+          status: "failed",
+          backend: consumed.backend,
+          model: consumed.model,
+          requestedModel: consumed.requestedModel,
+          resolvedModel: consumed.resolvedModel,
+          accessMode: "edit",
+          summary: error.message,
+          failureClass: error.failureClass || (error.sourceStateChanged === true ? "approval_invalid" : "approval_apply_failed"),
+          filesChanged: [],
+          diff: "",
+          applied: false,
+          fallbacks: 0,
+          cleanupCompleted: error.cleanupIncomplete !== true,
+          executionIdHash: consumed.executionIdHash,
+          changeSetHash: consumed.changeSetHash,
+          approvalClass: consumed.approvalClass,
+          approvalRequired: false
+        }).data;
+      } finally {
+        if (!releasedForRecovery) preparedEditRegistry.settle(input.approvalRequestId);
+      }
+    } finally {
+      coordinator.release(lockId);
+    }
+  }
+
+  async function probeCapability({ target, model, trustedWorkspace }) {
+    const probeTarget = typeof target === "string" && target.length > 0 ? target : "";
+    if (!probeTarget) throw new Error("capability probe target is required");
+    const result = await run({
+      target: probeTarget,
+      prompt: "Return only the exact token BRIDGE-PROBE-OK.",
+      ...(model ? { model } : {}),
+      mode: "read_only",
+      trustedWorkspace,
+      caller: "capability_probe",
+      delegationDepth: 0,
+      webEvidenceRequired: false
+    });
+    const normalizedProbeOutput = typeof result.result === "string" ? result.result.trim().normalize("NFC") : "";
+    const tokenObserved = result.ok && normalizedProbeOutput === "BRIDGE-PROBE-OK";
+    const probe = {
+      provider: probeTarget,
+      model: result.resolvedModel || result.model || model || null,
+      capabilities: {
+        modelAccess: result.ok ? "available" : "unavailable",
+        toolFreeResponse: result.ok ? (tokenObserved ? "available" : "unavailable") : "not_probed",
+        workspaceRead: "not_probed",
+        webRead: "not_probed"
+      },
+      failureClass: result.ok ? null : capabilityFailureClass(classifyReturnedFailure(result)),
+      checkedAt: new Date().toISOString()
+    };
+    let backend = probeTarget;
+    try {
+      backend = resolveRuntimeRoute({ target: probeTarget, model, mode: "read_only", trustedWorkspace, caller: "capability_probe", delegationDepth: 0 }, runtimeConfiguration).backend;
+    } catch {
+    }
+    try {
+      await appendRedactedRunMetric(runtimeConfiguration, {
+        recordType: "live_observation",
+        recordedAt: probe.checkedAt,
+        backend,
+        model: probe.model,
+        capabilities: probe.capabilities,
+        failureClass: probe.failureClass,
+        checkedAt: probe.checkedAt
+      });
+    } catch {
+    }
+    return probe;
   }
 
   return {
@@ -918,6 +1404,9 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     runGlmEditPilot,
     runCatalogProvider,
     runProfileEdit,
+    runProfileEditPilot,
+    approvePreparedEdit,
+    probeCapability,
     checkLegacyDeepSeek: () => checkLegacy(runtimeConfiguration),
     checkGlm: () => checkGlm(runtimeConfiguration),
     checkCatalogProvider: (provider) => checkCatalogProvider(runtimeConfiguration, provider),

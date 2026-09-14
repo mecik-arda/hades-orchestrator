@@ -113,9 +113,10 @@ test("WP4-ALLOWLIST-01: writer yalnız explicit execution allowlist alanlarını
     assert.equal(serialized.includes(sentinel), false);
   }
   assert.deepEqual(Object.keys(record).sort(), [
-    "attempts", "backend", "cacheHit", "executionIdHash", "failureClass", "failureStage", "mode", "modelHash",
-    "outcomeStatus", "profile", "providerCode", "queueWaitMs", "recordedAt", "retries", "retryStopReason",
-    "schemaVersion", "usage", "workspaceHash"
+    "accessMode", "artifactHashes", "attempts", "backend", "cacheHit", "capability", "executionIdHash",
+    "failureClass", "failureStage", "manifestVersion", "mode", "modelHash", "outcomeStatus", "profile",
+    "providerCode", "queueWaitMs", "recordedAt", "requestedModelHash", "retries", "retryStopReason",
+    "schemaVersion", "usage", "webEvidenceRepair", "workspaceHash"
   ]);
   assert.deepEqual(Object.keys(record.attempts[0]).sort(), [
     "durationMs", "exitCode", "failureClass", "failureStage", "number", "providerCode", "providerExecutionMs",

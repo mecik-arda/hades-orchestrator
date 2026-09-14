@@ -22,7 +22,8 @@ function successResult(backend, model, result = "ok") {
     timedOut: false,
     exitCode: 0,
     durationMs: 1,
-    metrics: { retries: 0, totalCostUsd: 0 }
+    metrics: { retries: 0, totalCostUsd: 0 },
+    ...(backend === "antigravity" ? { webEvidence: null } : {})
   };
 }
 
@@ -64,7 +65,7 @@ function createConfiguration(packageRoot, stateRoot) {
     antigravity: { timeoutMs: 30000, maxRetries: 1 },
     codex: { timeoutMs: 30000, maxRetries: 1 },
     claude_code: { timeoutMs: 30000, maxRetries: 1 },
-    opencode: { timeoutMs: 30000, maxRetries: 1 },
+    opencode: { timeoutMs: 30000, maxRetries: 1, allowedModels: ["deepseek/deepseek-v4-pro"] },
     deepseek: {
       openCodeModel: "deepseek/deepseek-v4-pro",
       openCodeFlashModel: "deepseek/deepseek-v4-flash",
@@ -186,12 +187,38 @@ test("P0-ANTIGRAVITY-WORKSPACE: harici workspace düzenleme modunda ve izinli k�
 
   await assert.rejects(
     () => handlers.runAntigravity({ prompt: "inspect", model: "gemini_pro", mode: "edit", workspace: root }),
-    /only available in read_only mode/
+    /expected "read_only"/
   );
   await assert.rejects(
     () => handlers.runAntigravity({ prompt: "inspect", model: "gemini_pro", mode: "read_only", workspace: outside }),
     /izinli köklerin dışında/
   );
+});
+
+test("P0-ANTIGRAVITY-EVIDENCE: genel Antigravity aracı yalnız salt okunur çağrıyı kabul eder", async () => {
+  const requests = [];
+  const handlers = createMcpToolHandlers({
+    runtime: {
+      async run(request) {
+        requests.push(request);
+        return successResult("antigravity", "gemini_flash_3_8");
+      }
+    },
+    trustedWorkspace: "C:\\trusted",
+    caller: "openCode"
+  });
+
+  await handlers.runAntigravity({ prompt: "inspect", model: "gemini_flash_3_8", mode: "read_only" });
+  await assert.rejects(() => handlers.runAntigravity({ prompt: "change", model: "gemini_flash_3_8", mode: "edit" }), /expected "read_only"/);
+
+  assert.equal(requests[0].webEvidenceRequired, true);
+  assert.equal(requests.length, 1);
+});
+
+test("P0-GENERIC-EDIT: genel provider araçları edit modunu runtime'a iletmez", async () => {
+  const handlers = createMcpToolHandlers({ runtime: { async run() { throw new Error("unexpected execution"); } }, trustedWorkspace: "C:\\trusted" });
+  await assert.rejects(() => handlers.runCodex({ prompt: "change", mode: "edit" }), /expected "read_only"/);
+  await assert.rejects(() => handlers.runOpenCode({ prompt: "change", model: "deepseek/deepseek-v4-pro", mode: "edit" }), /expected "read_only"/);
 });
 
 test("P0-ANTIGRAVITY-WORKSPACE: Gemini 3.8 Flash vault workspace'ini provider öncesi reddeder", async (t) => {
@@ -292,7 +319,7 @@ test("P0-RETRY: read-only transient failure retries and edit failure does not", 
     editAttempts += 1;
     return failureResult("codex", request.model, "timed out", "timeout");
   };
-  const editResult = await runtime.run({ target: "codex", prompt: "edit", mode: "edit", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  const editResult = await runtime.run({ target: "codex", prompt: "edit", mode: "edit", trustedWorkspace: root, caller: "codex_edit", delegationDepth: 0 });
   assert.equal(editResult.ok, false);
   assert.equal(editAttempts, 1);
   assert.equal(editResult.reason, "mutation_state_unknown");
@@ -332,7 +359,7 @@ test("P0-THROWN-EDIT: thrown timeout mutation state unknown olarak döner", asyn
     throw new Error("execution timed out");
   });
   const runtime = createBridgeRuntime({ configuration: createConfiguration(root, root), adapters: { codex } });
-  const result = await runtime.run({ target: "codex", prompt: "edit", mode: "edit", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  const result = await runtime.run({ target: "codex", prompt: "edit", mode: "edit", trustedWorkspace: root, caller: "codex_edit", delegationDepth: 0 });
   assert.equal(result.ok, false);
   assert.equal(result.reason, "mutation_state_unknown");
 });
@@ -368,6 +395,7 @@ test("P0-UNKNOWN-COST: bilinmeyen maliyet sınırlı retry rezervini kullanır",
   assert.equal(result.ok, false);
   assert.equal(result.reason, "network");
   assert.equal(attempts, 2);
+  assert.equal(result.metrics.totalCostUsd, null);
 });
 
 test("P0-CANCEL-BACKOFF: cancellation prevents a post-backoff execution", async (t) => {
@@ -430,7 +458,7 @@ test("P0-EDIT-EXIT: provider non-zero exit maps to unknown mutation state", asyn
     return failureResult("codex", request.model, "process failed", "non_zero_exit");
   });
   const runtime = createBridgeRuntime({ configuration: createConfiguration(root, root), adapters: { codex } });
-  const result = await runtime.run({ target: "codex", prompt: "edit", mode: "edit", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  const result = await runtime.run({ target: "codex", prompt: "edit", mode: "edit", trustedWorkspace: root, caller: "codex_edit", delegationDepth: 0 });
   assert.equal(result.ok, false);
   assert.equal(result.reason, "mutation_state_unknown");
   assert.equal(result.retryable, false);
@@ -523,7 +551,7 @@ test("P0-LOCK: same canonical workspace blocks conflicting work and different wo
   });
   const runtime = createBridgeRuntime({ configuration: createConfiguration(root, root), adapters: { codex } });
 
-  const holding = runtime.run({ target: "codex", prompt: "hold", mode: "edit", trustedWorkspace: `${repoA}${path.sep}`, caller: "test", delegationDepth: 0 });
+  const holding = runtime.run({ target: "codex", prompt: "hold", mode: "edit", trustedWorkspace: `${repoA}${path.sep}`, caller: "codex_edit", delegationDepth: 0 });
   await new Promise((resolve) => setTimeout(resolve, 20));
   const queued = runtime.run({ target: "codex", prompt: "same", mode: "read_only", trustedWorkspace: repoA, caller: "test", delegationDepth: 0 });
   const parallel = await runtime.run({ target: "codex", prompt: "other", mode: "read_only", trustedWorkspace: repoB, caller: "test", delegationDepth: 0 });
@@ -661,7 +689,8 @@ test("P0-HEALTH: runtime returns canonical adapter health", async (t) => {
   assert.deepEqual(Object.keys(health.adapters).sort(), ["antigravity", "claude_code", "codex", "opencode"]);
   assert.ok(Object.values(health.adapters).every((entry) => entry.health.installed));
   assert.ok(Object.hasOwn(health.circuits, "antigravity"));
-  assert.ok(Object.hasOwn(health.circuits, "antigravity:gemini_flash_3_8"));
+  assert.ok(Object.hasOwn(health.circuits, "antigravity:gemini-3.8-flash-high"));
+  assert.ok(Object.hasOwn(health.circuits, "opencode:deepseek/deepseek-v4-pro"));
   const healthMetricsPath = path.join(root, "logs", "metrics", "bridge-health-runs.jsonl");
   assert.equal(fs.readFileSync(healthMetricsPath, "utf8").trim().split("\n").length, 1);
 });
@@ -717,6 +746,23 @@ test("P0-CIRCUIT: Antigravity circuit modeli diğer Gemini modellerinden ayırı
   const available = await runtime.run({ target: "gemini_flash_3_8", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
   assert.equal(blocked.reason, "provider_circuit_open");
   assert.equal(available.ok, true);
+});
+
+test("P0-CIRCUIT: aynı Antigravity resolved modeli aliaslar arasında paylaşılır", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-p0-antigravity-alias-circuit-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = createConfiguration(root, root);
+  configuration.orchestration = { circuitBreaker: { failureThreshold: 1, windowMs: 60000, openMs: 30000 } };
+  let attempts = 0;
+  const antigravity = createFakeAdapter("antigravity", async (request) => {
+    attempts += 1;
+    return failureResult("antigravity", request.model, "network error", "network");
+  });
+  const runtime = createBridgeRuntime({ configuration, adapters: { antigravity }, sleep: async () => {} });
+  await runtime.run({ target: "gemini_flash", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  const blockedAlias = await runtime.run({ target: "gemini_flash_3_8", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  assert.equal(blockedAlias.reason, "provider_circuit_open");
+  assert.equal(attempts, 2);
 });
 
 test("P0-FALLBACK: yalnız read-only task profile policy hedeflerine geçer", async (t) => {

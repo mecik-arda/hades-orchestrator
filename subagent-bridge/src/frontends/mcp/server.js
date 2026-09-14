@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { z } from "zod";
 import { ANTIGRAVITY_MODEL_MAP } from "../../adapters/antigravity-adapter.js";
 import { analyzePersistentMemoryWrite, checkPersistentMemory, promotePersistentMemory, readPersistentMemory, reviewPersistentMemory, searchPersistentMemory, storePersistentMemory } from "../../memory.js";
+import { capabilityProbeSchema, capabilityStatusValues } from "../../schemas/core-schemas.js";
 import { createMcpToolHandlers, publicToolSchemas, antigravityProbeSchema } from "./tools.js";
 
 const readOnlyAnnotations = {
@@ -45,14 +46,35 @@ function safe(handler) {
   };
 }
 
+function safeHealth(handler) {
+  return async (...args) => {
+    try {
+      return await handler(...args);
+    } catch {
+      return errorResponse(new Error("health check unavailable"));
+    }
+  };
+}
+
 function sanitizeHealth(health) {
+  const probes = health.probes && typeof health.probes === "object"
+    ? Object.fromEntries(["cli", "modelAccess", "toolFreeResponse", "workspaceRead", "webRead"]
+      .filter((key) => capabilityStatusValues.includes(health.probes[key]))
+      .map((key) => [key, health.probes[key]]))
+    : {};
+  const capabilityProbes = health.capabilityProbes && typeof health.capabilityProbes === "object"
+    ? Object.fromEntries(Object.entries(health.capabilityProbes)
+      .filter(([model, probe]) => /^[a-z][a-z0-9_-]{0,63}$/.test(model) && capabilityProbeSchema.safeParse(probe).success)
+      .map(([model, probe]) => [model, capabilityProbeSchema.parse(probe)]))
+    : {};
+  const versionMatch = typeof health.version === "string" ? /\b[vV]?\d+(?:\.\d+){1,3}\b/.exec(health.version) : null;
   return {
-    installed: health.installed,
-    version: health.version,
-    authValid: health.authValid,
-    probes: health.probes,
-    capabilityProbes: health.capabilityProbes,
-    error: health.error
+    installed: health.installed === true,
+    version: versionMatch ? versionMatch[0] : null,
+    authValid: typeof health.authValid === "boolean" ? health.authValid : null,
+    ...(Object.keys(probes).length > 0 ? { probes } : {}),
+    ...(Object.keys(capabilityProbes).length > 0 ? { capabilityProbes } : {}),
+    ...(health.error ? { error: "unavailable" } : {})
   };
 }
 
@@ -71,7 +93,11 @@ function sanitizeRuntimeHealth(result) {
   };
 }
 
-export function createSubagentMcpServer({ runtime, configuration, trustedWorkspace }) {
+export function isOrchestratorApprovalEnabled(environment = process.env) {
+  return Boolean(environment) && environment.SUBAGENT_BRIDGE_ORCHESTRATOR_APPROVAL === "1";
+}
+
+export function createSubagentMcpServer({ runtime, configuration, trustedWorkspace, enableOrchestratorApproval = false }) {
   const server = new McpServer({
     name: "subagent-bridge",
     version: packageVersion
@@ -269,7 +295,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
     description: "Antigravity CLI yürütücüsünü, model eşlemesini ve auth durumunu secret değerlerini göstermeden kontrol eder. probeModels ve probeCapabilities birlikte verilirse isteğe bağlı, seri ve düşük maliyetli capability probları çalıştırır.",
     inputSchema: antigravityProbeSchema,
     annotations: readOnlyAnnotations
-  }, safe(async (input) => {
+  }, safeHealth(async (input) => {
     const health = await runtime.health(["antigravity"], {
       probeModels: input.probeModels,
       probeCapabilities: input.probeCapabilities
@@ -327,7 +353,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
     description: "Runtime servislerini ve tüm provider adapter health durumlarını doğrular.",
     inputSchema: {},
     annotations: readOnlyAnnotations
-  }, safe(async () => {
+  }, safeHealth(async () => {
     const result = sanitizeRuntimeHealth(await runtime.health());
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result };
   }));
@@ -341,6 +367,22 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
     const result = runtime.workspaceLockSnapshot();
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result };
   }));
+
+  server.registerTool("check_provider_capability", {
+    title: "Sağlayıcı capability probe çalıştır",
+    description: "Seçilen sağlayıcı ve model için opt-in, düşük maliyetli, salt-okunur capability probu çalıştırır; sonucu redacted live_observation metriği olarak kaydeder.",
+    inputSchema: publicToolSchemas.checkProviderCapability.shape,
+    annotations: externalReadOnlyExecutionAnnotations
+  }, safe(handlers.checkProviderCapability));
+
+  if (enableOrchestratorApproval === true) {
+    server.registerTool("approve_prepared_edit", {
+      title: "Hazırlanmış edit değişikliğini onayla ve uygula",
+      description: "Yalnız orkestratör oturumunda hazırlanmış, yüksek etkili edit değişikliğini sağlayıcıyı yeniden çalıştırmadan saklanan kesin içerikle uygular.",
+      inputSchema: publicToolSchemas.approvePreparedEdit.shape,
+      annotations: executionAnnotations
+    }, safe(handlers.approvePreparedEdit));
+  }
 
   return server;
 }

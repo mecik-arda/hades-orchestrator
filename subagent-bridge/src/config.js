@@ -138,6 +138,7 @@ const configurationSchema = z.object({
     maxUnknownAttemptCostUsd: z.number().nonnegative(),
     dailyCostLimitUsd: z.number().positive().optional(),
     monthlyCostLimitUsd: z.number().positive().optional(),
+    costBudgetEnforced: z.boolean().optional(),
     warningThresholdPercent: z.number().positive().max(100).optional()
   }).strict(),
   observability: z.object({
@@ -151,6 +152,7 @@ const configurationSchema = z.object({
       mode: z.enum(["read_only", "edit"]),
       priority: z.number().int(),
       cacheable: z.boolean(),
+      webEvidenceRequired: z.boolean().optional(),
       fallbackTargets: z.array(z.object({
         target: z.string().min(1),
         model: z.string().min(1).optional()
@@ -171,7 +173,14 @@ const configurationSchema = z.object({
       ttlMs: z.number().int().positive(),
       maxEntryBytes: z.number().int().positive(),
       maxEntries: z.number().int().positive().optional()
-    }).strict()
+    }).strict(),
+    slo: z.object({
+      windowDays: z.number().int().positive().max(90),
+      minimumRuns: z.number().int().positive(),
+      availabilityTarget: z.number().gt(0).max(1),
+      latencyP95Ms: z.number().int().positive().optional()
+    }).strict().optional(),
+    webIntentHeuristics: z.boolean().optional()
   }).strict()
 }).strict();
 

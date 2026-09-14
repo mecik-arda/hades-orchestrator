@@ -1,10 +1,17 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { validateWorkspace } from "../../config.js";
+import { ANTIGRAVITY_MODEL_MAP } from "../../adapters/antigravity-adapter.js";
 
 const modeSchema = z.enum(["read_only", "edit"]).default("read_only");
+const readOnlyModeSchema = z.literal("read_only").default("read_only");
 const timeoutSecondsSchema = z.number().int().min(10).max(1200).optional();
 const profileSchema = z.string().min(1).max(64);
+const approvalRequestIdSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const riskSignalsSchema = z.object({
+  externalService: z.boolean().optional(),
+  irreversible: z.boolean().optional()
+}).strict();
 
 export const antigravityProbeFields = {
   probeModels: z.array(z.enum(["gemini_pro", "gemini_flash", "gemini_flash_3_7", "gemini_flash_3_8", "claude_sonnet"])).max(5).default([]),
@@ -17,26 +24,26 @@ export const publicToolSchemas = {
   runAntigravity: z.object({
     prompt: z.string().min(1).max(60000),
     model: z.enum(["gemini_pro", "gemini_flash", "gemini_flash_3_7", "gemini_flash_3_8", "claude_sonnet"]),
-    mode: modeSchema,
+    mode: readOnlyModeSchema,
     timeout_seconds: timeoutSecondsSchema,
     workspace: z.string().min(1).optional()
   }).strict(),
   runClaudeCode: z.object({
     prompt: z.string().min(1).max(60000),
     model: z.string().min(1).optional(),
-    mode: modeSchema,
+    mode: readOnlyModeSchema,
     timeout_seconds: timeoutSecondsSchema
   }).strict(),
   runOpenCode: z.object({
     prompt: z.string().min(1).max(60000),
     model: z.string().min(1),
-    mode: modeSchema,
+    mode: readOnlyModeSchema,
     timeout_seconds: timeoutSecondsSchema
   }).strict(),
   runCodex: z.object({
     prompt: z.string().min(1).max(60000),
     model: z.string().min(1).optional(),
-    mode: modeSchema,
+    mode: readOnlyModeSchema,
     timeout_seconds: timeoutSecondsSchema
   }).strict(),
   runProfile: z.object({
@@ -46,7 +53,8 @@ export const publicToolSchemas = {
     files: z.array(z.string().min(1).max(500)).max(100).default([]),
     contextFiles: z.array(z.string().min(1).max(500)).max(100).default([]),
     acceptanceCriteria: z.array(z.string().min(1).max(4000)).max(50).default([]),
-    timeout_seconds: timeoutSecondsSchema
+    timeout_seconds: timeoutSecondsSchema,
+    riskSignals: riskSignalsSchema.optional()
   }).strict(),
   runDeepSeek: z.object({
     taskId: z.string().min(1).max(120),
@@ -58,7 +66,8 @@ export const publicToolSchemas = {
     files: z.array(z.string()).max(200).default([]),
     contextFiles: z.array(z.string()).max(100).default([]),
     skills: z.array(z.enum(["commit-at", "guvenlik-ve-sertlestirme", "kod-denetleyicisi", "otomatik-dokumantasyon", "veri-seti-analizcisi"])).max(5).default([]),
-    acceptanceCriteria: z.array(z.string()).min(1).max(50)
+    acceptanceCriteria: z.array(z.string()).min(1).max(50),
+    riskSignals: riskSignalsSchema.optional()
   }).strict(),
   runDeepSeekEditPilot: z.object({
     taskId: z.string().min(1).max(120),
@@ -67,7 +76,8 @@ export const publicToolSchemas = {
     files: z.array(z.string().min(1).max(500)).min(1).max(100),
     contextFiles: z.array(z.string().min(1).max(500)).max(100).default([]),
     acceptanceCriteria: z.array(z.string()).min(1).max(50),
-    timeout_seconds: timeoutSecondsSchema
+    timeout_seconds: timeoutSecondsSchema,
+    riskSignals: riskSignalsSchema.optional()
   }).strict(),
   runGlm: z.object({
     taskId: z.string().min(1).max(120),
@@ -78,7 +88,8 @@ export const publicToolSchemas = {
     files: z.array(z.string()).max(200).default([]),
     contextFiles: z.array(z.string()).max(100).default([]),
     acceptanceCriteria: z.array(z.string()).min(1).max(50),
-    timeout_seconds: timeoutSecondsSchema
+    timeout_seconds: timeoutSecondsSchema,
+    riskSignals: riskSignalsSchema.optional()
   }).strict(),
   runGlmEditPilot: z.object({
     taskId: z.string().min(1).max(120),
@@ -87,7 +98,8 @@ export const publicToolSchemas = {
     files: z.array(z.string().min(1).max(500)).min(1).max(100),
     contextFiles: z.array(z.string().min(1).max(500)).max(100).default([]),
     acceptanceCriteria: z.array(z.string()).min(1).max(50),
-    timeout_seconds: timeoutSecondsSchema
+    timeout_seconds: timeoutSecondsSchema,
+    riskSignals: riskSignalsSchema.optional()
   }).strict(),
   runCatalogProvider: z.object({
     taskId: z.string().min(1).max(120),
@@ -98,7 +110,15 @@ export const publicToolSchemas = {
     files: z.array(z.string()).max(200).default([]),
     contextFiles: z.array(z.string()).max(100).default([]),
     acceptanceCriteria: z.array(z.string()).min(1).max(50),
-    timeout_seconds: timeoutSecondsSchema
+    timeout_seconds: timeoutSecondsSchema,
+    riskSignals: riskSignalsSchema.optional()
+  }).strict(),
+  approvePreparedEdit: z.object({
+    approvalRequestId: approvalRequestIdSchema
+  }).strict(),
+  checkProviderCapability: z.object({
+    provider: z.enum(["antigravity", "codex", "claude_code", "opencode"]),
+    model: z.string().min(1).max(120).optional()
   }).strict()
 };
 
@@ -118,7 +138,7 @@ function toMcpResult(result) {
   };
 }
 
-function createRuntimeRequest(input, target, trustedWorkspace, caller, abortSignal) {
+function createRuntimeRequest(input, target, trustedWorkspace, caller, abortSignal, options = {}) {
   return {
     target,
     prompt: input.prompt,
@@ -129,7 +149,8 @@ function createRuntimeRequest(input, target, trustedWorkspace, caller, abortSign
     delegationDepth: 0,
     timeoutMs: input.timeout_seconds ? input.timeout_seconds * 1000 : undefined,
     profile: input.profile,
-    abortSignal
+    abortSignal,
+    ...options
   };
 }
 
@@ -155,7 +176,8 @@ export function createMcpToolHandlers({ runtime, trustedWorkspace, caller = "ope
     async runAntigravity(input, context = {}) {
       const parsed = parse(publicToolSchemas.runAntigravity, input);
       const workspace = resolveAntigravityWorkspace(parsed, trustedWorkspace, configuration);
-      return toMcpResult(await runtime.run(createRuntimeRequest(parsed, parsed.model, workspace, caller, context.signal)));
+      const options = parsed.mode === "read_only" ? { webEvidenceRequired: true } : {};
+      return toMcpResult(await runtime.run(createRuntimeRequest(parsed, parsed.model, workspace, caller, context.signal, options)));
     },
     async runClaudeCode(input, context = {}) {
       const parsed = parse(publicToolSchemas.runClaudeCode, input);
@@ -187,7 +209,8 @@ export function createMcpToolHandlers({ runtime, trustedWorkspace, caller = "ope
           objective: parsed.prompt,
           files: parsed.files,
           contextFiles: parsed.contextFiles,
-          acceptanceCriteria: parsed.acceptanceCriteria.length > 0 ? parsed.acceptanceCriteria : ["Return a concise, evidence-based result."]
+          acceptanceCriteria: parsed.acceptanceCriteria.length > 0 ? parsed.acceptanceCriteria : ["Return a concise, evidence-based result."],
+          riskSignals: parsed.riskSignals
         };
         requireImplementerEdit(glmInput);
         const result = await runtime.runGlm(glmInput, trustedWorkspace, context.signal);
@@ -249,6 +272,19 @@ export function createMcpToolHandlers({ runtime, trustedWorkspace, caller = "ope
       requireImplementerEdit(parsed);
       const result = await runtime.runCatalogProvider("qwen", parsed, trustedWorkspace, context.signal);
       return { isError: result.status ? result.status !== "completed" : result.ok === false, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result };
+    },
+    async approvePreparedEdit(input) {
+      const parsed = parse(publicToolSchemas.approvePreparedEdit, input);
+      const result = await runtime.approvePreparedEdit(parsed, trustedWorkspace);
+      return { isError: result.status !== "completed", content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result };
+    },
+    async checkProviderCapability(input) {
+      const parsed = parse(publicToolSchemas.checkProviderCapability, input);
+      if ((parsed.provider === "antigravity" || parsed.provider === "opencode") && !parsed.model) throw new Error("capability probe requires a model for this provider");
+      if (parsed.provider === "antigravity" && !Object.hasOwn(ANTIGRAVITY_MODEL_MAP, parsed.model)) throw new Error("capability probe model is not an Antigravity alias");
+      const target = parsed.provider === "antigravity" ? parsed.model : parsed.provider === "claude_code" ? "native_claude" : parsed.provider;
+      const result = await runtime.probeCapability({ target, model: parsed.provider === "antigravity" ? undefined : parsed.model, trustedWorkspace });
+      return { isError: false, content: [{ type: "text", text: JSON.stringify({ ...result, provider: parsed.provider }, null, 2) }], structuredContent: { ...result, provider: parsed.provider } };
     }
   };
 }

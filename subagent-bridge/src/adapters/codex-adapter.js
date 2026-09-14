@@ -74,7 +74,7 @@ function buildCodexArgs(request, configuration) {
   }
   const executable = configuration?.codex?.executable || "codex";
   const execArgs = configuration?.codex?.execArgs || [];
-  const allowNonGitWorkspace = configuration?.codex?.allowNonGitWorkspace === true;
+  const allowNonGitWorkspace = request.caller === "codex_edit" || configuration?.codex?.allowNonGitWorkspace === true;
   const isGitWorkspace = typeof request.workspace === "string" && fs.existsSync(path.join(request.workspace, ".git"));
   return {
     executable,

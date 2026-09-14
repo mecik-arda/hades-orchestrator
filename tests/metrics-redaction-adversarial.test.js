@@ -120,9 +120,10 @@ test("ADV-02: getter ve toJSON tuzakları çalışmaz", async (t) => {
   assert.equal(serialized.includes("TOJSON_SENTINEL"), false);
   const record = JSON.parse(serialized.trim());
   assert.deepEqual(Object.keys(record).sort(), [
-    "attempts", "backend", "cacheHit", "executionIdHash", "failureClass", "failureStage", "mode", "modelHash",
-    "outcomeStatus", "profile", "providerCode", "queueWaitMs", "recordedAt", "retries", "retryStopReason",
-    "schemaVersion", "usage", "workspaceHash"
+    "accessMode", "artifactHashes", "attempts", "backend", "cacheHit", "capability", "executionIdHash",
+    "failureClass", "failureStage", "manifestVersion", "mode", "modelHash", "outcomeStatus", "profile",
+    "providerCode", "queueWaitMs", "recordedAt", "requestedModelHash", "retries", "retryStopReason",
+    "schemaVersion", "usage", "webEvidenceRepair", "workspaceHash"
   ]);
 });
 

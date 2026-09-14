@@ -622,6 +622,27 @@ test("OPT-06i: aylık bütçe reddi limit harcama ve kalan kotayı raporlar", as
   });
 });
 
+test("OPT-06j: costBudgetEnforced false butce limitini devre disi birakir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cost-budget-disabled-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = {
+    statePaths: { logs: root },
+    reliability: { monthlyCostLimitUsd: 0.2, costBudgetEnforced: false, maxTotalDurationMs: 60000 }
+  };
+  assert.deepEqual(await reserveCostBudget(configuration, "first", 0.15), { allowed: true });
+  assert.deepEqual(await reserveCostBudget(configuration, "second", 0.5), { allowed: true });
+  const snapshot = await getCostBudgetSnapshot(configuration);
+  assert.equal(snapshot.enforced, false);
+  assert.equal(snapshot.monthlyLimitUsd, 0.2);
+  assert.equal(snapshot.monthlySpentUsd, 0.65);
+  configuration.reliability.costBudgetEnforced = true;
+  assert.deepEqual(await reserveCostBudget(configuration, "third", 0.5), {
+    allowed: false,
+    reason: "monthly_cost_budget_exhausted",
+    budget: { period: "monthly", limitUsd: 0.2, spentUsd: 0.65, remainingUsd: 0 }
+  });
+});
+
 test("OPT-06d: cost reservation açık settlement kaydıyla gerçek maliyete uzlaştırılır", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cost-settlement-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

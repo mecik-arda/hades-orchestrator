@@ -9,11 +9,16 @@ const providerEnvironmentNames = {
   opencode: ["ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY"]
 };
 
+const policyExcludedEnvironmentNames = new Set(["OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "ORCHESTRATOR_CONFIG"]);
+const policyExcludedEnvironmentPattern = /^SUBAGENT_BRIDGE_/i;
+
 export function createProviderEnvironment(provider, source = process.env) {
   const names = new Set([...platformEnvironmentNames, ...(providerEnvironmentNames[provider] || [])]);
   const entries = [];
   for (const name of names) {
-    if (source[name] !== undefined) entries.push([name, source[name]]);
+    if (source[name] === undefined) continue;
+    if (policyExcludedEnvironmentNames.has(name) || policyExcludedEnvironmentPattern.test(name)) continue;
+    entries.push([name, source[name]]);
   }
   return Object.fromEntries(entries);
 }

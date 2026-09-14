@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -17,6 +18,74 @@ const sourceCodeSecretReferencePattern = /\b(?:api[_-]?key|token|password|secret
 function isInside(candidate, root) {
   const relative = path.relative(root, candidate);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function sha256Hex(content) {
+  return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+function sourceStateChangedError() {
+  const error = new Error("pilot source changed before promotion");
+  error.sourceStateChanged = true;
+  error.failureClass = "source_state_changed";
+  return error;
+}
+
+function sourceSecretError() {
+  const error = new Error("pilot source secret rejected");
+  error.failureClass = "secret_detected";
+  return error;
+}
+
+function redactSecretLikeValues(value, replacement) {
+  let redacted = value;
+  for (const pattern of secretPatterns) {
+    const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+    redacted = redacted.replace(new RegExp(pattern.source, flags), (match) => replacement(match));
+  }
+  return redacted;
+}
+
+function sourceSecretValues(value) {
+  const values = [];
+  redactSecretLikeValues(value, (match) => {
+    values.push(match);
+    return "";
+  });
+  return values;
+}
+
+function containsUnapprovedSecretLikeValue(value, permittedValues) {
+  let scanned = value;
+  for (const permittedValue of new Set(permittedValues)) scanned = scanned.replaceAll(permittedValue, "");
+  return containsSecretLikeValue(scanned);
+}
+
+function promotionSecretError() {
+  const error = new Error("pilot promotion secret rejected");
+  error.failureClass = "secret_detected";
+  return error;
+}
+
+export function detectRecoveryArtifacts(sourceRoot, relativePaths) {
+  const artifacts = new Set();
+  let scanFailed = false;
+  for (const relativePath of relativePaths) {
+    try {
+      const normalizedPath = normalizeRelativePath(relativePath);
+       const basename = path.basename(normalizedPath);
+       const parentPath = path.dirname(path.join(sourceRoot, ...normalizedPath.split("/")));
+       if (!fs.existsSync(parentPath) || !fs.lstatSync(parentPath).isDirectory()) continue;
+       const escapedBasename = basename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+       const artifactPattern = new RegExp(`^\\.${escapedBasename}\\.\\d+\\.\\d+\\.[a-f0-9]+\\.tmp(?:\\.backup)?$`);
+       for (const entry of fs.readdirSync(parentPath)) {
+         if (artifactPattern.test(entry)) artifacts.add(normalizedPath);
+      }
+    } catch {
+      scanFailed = true;
+    }
+  }
+  return { affectedPaths: [...artifacts].sort(), scanFailed };
 }
 
 function normalizeRelativePath(value) {
@@ -41,6 +110,7 @@ function requireSafeSourceFile(sourceRoot, relativePath) {
   if (!isInside(realPath, sourceRoot)) throw new Error("pilot source file escapes workspace");
   const content = fs.readFileSync(realPath);
   if (content.includes(0)) throw new Error("pilot binary file rejected");
+  if (!Buffer.from(content.toString("utf8"), "utf8").equals(content)) throw new Error("pilot source encoding rejected");
   return content;
 }
 
@@ -73,6 +143,7 @@ function readWorkspaceFiles(workspace) {
       if (!status.isFile() || status.nlink !== 1 || status.size > maximumFileBytes) throw new Error("pilot output file rejected");
       const content = fs.readFileSync(absolutePath);
       if (content.includes(0)) throw new Error("pilot binary output rejected");
+      if (!Buffer.from(content.toString("utf8"), "utf8").equals(content)) throw new Error("pilot output encoding rejected");
       totalBytes += content.length;
       if (totalBytes > maximumTotalBytes || files.size >= maximumFiles) throw new Error("pilot output limit exceeded");
       files.set(relativePath, content.toString("utf8"));
@@ -99,6 +170,125 @@ export function containsSecretLikeValue(value) {
   return secretPatterns.some((pattern) => pattern.test(scannedValue));
 }
 
+export function containsSecretLikeAddedValue(diff) {
+  return containsSecretLikeValue(diff.split(/\r?\n/)
+    .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+    .join("\n"));
+}
+
+export function applyPreparedChanges(sourceRoot, preparedChanges, expectedStates) {
+  const normalizedRoot = fs.realpathSync(sourceRoot);
+  if (!Array.isArray(preparedChanges) || preparedChanges.length === 0) throw new Error("pilot promotion requires changes");
+  const statesByPath = new Map();
+  for (const sourceState of expectedStates || []) {
+    const relativePath = normalizeRelativePath(sourceState.relativePath);
+    if (statesByPath.has(relativePath)) throw new Error("pilot promotion duplicate path");
+    if (sourceState.state === "absent") statesByPath.set(relativePath, { state: "absent" });
+    else if (sourceState.state === "present" && /^[a-f0-9]{64}$/.test(sourceState.sha256 || "")) statesByPath.set(relativePath, { state: "present", sha256: sourceState.sha256 });
+    else throw new Error("pilot promotion source state rejected");
+  }
+  const items = preparedChanges.map((change) => {
+    const relativePath = normalizeRelativePath(change.relativePath);
+    const expected = statesByPath.get(relativePath);
+    if (!expected) throw sourceStateChangedError();
+    if (!Buffer.isBuffer(change.content)) throw new Error("pilot promotion content rejected");
+    return { relativePath, content: change.content, expected };
+  });
+  if (new Set(items.map((item) => item.relativePath)).size !== items.length) throw new Error("pilot promotion duplicate path");
+  const recoveryScan = detectRecoveryArtifacts(normalizedRoot, items.map((item) => item.relativePath));
+  if (recoveryScan.affectedPaths.length > 0 || recoveryScan.scanFailed) {
+    const error = new Error(recoveryScan.scanFailed ? "pilot promotion recovery scan could not complete" : "pilot promotion recovery artifacts detected; complete manual recovery before retrying");
+    error.failureClass = "recovery_required";
+    throw error;
+  }
+  const prepared = [];
+  const removeArtifact = (target) => {
+    try {
+      if (fs.existsSync(target)) fs.rmSync(target, { force: true });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  try {
+    for (const item of items) {
+      const sourcePath = path.join(normalizedRoot, ...item.relativePath.split("/"));
+      const currentContent = fs.existsSync(sourcePath) ? requireSafeSourceFile(normalizedRoot, item.relativePath) : null;
+      const stateMatches = item.expected.state === "absent"
+        ? currentContent === null
+        : currentContent !== null && sha256Hex(currentContent) === item.expected.sha256;
+      if (!stateMatches) throw sourceStateChangedError();
+      const parentPath = path.dirname(sourcePath);
+      if (!fs.existsSync(parentPath) || !fs.lstatSync(parentPath).isDirectory() || fs.lstatSync(parentPath).isSymbolicLink() || !isInside(fs.realpathSync(parentPath), normalizedRoot)) throw new Error("pilot promotion target rejected");
+       const permittedValues = currentContent === null ? [] : sourceSecretValues(currentContent.toString("utf8"));
+       if (containsUnapprovedSecretLikeValue(item.content.toString("utf8"), permittedValues)) throw promotionSecretError();
+      const temporaryPath = path.join(parentPath, `.${path.basename(sourcePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+      const backupPath = `${temporaryPath}.backup`;
+      fs.writeFileSync(temporaryPath, item.content, { flag: "wx" });
+      prepared.push({ sourcePath, temporaryPath, backupPath, relativePath: item.relativePath, content: item.content, expected: item.expected, existed: currentContent !== null });
+      if (currentContent !== null) fs.chmodSync(temporaryPath, fs.statSync(sourcePath).mode);
+    }
+  } catch (error) {
+    let cleanupIncomplete = false;
+    for (const item of prepared) {
+      if (!removeArtifact(item.temporaryPath)) cleanupIncomplete = true;
+    }
+    if (cleanupIncomplete) error.cleanupIncomplete = true;
+    throw error;
+  }
+  const applied = [];
+  try {
+    for (const item of prepared) {
+      const currentContent = fs.existsSync(item.sourcePath) ? requireSafeSourceFile(normalizedRoot, item.relativePath) : null;
+      const stateMatches = item.expected.state === "absent"
+        ? currentContent === null
+        : currentContent !== null && sha256Hex(currentContent) === item.expected.sha256;
+      if (!stateMatches) throw sourceStateChangedError();
+      if (item.existed) fs.renameSync(item.sourcePath, item.backupPath);
+      try {
+        fs.renameSync(item.temporaryPath, item.sourcePath);
+        applied.push(item);
+      } catch (error) {
+        if (item.existed && fs.existsSync(item.backupPath)) fs.renameSync(item.backupPath, item.sourcePath);
+        throw error;
+      }
+    }
+    for (const item of applied) {
+      const promotedContent = requireSafeSourceFile(normalizedRoot, item.relativePath);
+      if (!promotedContent.equals(item.content)) throw new Error("pilot promotion verification failed");
+    }
+  } catch (error) {
+    const rollbackItems = [...applied, ...prepared.filter((item) => !applied.includes(item) && item.existed && fs.existsSync(item.backupPath))].reverse();
+    let rollbackFailed = false;
+    for (const item of rollbackItems) {
+      try {
+        if (fs.existsSync(item.sourcePath)) fs.rmSync(item.sourcePath, { force: true });
+        if (item.existed && fs.existsSync(item.backupPath)) fs.renameSync(item.backupPath, item.sourcePath);
+      } catch {
+        rollbackFailed = true;
+      }
+    }
+    if (rollbackFailed) {
+      const rollbackError = new Error("pilot promotion rollback incomplete; source workspace mutation state is unknown and recovery artifacts were retained");
+      rollbackError.failureClass = "mutation_state_unknown";
+      rollbackError.cleanupIncomplete = true;
+      throw rollbackError;
+    }
+    let cleanupIncomplete = false;
+    for (const item of prepared) {
+      if (!removeArtifact(item.temporaryPath)) cleanupIncomplete = true;
+    }
+    if (cleanupIncomplete) error.cleanupIncomplete = true;
+    throw error;
+  }
+  let cleanupFailed = false;
+  for (const item of prepared) {
+    if (!removeArtifact(item.temporaryPath)) cleanupFailed = true;
+    if (!removeArtifact(item.backupPath)) cleanupFailed = true;
+  }
+  return { applied: true, cleanupFailed };
+}
+
 export function provisionDisposableWorkspace(configuration, sourceWorkspace, requestedFiles, editableFiles = requestedFiles, editAgentName = "deepseek-edit") {
   const sourceRoot = fs.realpathSync(sourceWorkspace);
   const relativePaths = [...new Set(requestedFiles.map(normalizeRelativePath))];
@@ -112,20 +302,46 @@ export function provisionDisposableWorkspace(configuration, sourceWorkspace, req
   const container = fs.mkdtempSync(path.join(disposableRoot, "run-"));
   const workspace = path.join(container, "workspace");
   fs.mkdirSync(workspace);
+  const secretMarkers = new Map();
+  const redactSourceSecrets = (relativePath, content) => {
+    const markers = new Map();
+    const redacted = redactSecretLikeValues(content.toString("utf8"), (match) => {
+      const marker = `__BRIDGE_REDACTED_SOURCE_SECRET_${crypto.randomUUID()}__`;
+      markers.set(marker, match);
+      return marker;
+    });
+    secretMarkers.set(relativePath, markers);
+    return Buffer.from(redacted, "utf8");
+  };
+  const restoreSourceSecrets = (relativePath, content) => {
+    const markers = secretMarkers.get(relativePath);
+    if (!markers) return content;
+    let restored = content;
+    for (const [marker, secret] of markers) {
+      if (restored.split(marker).length - 1 > 1) throw sourceSecretError();
+      restored = restored.replaceAll(marker, secret);
+    }
+    return restored;
+  };
   try {
     let totalBytes = 0;
+    const baselineStates = new Map();
     for (const relativePath of relativePaths) {
-      const content = readOptionalSourceFile(sourceRoot, relativePath, editablePaths.has(relativePath));
-      const targetPath = path.join(workspace, ...relativePath.split("/"));
-      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-      if (content === null) continue;
-      if (containsSecretLikeValue(content.toString("utf8"))) throw new Error("pilot source secret rejected");
-      totalBytes += content.length;
-      if (totalBytes > maximumTotalBytes) throw new Error("pilot input limit exceeded");
+       const sourceContent = readOptionalSourceFile(sourceRoot, relativePath, editablePaths.has(relativePath));
+       const targetPath = path.join(workspace, ...relativePath.split("/"));
+       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+       if (sourceContent === null) continue;
+       const content = containsSecretLikeValue(sourceContent.toString("utf8")) ? redactSourceSecrets(relativePath, sourceContent) : sourceContent;
+       totalBytes += content.length;
+       if (totalBytes > maximumTotalBytes) throw new Error("pilot input limit exceeded");
+       baselineStates.set(relativePath, sha256Hex(sourceContent));
       fs.writeFileSync(targetPath, content, { flag: "wx" });
     }
     fs.writeFileSync(path.join(workspace, "opencode.json"), `${JSON.stringify({
       $schema: "https://opencode.ai/config.json",
+      mcp: {
+        "subagent-bridge": { enabled: false }
+      },
       agent: {
         [editAgentName]: {
           description: "Edits only files inside the disposable workspace without shell or delegation.",
@@ -156,61 +372,34 @@ export function provisionDisposableWorkspace(configuration, sourceWorkspace, req
           const before = baseline.has(relativePath) ? baseline.get(relativePath) : null;
           const after = current.has(relativePath) ? current.get(relativePath) : null;
           if (before === after) return [];
-          return [{ relativePath, changeType: before === null ? "created" : after === null ? "deleted" : "modified", diff: createUnifiedDiff(relativePath, before, after) }];
+           const restored = after === null ? null : restoreSourceSecrets(relativePath, after);
+           return [{ relativePath, changeType: before === null ? "created" : after === null ? "deleted" : "modified", diff: createUnifiedDiff(relativePath, before, after), contentSha256: restored === null ? null : sha256Hex(Buffer.from(restored, "utf8")) }];
         });
         if (changes.some((change) => !editablePaths.has(change.relativePath))) throw new Error("pilot changed a non-editable file");
         const diff = changes.map((change) => change.diff).join("\n");
         if (Buffer.byteLength(diff, "utf8") > maximumTotalBytes) throw new Error("pilot diff limit exceeded");
         return { filesChanged: changes.map((change) => change.relativePath), changes, diff };
       },
-      promoteChanges() {
+      capturePreparedChanges() {
         const collected = this.collectChanges();
-        const prepared = [];
-        for (const change of collected.changes) {
-          if (change.changeType === "deleted") throw new Error("pilot file deletion is not allowed");
-          const sourcePath = path.join(sourceRoot, ...change.relativePath.split("/"));
-          const baselineContent = baseline.has(change.relativePath) ? baseline.get(change.relativePath) : null;
-          const currentContent = fs.existsSync(sourcePath) ? requireSafeSourceFile(sourceRoot, change.relativePath).toString("utf8") : null;
-          if (currentContent !== baselineContent) throw new Error("pilot source changed before promotion");
-          const parentPath = path.dirname(sourcePath);
-          if (!fs.existsSync(parentPath) || !fs.lstatSync(parentPath).isDirectory() || fs.lstatSync(parentPath).isSymbolicLink() || !isInside(fs.realpathSync(parentPath), sourceRoot)) throw new Error("pilot promotion target rejected");
+        if (collected.changes.some((change) => change.changeType === "deleted")) throw new Error("pilot file deletion is not allowed");
+        const changes = collected.changes.map((change) => {
           const disposablePath = path.join(workspace, ...change.relativePath.split("/"));
-          const content = fs.readFileSync(disposablePath);
-          if (containsSecretLikeValue(content.toString("utf8"))) throw new Error("pilot promotion secret rejected");
-          const temporaryPath = path.join(parentPath, `.${path.basename(sourcePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
-          const backupPath = `${temporaryPath}.backup`;
-          fs.writeFileSync(temporaryPath, content, { flag: "wx" });
-          if (fs.existsSync(sourcePath)) fs.chmodSync(temporaryPath, fs.statSync(sourcePath).mode);
-          prepared.push({ sourcePath, temporaryPath, backupPath, existed: fs.existsSync(sourcePath) });
-        }
-        const applied = [];
-        try {
-          for (const item of prepared) {
-            if (item.existed) fs.renameSync(item.sourcePath, item.backupPath);
-            try {
-              fs.renameSync(item.temporaryPath, item.sourcePath);
-              applied.push(item);
-            } catch (error) {
-              if (item.existed && fs.existsSync(item.backupPath)) fs.renameSync(item.backupPath, item.sourcePath);
-              throw error;
-            }
-          }
-          for (const item of applied) {
-            if (fs.existsSync(item.backupPath)) fs.rmSync(item.backupPath, { force: true });
-          }
-        } catch (error) {
-          for (const item of applied.reverse()) {
-            if (fs.existsSync(item.sourcePath)) fs.rmSync(item.sourcePath, { force: true });
-            if (item.existed && fs.existsSync(item.backupPath)) fs.renameSync(item.backupPath, item.sourcePath);
-          }
-          throw error;
-        } finally {
-          for (const item of prepared) {
-            if (fs.existsSync(item.temporaryPath)) fs.rmSync(item.temporaryPath, { force: true });
-            if (fs.existsSync(item.backupPath)) fs.rmSync(item.backupPath, { force: true });
-          }
-        }
-        return { ...collected, applied: true };
+           const content = Buffer.from(restoreSourceSecrets(change.relativePath, fs.readFileSync(disposablePath, "utf8")), "utf8");
+          return { relativePath: change.relativePath, changeType: change.changeType, diff: change.diff, contentSha256: sha256Hex(content), content };
+        });
+        const expectedStates = changes.map((change) => {
+          const baselineSha = baselineStates.get(change.relativePath);
+          return baselineSha
+            ? { relativePath: change.relativePath, state: "present", sha256: baselineSha }
+            : { relativePath: change.relativePath, state: "absent" };
+        });
+        return { filesChanged: collected.filesChanged, diff: collected.diff, changes, expectedStates };
+      },
+      promoteChanges() {
+        const prepared = this.capturePreparedChanges();
+        const outcome = applyPreparedChanges(sourceRoot, prepared.changes, prepared.expectedStates);
+        return { filesChanged: prepared.filesChanged, changes: prepared.changes.map(({ relativePath, changeType, diff }) => ({ relativePath, changeType, diff })), diff: prepared.diff, applied: true, cleanupFailed: outcome.cleanupFailed };
       },
       cleanup() {
         fs.rmSync(container, { recursive: true, force: true });

@@ -92,7 +92,8 @@
       "cwd": "<repo-root>",
       "environment": {
         "ORCHESTRATOR_CONFIG": "~/.config/subagent-bridge/config.json",
-        "SUBAGENT_BRIDGE_TRUSTED_WORKSPACE": "<repo-root>"
+        "SUBAGENT_BRIDGE_TRUSTED_WORKSPACE": "<repo-root>",
+        "SUBAGENT_BRIDGE_ORCHESTRATOR_APPROVAL": "1"
       },
       "enabled": true,
       "timeout": 1260000

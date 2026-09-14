@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { webEvidenceEnvelopeSchema } from "../web-evidence.js";
 
 export const failureStageValues = ["mcp_preflight", "settings_lock", "settings_enforcement", "provider_execution", "result_parse"];
 export const providerCodeValues = [
@@ -120,6 +121,7 @@ export const subagentResultSchema = z.object({
     adapterAttempts: z.number().int().min(0).optional(),
     queueWaitMs: z.number().int().min(0).optional(),
     cacheHit: z.boolean().optional(),
+    fallbacks: z.number().int().min(0).optional(),
     totalCostUsd: z.number().min(0).nullable().optional(),
     signal: z.string().nullable().optional(),
     diagnostics: attemptDiagnosticsSchema.optional(),
@@ -144,12 +146,20 @@ export const subagentResultSchema = z.object({
       exitCode: z.number().int().nullable(),
       durationMs: z.number().int().min(0),
       totalCostUsd: z.number().min(0).nullable()
-    }).strict()).optional()
-  }),
+    }).strict()).optional(),
+    capability: z.object({
+      canRead: z.boolean(),
+      canWrite: z.boolean(),
+      supportsSandbox: z.boolean(),
+      supportsModelSelection: z.boolean()
+    }).strict().optional(),
+    webEvidenceRepair: z.boolean().optional()
+  }).strict(),
+  webEvidence: webEvidenceEnvelopeSchema.nullable().optional(),
   artifacts: z.object({
     filesChanged: z.array(z.string()).optional(),
     summary: z.string().optional()
-  }).optional()
+  }).strict().optional()
 }).strict();
 
 export const controlledEditResultSchema = z.object({
@@ -165,8 +175,36 @@ export const controlledEditResultSchema = z.object({
   diff: z.string(),
   applied: z.boolean(),
   fallbacks: z.number().int().min(0),
-  cleanupCompleted: z.boolean()
-}).strict();
+  cleanupCompleted: z.boolean(),
+  executionIdHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  changeSetHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  approvalClass: z.enum(["low_impact", "new_file", "multiple_files", "policy_config", "external_service", "irreversible"]).optional(),
+  approvalRequired: z.boolean().optional(),
+  approvalRequestId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  approvalExpiresAt: z.string().datetime().optional(),
+  metrics: z.object({
+    totalCostUsd: z.number().min(0)
+  }).strict().optional(),
+  preview: z.boolean().optional()
+}).strict().superRefine((result, context) => {
+  if (result.status === "completed" && result.cleanupCompleted === false && result.preview !== true) context.addIssue({ code: z.ZodIssueCode.custom, path: ["cleanupCompleted"], message: "completed edit must have completed cleanup unless it is a preview" });
+  if (result.status === "completed" && result.failureClass !== null) context.addIssue({ code: z.ZodIssueCode.custom, path: ["failureClass"], message: "completed edit cannot report a failure" });
+  if (result.status === "completed" && result.applied === false && result.preview !== true) context.addIssue({ code: z.ZodIssueCode.custom, path: ["applied"], message: "completed edit must be applied unless it is a preview" });
+  if (result.status === "completed" && result.applied === true && (result.preview === true || result.approvalRequired === true)) context.addIssue({ code: z.ZodIssueCode.custom, path: ["approvalRequired"], message: "applied completion cannot remain preview or approval-required" });
+  if (result.status === "failed" && result.failureClass === null) context.addIssue({ code: z.ZodIssueCode.custom, path: ["failureClass"], message: "failed edit must report a failure" });
+  if (result.status === "failed" && result.preview === true) context.addIssue({ code: z.ZodIssueCode.custom, path: ["preview"], message: "failed edit cannot be a preview" });
+  const validPreview = result.status === "completed" && result.applied === false && result.preview === true && result.failureClass === null;
+  const validApprovalPending = result.status === "failed" && result.applied === false && result.failureClass === "approval_required" && result.approvalRequired === true;
+  if (result.preview === true && !validPreview) context.addIssue({ code: z.ZodIssueCode.custom, path: ["preview"], message: "preview result must be completed, unapplied, and failure-free" });
+  if (result.status === "failed" && result.applied === true && result.failureClass !== "cleanup_failed") context.addIssue({ code: z.ZodIssueCode.custom, path: ["applied"], message: "failed edit cannot report applied" });
+  if (result.failureClass === "cleanup_failed" && result.cleanupCompleted === true) context.addIssue({ code: z.ZodIssueCode.custom, path: ["cleanupCompleted"], message: "cleanup failure must report incomplete cleanup" });
+  if (result.failureClass === "approval_required" && !validApprovalPending) context.addIssue({ code: z.ZodIssueCode.custom, path: ["failureClass"], message: "approval-required result must be pending and unapplied" });
+  if (result.approvalRequired === true && !validPreview && !validApprovalPending) context.addIssue({ code: z.ZodIssueCode.custom, path: ["approvalRequired"], message: "approval-required result must await approval or be a preview" });
+  if (result.approvalRequired === true && (!result.executionIdHash || !result.changeSetHash || !result.approvalClass || result.approvalClass === "low_impact")) context.addIssue({ code: z.ZodIssueCode.custom, path: ["approvalRequired"], message: "approval-required result must include a high-impact binding" });
+  if (result.approvalRequestId && (!validApprovalPending || result.preview === true || !["new_file", "multiple_files"].includes(result.approvalClass))) context.addIssue({ code: z.ZodIssueCode.custom, path: ["approvalRequestId"], message: "approval request id requires an orchestrator-approvable pending result" });
+  if (result.approvalRequestId && !result.approvalExpiresAt) context.addIssue({ code: z.ZodIssueCode.custom, path: ["approvalExpiresAt"], message: "approval request id requires an expiration" });
+  if (result.approvalExpiresAt && !result.approvalRequestId) context.addIssue({ code: z.ZodIssueCode.custom, path: ["approvalExpiresAt"], message: "approval expiration requires an approval request id" });
+});
 
 export const capabilitySchema = z.object({
   canRead: z.boolean(),
@@ -237,6 +275,7 @@ export function createSuccessSubagentResult(backend, model, overrides = {}) {
     exitCode: 0,
     durationMs: overrides.durationMs ?? 0,
     metrics: { retries: overrides.retries ?? 0, ...(overrides.metrics || {}) },
-    artifacts: overrides.artifacts
+    artifacts: overrides.artifacts,
+    ...(Object.hasOwn(overrides, "webEvidence") ? { webEvidence: overrides.webEvidence } : {})
   };
 }

@@ -136,6 +136,11 @@ export function createProviderCircuitBreaker({ stateDirectory, failureThreshold 
     }
   }
 
+  async function recordNeutral(providerId, now = Date.now()) {
+    void providerId;
+    void now;
+  }
+
   async function snapshot(providerIds, now = Date.now()) {
     const entries = await Promise.all(providerIds.map(async (providerId) => {
       const { statePath, lockPath } = pathsFor(providerId);
@@ -156,5 +161,5 @@ export function createProviderCircuitBreaker({ stateDirectory, failureThreshold 
     return Object.fromEntries(entries);
   }
 
-  return { beforeCall, recordSuccess, recordFailure, snapshot };
+  return { beforeCall, recordSuccess, recordFailure, recordNeutral, snapshot };
 }

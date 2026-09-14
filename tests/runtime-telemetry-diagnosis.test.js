@@ -18,7 +18,8 @@ function successResult(backend, model, result = "ok", metrics = {}) {
     timedOut: false,
     exitCode: 0,
     durationMs: 1,
-    metrics: { retries: 0, totalCostUsd: 0, ...metrics }
+    metrics: { retries: 0, totalCostUsd: 0, ...metrics },
+    ...(backend === "antigravity" ? { webEvidence: null } : {})
   };
 }
 

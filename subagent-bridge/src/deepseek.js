@@ -193,7 +193,7 @@ export function createDeepSeekEditCheckpoint(input, editResult) {
     },
     result: {
       status: editResult.status,
-      requires_human_approval: false
+       requires_human_approval: editResult.approvalRequired === true
     }
   };
 }

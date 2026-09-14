@@ -25,6 +25,10 @@ Do not call MCP, terminal commands, or built-in write tools.
 If asked to write or modify files, decline and explain that you are in read-only mode.
 `;
 
+const WEB_EVIDENCE_OUTPUT_INSTRUCTION = `
+For every read-only response, return exactly a JSON object with result and webEvidence fields. Set webEvidence to null when read_url was not used. When read_url was used, webEvidence must contain only sourceUrl, retrievedAt, excerpts, confidence, and verificationStatus. Do not put URLs, headers, cookies, credentials, or tool, model, permission, fallback, or edit fields in result or excerpts.
+`;
+
 const READ_ONLY_PERMISSION_RULES = {
   allow: [
     "read_url(*)"
@@ -558,7 +562,7 @@ export function createAntigravityAdapter(configuration) {
         if (outcome.failureClass) {
           const status = probeFailureStatus(outcome.failureClass);
           result[capability] = status;
-          if (status === "unavailable") recordFailure(outcome.failureClass);
+            recordFailure(outcome.failureClass);
           return;
         }
         if (expected) {
@@ -590,7 +594,7 @@ export function createAntigravityAdapter(configuration) {
         const classification = classifyAntigravityError(error, null, "", "");
         const failureClass = classifyProbeFailure(classification.errorClass);
         const status = probeFailureStatus(failureClass);
-        if (status === "unavailable") recordFailure(failureClass);
+        recordFailure(failureClass);
         for (const capability of requested) {
           if (result[capability] === "not_probed") result[capability] = status;
         }
@@ -712,7 +716,7 @@ export function createAntigravityAdapter(configuration) {
         args.push("--mode", isReadOnly ? "plan" : "accept-edits");
 
         const prompt = prependExecutionMetadata(
-          isReadOnly ? `${READ_ONLY_INSTRUCTION}\n${request.prompt}` : request.prompt,
+          isReadOnly ? `${READ_ONLY_INSTRUCTION}\n${WEB_EVIDENCE_OUTPUT_INSTRUCTION}\n${request.prompt}` : request.prompt,
           { backend: "antigravity", requestedModel: request.model, resolvedModel: model.model, mode: request.mode }
         );
 

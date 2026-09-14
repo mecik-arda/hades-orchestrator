@@ -25,7 +25,10 @@ export const directEditFeedbackOutcomes = ["accepted", "minor_fix", "reverted", 
 export const routingFeedbackOutcomes = ["useful", "partial", "not_useful"];
 
 const tokenPattern = /^[a-z][a-z0-9_-]{0,63}$/;
+const modelTokenPattern = /^[a-z][a-z0-9._/-]{0,119}$/;
+const modelFitFixtureVersionPattern = /^[a-z0-9][a-z0-9-]{2,63}$/;
 const hashPattern = /^[a-f0-9]{64}$/;
+const modelFitTaskClassValues = ["candidate_generation", "sourced_analysis", "strict_schema", "controlled_edit_readiness", "critical_review"];
 
 function sanitizeDurationMs(value) {
   return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
@@ -236,17 +239,40 @@ function sanitizeAttemptV2(attempt) {
   return sanitized;
 }
 
+function sanitizeCapability(capability) {
+  const source = capability && typeof capability === "object" ? capability : null;
+  if (!source) return null;
+  return {
+    canRead: source.canRead === true,
+    canWrite: source.canWrite === true,
+    supportsSandbox: source.supportsSandbox === true,
+    supportsModelSelection: source.supportsModelSelection === true
+  };
+}
+
+function sanitizeArtifactHashes(value) {
+  if (!Array.isArray(value)) return null;
+  const hashes = value
+    .filter((entry) => typeof entry === "string" && entry.length > 0 && entry.length <= 500)
+    .slice(0, 100)
+    .map((entry) => hashValue(entry));
+  return hashes.length > 0 ? hashes : null;
+}
+
 export function createRedactedExecutionMetric({ executionId, workspace, mode, profile, metricBackend, result }) {
   const attempts = (Array.isArray(result.metrics?.attempts) ? result.metrics.attempts : []).map(sanitizeAttemptV2);
   const lastAttempt = attempts.at(-1) || null;
   return {
     schemaVersion: 2,
+    manifestVersion: 2,
     recordedAt: new Date().toISOString(),
     backend: metricBackend || result.backend,
     modelHash: hashValue(result.resolvedModel || result.model || "unavailable"),
+    requestedModelHash: hashValue(result.requestedModel || result.model || "unavailable"),
     executionIdHash: hashValue(executionId),
     workspaceHash: hashValue(workspace || "unavailable"),
     mode: mode === "edit" ? "edit" : "read_only",
+    accessMode: (result.accessMode || mode) === "edit" ? "edit" : "read_only",
     profile: sanitizeProfile(profile),
     outcomeStatus: result.ok ? "completed" : "failed",
     failureClass: result.ok ? null : (lastAttempt ? lastAttempt.failureClass : sanitizeFailureClass(result.reason)),
@@ -260,7 +286,10 @@ export function createRedactedExecutionMetric({ executionId, workspace, mode, pr
     attempts,
     retries: Number.isInteger(result.metrics?.retries) && result.metrics.retries >= 0 ? result.metrics.retries : 0,
     queueWaitMs: Number.isFinite(result.metrics?.queueWaitMs) && result.metrics.queueWaitMs >= 0 ? result.metrics.queueWaitMs : 0,
-    cacheHit: result.metrics?.cacheHit === true
+    cacheHit: result.metrics?.cacheHit === true,
+    capability: sanitizeCapability(result.metrics?.capability),
+    artifactHashes: sanitizeArtifactHashes(result.artifacts?.filesChanged || result.filesChanged),
+    webEvidenceRepair: result.metrics?.webEvidenceRepair === true
   };
 }
 
@@ -304,14 +333,18 @@ function sanitizeExecutionMetricV2(metric) {
   const attempts = Array.isArray(metric.attempts) ? metric.attempts.slice(0, 100).map(sanitizeAttemptV2) : [];
   const lastAttempt = attempts.at(-1) || null;
   const failed = metric.outcomeStatus === "failed";
+  const artifactHashes = Array.isArray(metric.artifactHashes) ? metric.artifactHashes.map((entry) => sanitizeHash(entry)).filter(Boolean).slice(0, 100) : [];
   return {
     schemaVersion: 2,
+    manifestVersion: 2,
     recordedAt: sanitizeRecordedAt(metric.recordedAt),
     backend: sanitizeBackend(metric.backend),
     modelHash: sanitizeHash(metric.modelHash) || hashValue("model-unavailable"),
+    requestedModelHash: sanitizeHash(metric.requestedModelHash) || hashValue("model-unavailable"),
     executionIdHash: sanitizeHash(metric.executionIdHash) || hashValue("execution-unavailable"),
     workspaceHash: sanitizeHash(metric.workspaceHash) || hashValue("workspace-unavailable"),
     mode: metric.mode === "edit" ? "edit" : "read_only",
+    accessMode: (metric.accessMode || metric.mode) === "edit" ? "edit" : "read_only",
     profile: sanitizeProfile(metric.profile),
     outcomeStatus: failed ? "failed" : "completed",
     failureClass: failed ? (lastAttempt ? lastAttempt.failureClass : (metric.failureClass === null || metric.failureClass === undefined ? null : sanitizeFailureClass(metric.failureClass))) : null,
@@ -325,7 +358,10 @@ function sanitizeExecutionMetricV2(metric) {
     attempts,
     retries: attempts.length > 0 ? Math.max(0, attempts.length - 1) : (Number.isInteger(metric.retries) && metric.retries >= 0 ? metric.retries : 0),
     queueWaitMs: Number.isFinite(metric.queueWaitMs) && metric.queueWaitMs >= 0 ? metric.queueWaitMs : 0,
-    cacheHit: metric.cacheHit === true
+    cacheHit: metric.cacheHit === true,
+    capability: sanitizeCapability(metric.capability),
+    artifactHashes: artifactHashes.length > 0 ? artifactHashes : null,
+    webEvidenceRepair: metric.webEvidenceRepair === true
   };
 }
 
@@ -349,7 +385,7 @@ function sanitizeCapabilityProbes(capabilityProbes) {
   const source = capabilityProbes && typeof capabilityProbes === "object" ? capabilityProbes : {};
   const sanitized = {};
   for (const [model, probe] of Object.entries(source)) {
-    if (!tokenPattern.test(model) || !probe || typeof probe !== "object") continue;
+    if (!modelTokenPattern.test(model) || !probe || typeof probe !== "object") continue;
     sanitized[model] = {
       modelAccess: capabilityStatusValues.includes(probe.modelAccess) ? probe.modelAccess : "not_probed",
       toolFreeResponse: capabilityStatusValues.includes(probe.toolFreeResponse) ? probe.toolFreeResponse : "not_probed",
@@ -362,6 +398,26 @@ function sanitizeCapabilityProbes(capabilityProbes) {
     };
   }
   return sanitized;
+}
+
+function sanitizeLiveObservationMetric(metric) {
+  const capabilities = metric.capabilities && typeof metric.capabilities === "object" ? metric.capabilities : {};
+  return {
+    recordType: "live_observation",
+    recordedAt: sanitizeRecordedAt(metric.recordedAt),
+    backend: sanitizeBackend(metric.backend),
+    model: typeof metric.model === "string" && modelTokenPattern.test(metric.model) ? metric.model : null,
+    capabilities: {
+      modelAccess: capabilityStatusValues.includes(capabilities.modelAccess) ? capabilities.modelAccess : "not_probed",
+      toolFreeResponse: capabilityStatusValues.includes(capabilities.toolFreeResponse) ? capabilities.toolFreeResponse : "not_probed",
+      workspaceRead: capabilityStatusValues.includes(capabilities.workspaceRead) ? capabilities.workspaceRead : "not_probed",
+      webRead: capabilityStatusValues.includes(capabilities.webRead) ? capabilities.webRead : "not_probed"
+    },
+    failureClass: metric.failureClass === null || metric.failureClass === undefined
+      ? null
+      : (capabilityFailureClassValues.includes(metric.failureClass) ? metric.failureClass : "unclassified"),
+    checkedAt: sanitizeTimestamp(metric.checkedAt)
+  };
 }
 
 function sanitizeHealthSnapshotMetric(metric) {
@@ -389,6 +445,34 @@ function sanitizeHealthSnapshotMetric(metric) {
   };
 }
 
+function sanitizeModelFitEvaluationMetric(metric) {
+  const bounded = (value, maximum = Number.POSITIVE_INFINITY) => Number.isFinite(value) && value >= 0 && value <= maximum ? value : null;
+  const liveObservation = metric.evidenceType === "live_observation";
+  const coverageComplete = metric.coverageComplete === true;
+  const identityAssurance = metric.identityAssurance === "configured" ? "configured" : "unresolved";
+  return {
+    recordType: "model_fit_evaluation",
+    recordedAt: sanitizeRecordedAt(metric.recordedAt),
+    backend: sanitizeBackend(metric.backend),
+    evidenceType: liveObservation ? "live_observation" : "synthetic_fixture",
+    promotionEligible: liveObservation && coverageComplete && identityAssurance === "configured" && metric.promotionEligible === true && metric.thresholdsPassed === true,
+    coverageComplete,
+    identityAssurance,
+    fixtureVersion: typeof metric.fixtureVersion === "string" && modelFitFixtureVersionPattern.test(metric.fixtureVersion) ? metric.fixtureVersion : "unknown_fixture",
+    taskClass: modelFitTaskClassValues.includes(metric.taskClass) ? metric.taskClass : "unknown_task_class",
+    modelHash: sanitizeHash(metric.modelHash) || hashValue("model-unavailable"),
+    repetitionCount: Number.isInteger(metric.repetitionCount) && metric.repetitionCount > 0 ? Math.min(metric.repetitionCount, 1000) : 0,
+    schemaPassRate: bounded(metric.schemaPassRate, 1),
+    sourceAccuracy: bounded(metric.sourceAccuracy, 1),
+    failureClassificationAccuracy: bounded(metric.failureClassificationAccuracy, 1),
+    editReadinessRate: metric.editReadinessRate === null ? null : bounded(metric.editReadinessRate, 1),
+    averageDurationMs: bounded(metric.averageDurationMs),
+    p95DurationMs: bounded(metric.p95DurationMs),
+    averageCostUsd: bounded(metric.averageCostUsd),
+    thresholdsPassed: metric.thresholdsPassed === true
+  };
+}
+
 function sanitizeFeedbackMetric(metric, recordType) {
   const allowedOutcomes = recordType === "direct_edit_feedback" ? directEditFeedbackOutcomes : routingFeedbackOutcomes;
   if (!allowedOutcomes.includes(metric.outcome)) throw new Error("invalid feedback outcome");
@@ -405,6 +489,8 @@ function sanitizeFeedbackMetric(metric, recordType) {
 
 function sanitizeRecordTypeMetric(metric) {
   if (metric.recordType === "health_snapshot") return sanitizeHealthSnapshotMetric(metric);
+  if (metric.recordType === "live_observation") return sanitizeLiveObservationMetric(metric);
+  if (metric.recordType === "model_fit_evaluation") return sanitizeModelFitEvaluationMetric(metric);
   if (metric.recordType === "direct_edit_feedback") return sanitizeFeedbackMetric(metric, "direct_edit_feedback");
   if (metric.recordType === "routing_feedback") return sanitizeFeedbackMetric(metric, "routing_feedback");
   return {
@@ -620,6 +706,7 @@ function activeReservationCount(records, now = Date.now()) {
 }
 
 export async function getCostBudgetSnapshot(configuration, now = new Date()) {
+  const enforced = configuration.reliability?.costBudgetEnforced !== false;
   const dailyLimit = Number.isFinite(configuration.reliability?.dailyCostLimitUsd) ? configuration.reliability.dailyCostLimitUsd : null;
   const monthlyLimit = Number.isFinite(configuration.reliability?.monthlyCostLimitUsd) ? configuration.reliability.monthlyCostLimitUsd : null;
   const warningThresholdPercent = Number.isFinite(configuration.reliability?.warningThresholdPercent) ? configuration.reliability.warningThresholdPercent : 100;
@@ -639,6 +726,7 @@ export async function getCostBudgetSnapshot(configuration, now = new Date()) {
       monthlyLimitUsd: monthlyLimit,
       monthlySpentUsd,
       monthlyRemainingUsd: monthlyLimit === null ? null : normalizeCost(Math.max(0, monthlyLimit - monthlySpentUsd)),
+      enforced,
       dailyUsagePercent,
       monthlyUsagePercent,
       dailyWarning: dailyUsagePercent !== null && dailyUsagePercent >= warningThresholdPercent,
@@ -651,6 +739,7 @@ export async function getCostBudgetSnapshot(configuration, now = new Date()) {
 }
 
 export async function reserveCostBudget(configuration, executionId, reservedCostUsd) {
+  const enforced = configuration.reliability?.costBudgetEnforced !== false;
   const dailyCostLimitUsd = configuration.reliability?.dailyCostLimitUsd;
   const monthlyCostLimitUsd = configuration.reliability?.monthlyCostLimitUsd;
   if (!Number.isFinite(dailyCostLimitUsd) && !Number.isFinite(monthlyCostLimitUsd)) return { allowed: true };
@@ -665,7 +754,7 @@ export async function reserveCostBudget(configuration, executionId, reservedCost
     }
     const dailyCostUsd = periodCost(records, periods.day);
     const monthlyCostUsd = periodCost(records, periods.month);
-    if (Number.isFinite(dailyCostLimitUsd) && dailyCostUsd + reservedCostUsd > dailyCostLimitUsd) {
+    if (enforced && Number.isFinite(dailyCostLimitUsd) && dailyCostUsd + reservedCostUsd > dailyCostLimitUsd) {
       return {
         allowed: false,
         reason: "daily_cost_budget_exhausted",
@@ -677,7 +766,7 @@ export async function reserveCostBudget(configuration, executionId, reservedCost
         }
       };
     }
-    if (Number.isFinite(monthlyCostLimitUsd) && monthlyCostUsd + reservedCostUsd > monthlyCostLimitUsd) {
+    if (enforced && Number.isFinite(monthlyCostLimitUsd) && monthlyCostUsd + reservedCostUsd > monthlyCostLimitUsd) {
       return {
         allowed: false,
         reason: "monthly_cost_budget_exhausted",

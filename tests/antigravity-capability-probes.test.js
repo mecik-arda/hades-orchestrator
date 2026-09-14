@@ -139,7 +139,14 @@ test("CAP-05: web-read başarısı ve izin reddi ayrı raporlanır", async () =>
   const deniedAdapter = createProbeAdapter("probe-web-denied");
   const denied = await deniedAdapter.probeCapabilities({ model: "gemini_flash_3_8", capabilities: ["webRead"] });
   assert.equal(denied.webRead, "not_probed");
-  assert.equal(denied.failureClass, null);
+  assert.equal(denied.failureClass, "permission_denied");
+});
+
+test("CAP-05b: exception tabanlı izin reddi failureClass değerini korur", async () => {
+  const adapter = createProbeAdapter("probe-web-denied");
+  const result = await adapter.probeCapabilities({ model: "gemini_flash_3_8", capabilities: ["webRead"] });
+  assert.equal(result.webRead, "not_probed");
+  assert.equal(result.failureClass, "permission_denied");
 });
 
 test("CAP-06: bir capability hatası diğer capability sonucunu bozmaz", async () => {
@@ -271,8 +278,21 @@ test("CAP-RT-05: capability kayıtları health snapshot'a redakte edilerek yazı
     stdout: "STDOUT_SENTINEL",
     checkedAt: new Date().toISOString()
   }));
+  antigravity.healthCheck = async () => ({
+    installed: true,
+    version: "Antigravity CLI 1.2.3 VERSION_SENTINEL",
+    authValid: null,
+    executable: "C:\\tools\\agy.exe",
+    error: "HEALTH_ERROR_SENTINEL",
+    prompt: "HEALTH_PROMPT_SENTINEL",
+    stdout: "HEALTH_STDOUT_SENTINEL"
+  });
   const runtime = createBridgeRuntime({ configuration: createConfiguration(root, root), adapters: { antigravity } });
-  await runtime.health(["antigravity"], { probeModels: ["gemini_flash_3_8"], probeCapabilities: ["modelAccess", "workspaceRead"] });
+  const runtimeHealth = await runtime.health(["antigravity"], { probeModels: ["gemini_flash_3_8"], probeCapabilities: ["modelAccess", "workspaceRead"] });
+  assert.equal(runtimeHealth.adapters.antigravity.health.version, "1.2.3");
+  assert.equal(runtimeHealth.adapters.antigravity.health.error, "unavailable");
+  assert.equal(Object.hasOwn(runtimeHealth.adapters.antigravity.health, "prompt"), false);
+  assert.equal(Object.hasOwn(runtimeHealth.adapters.antigravity.health, "stdout"), false);
   const serialized = fs.readFileSync(path.join(root, "logs", "metrics", "bridge-health-runs.jsonl"), "utf8");
   assert.equal(serialized.includes("PROMPT_SENTINEL"), false);
   assert.equal(serialized.includes("STDOUT_SENTINEL"), false);
@@ -284,6 +304,10 @@ test("CAP-RT-05: capability kayıtları health snapshot'a redakte edilerek yazı
   assert.equal(probes.workspaceRead, "unavailable");
   assert.equal(probes.failureClass, "unclassified");
   assert.match(probes.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
+  const returnedProbe = (await runtime.health(["antigravity"], { probeModels: ["gemini_flash_3_8"], probeCapabilities: ["modelAccess"] })).adapters.antigravity.health.capabilityProbes.gemini_flash_3_8;
+  assert.equal(returnedProbe.failureClass, "unclassified");
+  assert.equal(Object.hasOwn(returnedProbe, "prompt"), false);
+  assert.equal(Object.hasOwn(returnedProbe, "stdout"), false);
 });
 
 test("CAP-RT-06: probe yeteneği olmayan adapter sessizce atlanır", async (t) => {

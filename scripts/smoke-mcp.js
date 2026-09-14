@@ -10,7 +10,8 @@ const transport = new StdioClientTransport({
   args: [path.join(projectRoot, "subagent-bridge", "src", "server.js")],
   env: {
     ...process.env,
-    SUBAGENT_BRIDGE_TRUSTED_WORKSPACE: projectRoot
+    SUBAGENT_BRIDGE_TRUSTED_WORKSPACE: projectRoot,
+    SUBAGENT_BRIDGE_ORCHESTRATOR_APPROVAL: ""
   }
 });
 const client = new Client({ name: "hades-orchestrator-smoke-test", version: "2.1.0" });
@@ -61,6 +62,7 @@ const expectedToolNames = [
   "check_glm_subagent",
   "check_subagent_bridge",
   "check_workspace_lock",
+  "check_provider_capability",
   "run_deepseek_subagent",
   "run_deepseek_edit_pilot",
   "run_glm_subagent",
@@ -78,11 +80,12 @@ const expectedToolNames = [
   "promote_memory"
 ];
 const expectedToolsAvailable = expectedToolNames.every((toolName) => toolNames.has(toolName));
+const orchestratorApprovalToolAbsent = !toolNames.has("approve_prepared_edit");
 const memoryProbeValid = Boolean(selectedMemoryPath && memoryRead?.structuredContent?.sha256 && memoryReview.structuredContent?.counts);
 const bridgeAdapters = Object.values(bridgeHealth.structuredContent?.adapters || {});
 const bridgeHealthValid = Boolean(bridgeHealth.structuredContent?.services?.coreSchemas && bridgeAdapters.length > 0 && bridgeHealth.structuredContent?.circuits && bridgeHealth.structuredContent?.costBudget && bridgeAdapters.every((adapter) => adapter.modePolicy?.defaultMode && Array.isArray(adapter.modePolicy?.allowedModes) && Array.isArray(adapter.configuredModels)));
 const antigravityHealthValid = Boolean(antigravityHealth.structuredContent?.modePolicy?.defaultMode && Array.isArray(antigravityHealth.structuredContent?.configuredModels));
 const workspaceLockHealthValid = Number.isInteger(workspaceLockHealth.structuredContent?.localActive) && Array.isArray(workspaceLockHealth.structuredContent?.externalDiskLocks);
-if (!expectedToolsAvailable || !health.structuredContent?.available || !glmHealth.structuredContent?.available || !antigravityHealthValid || !bridgeHealthValid || !workspaceLockHealthValid || !memoryHealth.structuredContent?.readable || !memoryHealth.structuredContent?.writable || !memoryProbeValid) {
+if (!expectedToolsAvailable || !orchestratorApprovalToolAbsent || !health.structuredContent?.available || !glmHealth.structuredContent?.available || !antigravityHealthValid || !bridgeHealthValid || !workspaceLockHealthValid || !memoryHealth.structuredContent?.readable || !memoryHealth.structuredContent?.writable || !memoryProbeValid) {
   process.exitCode = 1;
 }
