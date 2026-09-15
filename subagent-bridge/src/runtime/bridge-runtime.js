@@ -540,7 +540,9 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     let schemaValidationIssues = [];
     const attemptRecords = [];
     let cacheKey = null;
-    const abortListener = () => void cancel(executionId);
+    const abortListener = () => {
+      void cancel(executionId).catch(() => {});
+    };
     input.abortSignal?.addEventListener?.("abort", abortListener, { once: true });
     const grant = await coordinator.acquire(trustedWorkspace, input.mode, executionId, profile?.priority || 0);
     if (!grant) {
@@ -556,11 +558,14 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
         : null;
       const cachedResult = readOnlyCache.get(cacheKey);
       if (cachedResult) {
-        return withRuntimeMetrics(withModelIdentity({ ...cachedResult, metrics: { ...(cachedResult.metrics || {}), attempts: [] } }, route.model), 0, {
-          cacheHit: true,
-          queueWaitMs: grant.queueWaitMs,
-          adapterAttempts: 0
-        });
+        const verifiedKey = await readOnlyCache.keyFor({ workspace: trustedWorkspace, backend: route.backend, model: route.model, profile: input.profile, prompt: input.prompt });
+        if (verifiedKey === cacheKey) {
+          return withRuntimeMetrics(withModelIdentity({ ...cachedResult, metrics: { ...(cachedResult.metrics || {}), attempts: [] } }, route.model), 0, {
+            cacheHit: true,
+            queueWaitMs: grant.queueWaitMs,
+            adapterAttempts: 0
+          });
+        }
       }
       while (attemptNumber < budget.maxAttempts) {
         if (activeExecution.cancelled || input.abortSignal?.aborted) {
@@ -684,7 +689,10 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             attempts: attemptRecords
           });
            if (result.ok) {
-             readOnlyCache.set(cacheKey, lastResult);
+             if (cacheKey) {
+               const currentKey = await readOnlyCache.keyFor({ workspace: trustedWorkspace, backend: route.backend, model: route.model, profile: input.profile, prompt: input.prompt });
+               if (currentKey === cacheKey) readOnlyCache.set(cacheKey, lastResult);
+             }
              return lastResult;
            }
           if (["schema_invalid", "output_parse_invalid"].includes(failureClass) && input.maxSchemaRepairAttempts !== undefined) {

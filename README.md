@@ -49,7 +49,7 @@ The runtime policy is loaded from `~/.config/subagent-bridge/config.json`; execu
 
 ## Verified baseline
 
-The package is `hades-orchestrator@2.2.0`, the runtime is Node.js 20.9+ and ESM; CI uses Node.js 22/24. The canonical record lives under `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, with the optional view at `<workspace>/.hades/runs.jsonl`. The current regression is `517/517 PASS`; `npm run verify`, `npm run verify:ci` and `npm run smoke` succeed.
+The package is `hades-orchestrator@2.2.0`, the runtime is Node.js 20.9+ and ESM; CI uses Node.js 22/24. The canonical record lives under `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, with the optional view at `<workspace>/.hades/runs.jsonl`. The current regression is `533/533 PASS`; `npm run verify`, `npm run verify:ci` and `npm run smoke` succeed.
 
 ## Quick start
 
@@ -181,7 +181,7 @@ Gemini Pro and Codex were invoked with real file-backed results; timeout overrid
 
 ### Test baseline
 
-The current frozen regression baseline is `517/517 PASS`; timing-sensitive heavy verifications must run serially on the same machine.
+The current frozen regression baseline is `533/533 PASS`; timing-sensitive heavy verifications must run serially on the same machine.
 
 ### Known non-blocking items
 

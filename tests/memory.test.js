@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -67,6 +68,20 @@ test("kalıcı hafıza güvenli biçimde saklanır, aranır ve okunur", (context
   const readResult = readPersistentMemory(configuration, { relativePath: stored.relativePath });
   assert.match(readResult.content, /Codex ana karar vericidir/);
   assert.equal(readResult.sha256, stored.sha256);
+});
+
+test("hafıza araması büyük notun tam dosya SHA-256 değerini döndürür", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-search-hash-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  configuration.memory.maxSearchFileBytes = 64;
+  const stored = storePersistentMemory(configuration, createMemoryInput({ title: "Codex", content: "Kısa içerik" }));
+  const notePath = path.join(vaultRootPath, stored.relativePath);
+  fs.appendFileSync(notePath, "\n" + "x".repeat(1024), "utf8");
+  const expectedSha256 = crypto.createHash("sha256").update(fs.readFileSync(notePath)).digest("hex");
+  const searchResult = searchPersistentMemory(configuration, { query: "Codex", limit: 5 });
+  assert.equal(searchResult.matches.length, 1);
+  assert.equal(searchResult.matches[0].sha256, expectedSha256);
 });
 
 test("kalıcı hafıza path traversal ve izinsiz klasörü reddeder", (context) => {

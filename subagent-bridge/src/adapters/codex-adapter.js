@@ -25,7 +25,7 @@ function resolveCodexModel(alias) {
   return { valid: true, model };
 }
 
-function classifyCodexError(error, exitCode, stdout, stderr) {
+function classifyCodexError(error, exitCode, stdout, stderr, signal = null) {
   if (error) {
     const message = String(error.message || error).toLocaleLowerCase("en-US");
     if (/timed out|timeout|zaman aşımı/i.test(message)) {
@@ -35,6 +35,10 @@ function classifyCodexError(error, exitCode, stdout, stderr) {
       return { valid: false, errorClass: "executable_missing", reason: "codex executable not found" };
     }
     return { valid: false, errorClass: "process_error", reason: message || "process error" };
+  }
+
+  if (signal || exitCode === null) {
+    return { valid: false, errorClass: "process_exit", reason: signal ? `process terminated by signal ${signal}` : "process did not report an exit code" };
   }
 
   if (exitCode !== null && exitCode !== 0) {
@@ -189,15 +193,16 @@ export function createCodexAdapter(configuration) {
 
         activeExecutionHandles.delete(request.executionId);
 
-        const classification = classifyCodexError(null, processResult.code, processResult.stdout, processResult.stderr);
+        const classification = classifyCodexError(null, processResult.code, processResult.stdout, processResult.stderr, processResult.signal);
         if (!classification.valid) {
           return createFailureSubagentResult("codex", resultModel, {
             error: classification.reason,
             retryable: classification.errorClass === "rate_limited",
             timedOut: false,
-            exitCode: processResult.code ?? 1,
+            exitCode: processResult.code,
             durationMs: Date.now() - startedAt,
-            reason: classification.errorClass
+            reason: classification.errorClass,
+            metrics: { signal: processResult.signal ?? null }
           });
         }
 

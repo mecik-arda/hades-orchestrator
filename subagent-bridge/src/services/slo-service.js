@@ -40,10 +40,10 @@ export function summarizeSlo(records, rawPolicy, now = Date.now()) {
   const allowedFailures = observedRuns > 0 ? Math.floor(observedRuns * (1 - policy.availabilityTarget) + 1e-9) : 0;
   const budgetExhausted = failedRuns > allowedFailures;
   const consumedRatio = allowedFailures > 0 ? Number((failedRuns / allowedFailures).toFixed(4)) : (failedRuns > 0 ? 1 : 0);
-  const errorBudgetState = budgetExhausted
-    ? "exhausted"
-    : observedRuns < policy.minimumRuns
-      ? "insufficient_data"
+  const errorBudgetState = observedRuns < policy.minimumRuns
+    ? "insufficient_data"
+    : budgetExhausted
+      ? "exhausted"
       : consumedRatio >= 0.8
         ? "warning"
         : "healthy";

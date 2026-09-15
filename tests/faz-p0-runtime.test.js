@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -433,6 +434,37 @@ test("P0-CANCEL-BACKOFF: cancellation prevents a post-backoff execution", async 
   assert.equal(attempts, 1);
 });
 
+test("P0-CANCEL-ABORT: abort listener adapter iptal reddini yakalar", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-p0-cancel-abort-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let startExecution;
+  let finishExecution;
+  const executionStarted = new Promise((resolve) => { startExecution = resolve; });
+  const executionFinished = new Promise((resolve) => { finishExecution = resolve; });
+  const codex = createFakeAdapter("codex", async (request) => {
+    startExecution();
+    await executionFinished;
+    return successResult("codex", request.model);
+  });
+  codex.cancel = async () => {
+    throw new Error("adapter cancel failed");
+  };
+  const runtime = createBridgeRuntime({ configuration: createConfiguration(root, root), adapters: { codex }, sleep: async () => {} });
+  const controller = new AbortController();
+  let unhandledReason = null;
+  const onUnhandledRejection = (reason) => { unhandledReason = reason; };
+  process.on("unhandledRejection", onUnhandledRejection);
+  t.after(() => process.removeListener("unhandledRejection", onUnhandledRejection));
+  const running = runtime.run({ target: "codex", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0, abortSignal: controller.signal });
+  await executionStarted;
+  controller.abort();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(unhandledReason, null);
+  finishExecution();
+  const result = await running;
+  assert.equal(result.reason, "cancelled");
+});
+
 test("P0-TIMEOUT: returned read-only timeout retains classification and retries", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-p0-timeout-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -799,4 +831,40 @@ test("P0-FALLBACK: yalnız read-only task profile policy hedeflerine geçer", as
   assert.equal(result.metrics.fallbacks, 1);
   assert.equal(codexAttempts, 2);
   assert.equal(antigravityAttempts, 1);
+});
+
+test("P0-CACHE-RACE: yürütme sırasında değişen workspace sonucu cache'lenmez", async (t) => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-p0-cache-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-p0-cache-state-"));
+  t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(stateRoot, { recursive: true, force: true }));
+  childProcess.execFileSync("git", ["init", workspaceRoot], { stdio: "ignore" });
+  childProcess.execFileSync("git", ["-C", workspaceRoot, "config", "user.email", "test@example.invalid"]);
+  childProcess.execFileSync("git", ["-C", workspaceRoot, "config", "user.name", "Bridge Test"]);
+  fs.writeFileSync(path.join(workspaceRoot, "README.md"), "state", "utf8");
+  childProcess.execFileSync("git", ["-C", workspaceRoot, "add", "README.md"]);
+  childProcess.execFileSync("git", ["-C", workspaceRoot, "commit", "-m", "initial"], { stdio: "ignore" });
+  const configuration = createConfiguration(workspaceRoot, stateRoot);
+  configuration.orchestration = {
+    taskProfiles: { cached_review: { target: "codex", mode: "read_only", priority: 1, cacheable: true } },
+    readOnlyCache: { enabled: true, ttlMs: 600000, maxEntryBytes: 262144, maxEntries: 100 }
+  };
+  let attempts = 0;
+  const codex = createFakeAdapter("codex", async (request) => {
+    attempts += 1;
+    fs.writeFileSync(path.join(workspaceRoot, `artifact-${attempts}.txt`), "generated", "utf8");
+    return successResult("codex", request.model);
+  });
+  const runtime = createBridgeRuntime({ configuration, adapters: { codex }, sleep: async () => {} });
+  const request = { target: "profile", profile: "cached_review", prompt: "inspect repository state", mode: "read_only", trustedWorkspace: workspaceRoot, caller: "test", delegationDepth: 0 };
+  const first = await runtime.run({ ...request });
+  assert.equal(first.ok, true);
+  assert.equal(first.metrics.cacheHit, false);
+  assert.equal(attempts, 1);
+  for (const entry of fs.readdirSync(workspaceRoot)) {
+    if (entry.startsWith("artifact-")) fs.rmSync(path.join(workspaceRoot, entry), { force: true });
+  }
+  const second = await runtime.run({ ...request });
+  assert.equal(second.metrics.cacheHit, false);
+  assert.equal(attempts, 2);
 });

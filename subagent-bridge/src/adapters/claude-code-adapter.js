@@ -77,7 +77,25 @@ function resolveClaudeResultModel(jsonOutput) {
   return models.length === 1 ? models[0] : null;
 }
 
-function classifyClaudeError(error, exitCode, stdout, stderr, jsonOutput) {
+function classifyClaudeError(error, exitCode, stdout, stderr, jsonOutput, signal = null) {
+  if (error) {
+    const message = String(error.message || error).toLocaleLowerCase("en-US");
+
+    if (/timed out|timeout|zaman aşımı/i.test(message)) {
+      return { valid: false, errorClass: "timeout", reason: "execution timed out" };
+    }
+
+    if (/enoent|not found|does not exist|command not found/i.test(message)) {
+      return { valid: false, errorClass: "executable_missing", reason: "claude executable not found" };
+    }
+
+    return { valid: false, errorClass: "process_error", reason: message || "process error" };
+  }
+
+  if (signal || exitCode === null) {
+    return { valid: false, errorClass: "process_exit", reason: signal ? `process terminated by signal ${signal}` : "process did not report an exit code" };
+  }
+
   if (jsonOutput && jsonOutput.is_error) {
     const result = String(jsonOutput.result || "").toLocaleLowerCase("en-US");
 
@@ -108,20 +126,8 @@ function classifyClaudeError(error, exitCode, stdout, stderr, jsonOutput) {
     if (!jsonOutput.result) {
       return { valid: false, errorClass: "process_error", reason: "empty result" };
     }
-  }
 
-  if (error) {
-    const message = String(error.message || error).toLocaleLowerCase("en-US");
-
-    if (/timed out|timeout|zaman aşımı/i.test(message)) {
-      return { valid: false, errorClass: "timeout", reason: "execution timed out" };
-    }
-
-    if (/enoent|not found|does not exist|command not found/i.test(message)) {
-      return { valid: false, errorClass: "executable_missing", reason: "claude executable not found" };
-    }
-
-    return { valid: false, errorClass: "process_error", reason: message || "process error" };
+    return { valid: false, errorClass: "process_error", reason: "provider reported an error" };
   }
 
   if (exitCode !== null && exitCode !== 0) {
@@ -150,7 +156,7 @@ function mapClaudeErrorToResult(errorClass, reason, backend, model, durationMs, 
     model,
     result: null,
     error: reason,
-    reason,
+    reason: errorClass,
     durationMs,
     metrics: { retries, ...metrics }
   };
@@ -169,6 +175,8 @@ function mapClaudeErrorToResult(errorClass, reason, backend, model, durationMs, 
     case "permission_denied":
       return { ...base, retryable: false, timedOut: false, exitCode: 1 };
     case "executable_missing":
+      return { ...base, retryable: false, timedOut: false, exitCode: null };
+    case "process_exit":
       return { ...base, retryable: false, timedOut: false, exitCode: null };
     case "non_zero_exit":
     case "process_error":
@@ -292,6 +300,11 @@ export function createClaudeCodeAdapter(configuration) {
 
         activeExecutionHandles.delete(request.executionId);
 
+        if (processResult.signal || processResult.code === null) {
+          const reason = processResult.signal ? `process terminated by signal ${processResult.signal}` : "process did not report an exit code";
+          return mapClaudeErrorToResult("process_exit", reason, "claude_code", model.model, Date.now() - startedAt, 0, { signal: processResult.signal ?? null });
+        }
+
         const parsed = parseClaudeJson(processResult.stdout);
         if (!parsed.ok) {
           return mapClaudeErrorToResult(
@@ -306,7 +319,8 @@ export function createClaudeCodeAdapter(configuration) {
           processResult.code,
           processResult.stdout,
           processResult.stderr,
-          parsed.json
+          parsed.json,
+          processResult.signal
         );
 
         if (!classification.valid) {
@@ -314,7 +328,7 @@ export function createClaudeCodeAdapter(configuration) {
             classification.errorClass, classification.reason || "unknown error",
             "claude_code", model.model,
             Date.now() - startedAt, 0,
-            { totalCostUsd: Number.isFinite(parsed.json?.total_cost_usd) ? parsed.json.total_cost_usd : null }
+            { totalCostUsd: Number.isFinite(parsed.json?.total_cost_usd) ? parsed.json.total_cost_usd : null, signal: processResult.signal ?? null }
           );
         }
 
@@ -348,7 +362,8 @@ export function createClaudeCodeAdapter(configuration) {
             retryable: false,
             timedOut: true,
             exitCode: null,
-            durationMs: Date.now() - startedAt
+            durationMs: Date.now() - startedAt,
+            reason: "timeout"
           });
         }
 

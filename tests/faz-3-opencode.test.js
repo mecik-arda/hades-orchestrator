@@ -169,6 +169,78 @@ test("OC-AC-11a: parseOpenCodeOutput gürültülü stdout içindeki geçerli sat
   assert.equal(parsed.usage.tokens.total, 40);
 });
 
+test("OC-AC-11b: parseOpenCodeOutput yalnız kullanım verisini başarı saymaz", () => {
+  const parsed = parseOpenCodeOutput('{"type":"step_finish","part":{"tokens":{"total":40,"input":10,"output":30}}}');
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.error, "no usable output");
+});
+
+test("OC-AC-11c: non-zero OpenCode exit parse edilebilir stdout olsa da hata döner", async () => {
+  const adapter = createOpenCodeAdapter({
+    opencode: {
+      executable: process.execPath,
+      execArgs: ["-e", "process.stdout.write('{\"type\":\"text\",\"part\":{\"text\":\"unexpected\"}}\\n', () => process.exit(2));"],
+      allowedModels: ["deepseek/deepseek-v4-pro"]
+    }
+  });
+  const result = await adapter.execute({
+    executionId: "non-zero-exit",
+    backend: "opencode",
+    prompt: "inspect",
+    model: "deepseek/deepseek-v4-pro",
+    mode: "read_only",
+    workspace: process.cwd(),
+    delegationDepth: 0,
+    caller: "test",
+    timeoutMs: 5000
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "non_zero_exit");
+  assert.equal(result.exitCode, 2);
+});
+
+test("OC-AC-11d: sinyalle sonlanan OpenCode süreci başarı sayılmaz", () => {
+  assert.equal(classifyOpenCodeError(null, null, "partial text", "").valid, false);
+  assert.equal(classifyOpenCodeError(null, null, "partial text", "", "SIGKILL").errorClass, "non_zero_exit");
+});
+
+test("OC-AC-11e: yalnız boşluk içeren OpenCode metni başarı sayılmaz", async () => {
+  const adapter = createOpenCodeAdapter({
+    opencode: {
+      executable: process.execPath,
+      execArgs: ["-e", "process.stdout.write('{\"type\":\"text\",\"part\":{\"text\":\"   \"}}\\n', () => process.exit(0));"],
+      allowedModels: ["deepseek/deepseek-v4-pro"]
+    }
+  });
+  const result = await adapter.execute({
+    executionId: "whitespace-output",
+    backend: "opencode",
+    prompt: "inspect",
+    model: "deepseek/deepseek-v4-pro",
+    mode: "read_only",
+    workspace: process.cwd(),
+    delegationDepth: 0,
+    caller: "test",
+    timeoutMs: 5000
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "no usable output");
+});
+
+test("OC-AC-11f: sinyal sonucu null exitCode ve sinyal telemetrisini taşır", () => {
+  const result = createFailureSubagentResult("opencode", "deepseek/deepseek-v4-pro", {
+    error: "process terminated by signal SIGTERM",
+    retryable: false,
+    timedOut: false,
+    exitCode: null,
+    reason: "non_zero_exit",
+    metrics: { signal: "SIGTERM" }
+  });
+  assert.equal(result.exitCode, null);
+  assert.equal(result.metrics.signal, "SIGTERM");
+  assert.equal(validateSubagentResult(result).success, true);
+});
+
 test("OC-AC-14c: bilinmeyen exit code genel sınıfa düşer ve kodu korur", () => {
   const classification = classifyOpenCodeError(null, 42, "", "");
   assert.equal(classification.valid, false);

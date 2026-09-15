@@ -19,6 +19,11 @@ test("CODEX-DIAG-09: bilinmeyen exit code genel sınıfa düşer ve kodu korur",
   assert.match(classification.reason, /42/);
 });
 
+test("CODEX-DIAG-09a: sinyalle sonlanan süreç başarı sayılmaz", () => {
+  assert.equal(classifyCodexError(null, null, "partial text", "").valid, false);
+  assert.equal(classifyCodexError(null, null, "partial text", "", "SIGTERM").errorClass, "process_exit");
+});
+
 test("CX-AC-01: CodexAdapter AgentAdapter kontratını uygular", () => {
   const adapter = createAdapter("codex", {
     canRead: true, canWrite: true,

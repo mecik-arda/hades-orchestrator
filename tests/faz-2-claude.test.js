@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { createClaudeCodeAdapter, resolveModel, classifyClaudeError, parseClaudeJson, CLAUDE_MODEL_MAP } from "../subagent-bridge/src/adapters/claude-code-adapter.js";
+import { createBridgeRuntime } from "../subagent-bridge/src/runtime/bridge-runtime.js";
 import { createAdapter } from "../subagent-bridge/src/adapters/agent-adapter-base.js";
 import { checkCapability } from "../subagent-bridge/src/services/capability-service.js";
 import { shouldRetry, isMutationStateUnknown } from "../subagent-bridge/src/services/retry-service.js";
@@ -150,6 +154,47 @@ test("CC-AC-14: classifyClaudeError timeout", () => {
   const classification = classifyClaudeError(err, null, "", "");
   assert.equal(classification.valid, false);
   assert.equal(classification.errorClass, "timeout");
+});
+
+test("CC-AC-14a: sinyalle sonlanan Claude süreci başarı sayılmaz", () => {
+  assert.equal(classifyClaudeError(null, null, "text", "", { is_error: false, result: "ok" }).valid, false);
+  assert.equal(classifyClaudeError(null, null, "text", "", { is_error: false, result: "ok" }, "SIGTERM").errorClass, "process_exit");
+});
+
+test("CC-AC-14b: sinyal/exit kodu yokluğu JSON hata sınıflarından önceliklidir", () => {
+  const classification = classifyClaudeError(null, null, "", "", { is_error: true, result: "Not logged in · Please run /login" });
+  assert.equal(classification.valid, false);
+  assert.equal(classification.errorClass, "process_exit");
+});
+
+test("CC-AC-14c: bilinmeyen is_error metni başarı sayılmaz", () => {
+  const classification = classifyClaudeError(null, 0, "", "", { is_error: true, result: "unexpected provider failure" });
+  assert.equal(classification.valid, false);
+  assert.equal(classification.errorClass, "process_error");
+});
+
+test("CC-AC-14d: adapter hata sınıfını kanonik reason olarak döndürür", async () => {
+  const adapter = createClaudeCodeAdapter({
+    claude_code: {
+      executable: process.execPath,
+      execArgs: ["-e", "process.stdout.write(JSON.stringify({ is_error: true, result: 'unexpected provider failure' }), () => process.exit(0));", "--"]
+    }
+  });
+  const result = await adapter.execute({
+    executionId: "claude-unknown-error",
+    backend: "claude_code",
+    prompt: "inspect",
+    model: "sonnet",
+    mode: "read_only",
+    workspace: process.cwd(),
+    delegationDepth: 0,
+    caller: "test",
+    timeoutMs: 5000
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "process_error");
+  assert.equal(result.error, "provider reported an error");
+  assert.equal(validateSubagentResult(result).success, true);
 });
 
 test("CC-AC-15: PublicToolArgs internal fields inject edilemez", () => {
@@ -362,4 +407,33 @@ test("CC-VERIFY-08: schema failure retry → execute count = 2, final success", 
   assert.ok(finalResult);
   assert.equal(finalResult.ok, true);
   assert.equal(validateSubagentResult(finalResult).success, true);
+});
+
+test("CC-AC-14e: rate_limited kanonik sınıfı runtime retry ve attempt telemetrisine taşınır", async (t) => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-runtime-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-runtime-state-"));
+  t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(stateRoot, { recursive: true, force: true }));
+  const adapter = createClaudeCodeAdapter({
+    claude_code: {
+      executable: process.execPath,
+      execArgs: ["-e", "process.stdout.write(JSON.stringify({ is_error: true, result: 'Rate limit exceeded. Try again.' }), () => process.exit(0));", "--"],
+      timeoutMs: 5000
+    }
+  });
+  const configuration = {
+    packageRoot: process.cwd(),
+    statePaths: {
+      logs: path.join(stateRoot, "logs"),
+      state: path.join(stateRoot, "state"),
+      cache: path.join(stateRoot, "cache")
+    },
+    claude_code: { timeoutMs: 5000, maxRetries: 2, allowedModes: ["read_only"], defaultMode: "read_only", executable: process.execPath }
+  };
+  const runtime = createBridgeRuntime({ configuration, adapters: { claude_code: adapter }, sleep: async () => {} });
+  const result = await runtime.run({ target: "native_claude", model: "sonnet", prompt: "inspect", mode: "read_only", trustedWorkspace: workspaceRoot, caller: "test", delegationDepth: 0 });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "rate_limited");
+  assert.ok(result.metrics.attempts.length >= 2);
+  assert.equal(result.metrics.attempts.every((attempt) => attempt.failureClass === "rate_limited"), true);
 });

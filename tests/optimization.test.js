@@ -340,22 +340,77 @@ test("OPT-01h: farklı workspace'ler aynı kilit dizininde birbirini engellemez"
   coordinator.release("isolation-b");
 });
 
-test("OPT-02: read-only cache yalnız Git revision anahtarıyla sonuç döndürür", async (t) => {
+test("OPT-02: read-only cache içerik parmak iziyle anahtar üretir ve belirsiz kapsamı reddeder", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cache-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   childProcess.execFileSync("git", ["init", root], { stdio: "ignore" });
   childProcess.execFileSync("git", ["-C", root, "config", "user.email", "test@example.invalid"]);
   childProcess.execFileSync("git", ["-C", root, "config", "user.name", "Bridge Test"]);
   fs.writeFileSync(path.join(root, "README.md"), "cache", "utf8");
-  childProcess.execFileSync("git", ["-C", root, "add", "README.md"]);
+  fs.writeFileSync(path.join(root, ".gitignore"), "local-input\nignored-dir/\n", "utf8");
+  childProcess.execFileSync("git", ["-C", root, "add", "README.md", ".gitignore"]);
   childProcess.execFileSync("git", ["-C", root, "commit", "-m", "initial"], { stdio: "ignore" });
   const cache = createReadOnlyResultCache();
   const key = await cache.keyFor({ workspace: root, backend: "codex", model: "default", profile: "review", prompt: "inspect" });
   cache.set(key, { ok: true, result: "cached", metrics: { retries: 0 } });
   assert.equal(cache.get(key).result, "cached");
   assert.equal(await cache.keyFor({ workspace: root, backend: "codex", model: "default", profile: "review", prompt: "different" }) === key, false);
+  fs.writeFileSync(path.join(root, "local-input"), "ignored but mutable", "utf8");
+  const ignoredKey = await cache.keyFor({ workspace: root, backend: "codex", model: "default", profile: "review", prompt: "inspect" });
+  assert.equal(typeof ignoredKey, "string");
+  assert.equal(ignoredKey === key, false);
+  fs.writeFileSync(path.join(root, "local-input"), "ignored content changed", "utf8");
+  assert.equal(await cache.keyFor({ workspace: root, backend: "codex", model: "default", profile: "review", prompt: "inspect" }) === ignoredKey, false);
   fs.writeFileSync(path.join(root, "dirty.txt"), "dirty", "utf8");
+  const untrackedKey = await cache.keyFor({ workspace: root, backend: "codex", model: "default", profile: "review", prompt: "inspect" });
+  assert.equal(typeof untrackedKey, "string");
+  assert.equal(untrackedKey === ignoredKey, false);
+  fs.writeFileSync(path.join(root, "README.md"), "staged-alpha", "utf8");
+  childProcess.execFileSync("git", ["-C", root, "add", "README.md"]);
+  fs.writeFileSync(path.join(root, "README.md"), "cache", "utf8");
+  const stagedAlphaKey = await cache.keyFor({ workspace: root, backend: "codex", model: "default", profile: "review", prompt: "inspect" });
+  fs.writeFileSync(path.join(root, "README.md"), "staged-beta", "utf8");
+  childProcess.execFileSync("git", ["-C", root, "add", "README.md"]);
+  fs.writeFileSync(path.join(root, "README.md"), "cache", "utf8");
+  const stagedBetaKey = await cache.keyFor({ workspace: root, backend: "codex", model: "default", profile: "review", prompt: "inspect" });
+  assert.equal(typeof stagedAlphaKey, "string");
+  assert.equal(stagedAlphaKey === stagedBetaKey, false);
+  fs.mkdirSync(path.join(root, "ignored-dir"));
+  fs.writeFileSync(path.join(root, "ignored-dir", "artifact.bin"), "artifact", "utf8");
   assert.equal(await cache.keyFor({ workspace: root, backend: "codex", model: "default", profile: "review", prompt: "inspect" }), null);
+});
+
+test("OPT-02b: cache parmak izi boyut sınırını aşan ignored dosyada kapanır", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cache-size-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  childProcess.execFileSync("git", ["init", root], { stdio: "ignore" });
+  childProcess.execFileSync("git", ["-C", root, "config", "user.email", "test@example.invalid"]);
+  childProcess.execFileSync("git", ["-C", root, "config", "user.name", "Bridge Test"]);
+  fs.writeFileSync(path.join(root, "README.md"), "cache", "utf8");
+  fs.writeFileSync(path.join(root, ".gitignore"), "big.bin\n", "utf8");
+  childProcess.execFileSync("git", ["-C", root, "add", "README.md", ".gitignore"]);
+  childProcess.execFileSync("git", ["-C", root, "commit", "-m", "initial"], { stdio: "ignore" });
+  const cache = createReadOnlyResultCache();
+  fs.writeFileSync(path.join(root, "big.bin"), Buffer.alloc(1048577, 120));
+  assert.equal(await cache.keyFor({ workspace: root, backend: "codex", model: "default", profile: "review", prompt: "inspect" }), null);
+  fs.writeFileSync(path.join(root, "big.bin"), "small", "utf8");
+  assert.equal(typeof await cache.keyFor({ workspace: root, backend: "codex", model: "default", profile: "review", prompt: "inspect" }), "string");
+});
+
+test("OPT-01f1: writer intent bekleyen istek kuyruk kapasitesine dahildir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-coordinator-pending-capacity-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lockDirectory = path.join(root, "locks");
+  const workspaceDirectory = path.join(lockDirectory, crypto.createHash("sha256").update(root).digest("hex"));
+  fs.mkdirSync(workspaceDirectory, { recursive: true });
+  fs.writeFileSync(path.join(workspaceDirectory, "guard.lock"), "held", "utf8");
+  const coordinator = createWorkspaceCoordinator({ lockDirectory, maxQueuedPerWorkspace: 1 });
+  const pendingWriter = coordinator.acquire(root, "edit", "pending-writer");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(coordinator.snapshot().localQueued, 1);
+  assert.equal(await coordinator.acquire(root, "edit", "overflow-writer"), null);
+  assert.equal(coordinator.cancel("pending-writer"), true);
+  assert.equal(await pendingWriter, null);
 });
 
 test("OPT-02a: read-only cache en eski girişi LRU sınırında çıkarır", () => {

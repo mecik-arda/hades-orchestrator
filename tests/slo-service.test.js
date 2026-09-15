@@ -23,14 +23,14 @@ test("SLO-01: politika varsayilanlari ve gecersiz deger reddi", () => {
   assert.throws(() => normalizeSloPolicy({ minimumRuns: -1 }), /invalid SLO policy/);
 });
 
-test("SLO-02: minimum run altinda yalnizca butce tukenmediyse insufficient_data doner", () => {
+test("SLO-02: minimum run altinda error budget durumu insufficient_data doner", () => {
   const summary = summarizeSlo([runRecord(1), runRecord(2), runRecord(3), runRecord(4)], policy(), now);
   assert.equal(summary.observedRuns, 4);
   assert.equal(summary.minimumRunsMet, false);
   assert.equal(summary.errorBudget.state, "insufficient_data");
   assert.equal(summary.availabilityRate, 1);
   const exhausted = summarizeSlo([runRecord(1), runRecord(2, "failed"), runRecord(3), runRecord(4)], policy(), now);
-  assert.equal(exhausted.errorBudget.state, "exhausted");
+  assert.equal(exhausted.errorBudget.state, "insufficient_data");
   const empty = summarizeSlo([], policy(), now);
   assert.equal(empty.errorBudget.state, "insufficient_data");
   assert.equal(empty.latencyTargetMet, null);

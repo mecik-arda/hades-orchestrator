@@ -40,6 +40,64 @@ function calculateSha256(content) {
   return crypto.createHash("sha256").update(content).digest("hex");
 }
 
+function withMemoryContent(vaultRoot, filePath, maximumBytes, callback) {
+  let realPath;
+  let linkStatus;
+  try {
+    realPath = fs.realpathSync(filePath);
+    linkStatus = fs.lstatSync(filePath);
+  } catch {
+    return null;
+  }
+  if (!linkStatus.isFile() || linkStatus.isSymbolicLink()) return null;
+  const normalizedRoot = path.resolve(vaultRoot);
+  if (realPath !== normalizedRoot && !realPath.startsWith(normalizedRoot + path.sep)) return null;
+  const noFollow = process.platform === "win32" ? 0 : (fs.constants.O_NOFOLLOW || 0);
+  let descriptor;
+  try {
+    descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
+  } catch {
+    return null;
+  }
+  try {
+    const status = fs.fstatSync(descriptor);
+    if (!status.isFile()) return null;
+    if (linkStatus.ino && status.ino && linkStatus.ino !== status.ino) return null;
+    const limitedBytes = Math.min(status.size, maximumBytes);
+    const limitedBuffer = Buffer.alloc(limitedBytes);
+    if (limitedBytes > 0) {
+      const bytesRead = fs.readSync(descriptor, limitedBuffer, 0, limitedBytes, 0);
+      if (bytesRead !== limitedBytes) return null;
+    }
+    const computeSha256 = () => {
+      const hash = crypto.createHash("sha256").update(limitedBuffer);
+      let position = limitedBytes;
+      if (status.size > limitedBytes) {
+        const chunk = Buffer.allocUnsafe(65536);
+        while (position < status.size) {
+          const requested = Math.min(chunk.length, status.size - position);
+          const bytesRead = fs.readSync(descriptor, chunk, 0, requested, position);
+          if (bytesRead !== requested) throw new Error("memory content changed during read");
+          hash.update(chunk.subarray(0, bytesRead));
+          position += bytesRead;
+        }
+      }
+      return hash.digest("hex");
+    };
+    let result;
+    try {
+      result = callback(limitedBuffer.toString("utf8"), computeSha256);
+    } catch {
+      return null;
+    }
+    const after = fs.fstatSync(descriptor);
+    if (after.size !== status.size || after.mtimeMs !== status.mtimeMs) return null;
+    return result;
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 function isValidUtcIsoDate(value) {
   return typeof value === "string" && utcIsoPattern.test(value) && !Number.isNaN(Date.parse(value));
 }
@@ -692,28 +750,29 @@ export function searchPersistentMemory(configuration, input) {
   const limit = Math.min(input.limit, configuration.memory.maxSearchResults);
   const now = Number.isFinite(input.now) ? input.now : Date.now();
   const candidates = files.map((filePath) => {
-    const content = readLimitedText(filePath, configuration.memory.maxSearchFileBytes);
     const relativePath = path.relative(vaultRoot, filePath).replace(/\\/g, "/");
-    const validUntil = extractQuotedFrontmatterValue(content, "valid_until");
-    const validUntilTime = validUntil ? Date.parse(validUntil) : Number.NaN;
-    const expired = Number.isFinite(validUntilTime) && validUntilTime < now;
-    const stage = extractQuotedFrontmatterValue(content, "stage") || "published";
-    const draft = stage === "draft";
-    const score = scoreMemory(relativePath, content, normalizedQuery, tokens, now);
-    const contentSha256 = calculateSha256(content);
-    const secretBlocked = score > 0 && hasSecretLikeContent(content);
-    const injectionCategories = score > 0 && !secretBlocked ? detectInjectionCategories(content) : [];
-    return {
-      relativePath,
-      score,
-      excerpt: secretBlocked || injectionCategories.length > 0 ? null : wrapUntrustedMemoryContent(createExcerpt(content, normalizedQuery, tokens, configuration.memory.maxExcerptCharacters)),
-      sha256: contentSha256,
-      expired,
-      draft,
-      secretBlocked,
-      injectionCategories
-    };
-  });
+    return withMemoryContent(vaultRoot, filePath, configuration.memory.maxSearchFileBytes, (content, computeSha256) => {
+      const validUntil = extractQuotedFrontmatterValue(content, "valid_until");
+      const validUntilTime = validUntil ? Date.parse(validUntil) : Number.NaN;
+      const expired = Number.isFinite(validUntilTime) && validUntilTime < now;
+      const stage = extractQuotedFrontmatterValue(content, "stage") || "published";
+      const draft = stage === "draft";
+      const score = scoreMemory(relativePath, content, normalizedQuery, tokens, now);
+      const contentSha256 = score > 0 ? computeSha256() : null;
+      const secretBlocked = score > 0 && hasSecretLikeContent(content);
+      const injectionCategories = score > 0 && !secretBlocked ? detectInjectionCategories(content) : [];
+      return {
+        relativePath,
+        score,
+        excerpt: secretBlocked || injectionCategories.length > 0 ? null : wrapUntrustedMemoryContent(createExcerpt(content, normalizedQuery, tokens, configuration.memory.maxExcerptCharacters)),
+        sha256: contentSha256,
+        expired,
+        draft,
+        secretBlocked,
+        injectionCategories
+      };
+    });
+  }).filter((candidate) => candidate !== null);
   const eligible = candidates.filter((match) => match.score > 0 && (input.includeExpired === true || !match.expired) && (input.includeDrafts === true || !match.draft));
   const excludedExpired = input.includeExpired === true ? 0 : candidates.filter((candidate) => candidate.score > 0 && candidate.expired).length;
   const excludedDrafts = input.includeDrafts === true ? 0 : candidates.filter((candidate) => candidate.score > 0 && candidate.draft).length;

@@ -57,14 +57,14 @@ function parseOpenCodeOutput(stdout) {
     }
   }
 
-  if (!textContent && !finalUsage) {
+  if (!textContent || !textContent.trim()) {
     return { ok: false, error: "no usable output", text: null, usage: null };
   }
 
-  return { ok: true, text: textContent || null, usage: finalUsage };
+  return { ok: true, text: textContent, usage: finalUsage };
 }
 
-function classifyOpenCodeError(error, exitCode, stdout, stderr) {
+function classifyOpenCodeError(error, exitCode, stdout, stderr, signal = null) {
   if (error) {
     const message = String(error.message || error).toLocaleLowerCase("en-US");
 
@@ -75,6 +75,10 @@ function classifyOpenCodeError(error, exitCode, stdout, stderr) {
       return { valid: false, errorClass: "executable_missing", reason: "opencode executable not found" };
     }
     return { valid: false, errorClass: "process_error", reason: message || "process error" };
+  }
+
+  if (signal || exitCode === null) {
+    return { valid: false, errorClass: "non_zero_exit", reason: signal ? `process terminated by signal ${signal}` : "process did not report an exit code" };
   }
 
   if (exitCode !== null && exitCode !== 0) {
@@ -225,6 +229,19 @@ export function createOpenCodeAdapter(configuration) {
           });
         }
 
+        const classification = classifyOpenCodeError(null, processResult.code, processResult.stdout, processResult.stderr, processResult.signal);
+        if (!classification.valid) {
+          return createFailureSubagentResult("opencode", model.model, {
+            error: classification.reason,
+            retryable: classification.errorClass === "rate_limited",
+            timedOut: false,
+            exitCode: processResult.code,
+            durationMs: Date.now() - startedAt,
+            reason: classification.errorClass,
+            metrics: { signal: processResult.signal ?? null }
+          });
+        }
+
         const parsed = parseOpenCodeOutput(processResult.stdout);
         if (!parsed.ok) {
           return createFailureSubagentResult("opencode", model.model, {
@@ -235,7 +252,7 @@ export function createOpenCodeAdapter(configuration) {
         }
 
         return createSuccessSubagentResult("opencode", model.model, {
-          result: parsed.text || "",
+          result: parsed.text,
           durationMs: Date.now() - startedAt,
           metrics: {
             totalCostUsd: Number.isFinite(parsed.usage?.cost) ? parsed.usage.cost : null

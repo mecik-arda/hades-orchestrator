@@ -224,7 +224,8 @@ export function createWorkspaceCoordinator({ lockDirectory, staleLockMs = 150000
 
   function acquire(workspace, mode, executionId, priority = 0) {
     const queue = queueFor(workspace);
-    if (queue.length >= maxQueuedPerWorkspace) return Promise.resolve(null);
+    const pendingForWorkspace = [...pending.values()].filter((entry) => workspaceKey(entry.workspace) === workspaceKey(workspace)).length;
+    if (queue.length + pendingForWorkspace >= maxQueuedPerWorkspace) return Promise.resolve(null);
     return new Promise((resolve) => {
       const enqueuedAt = Date.now();
       const entry = { workspace, mode, executionId, priority, enqueuedAt, cancelled: false, resolve, retryTimer: null };
