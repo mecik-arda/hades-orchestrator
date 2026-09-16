@@ -1,6 +1,6 @@
 ---
 name: proje-kesif-planlama
-description: Yeni bir projeye veya büyük bir göreve başlamadan önce Gemini 3.8 Flash, DeepSeek Flash ve GPT Luna ile keşif ve araştırma yapar, bulguları doğrulanabilir bir proje planına dönüştürür ve planı Sol denetiminden geçirir.
+description: Yeni bir projeye veya büyük bir göreve başlamadan önce Gemini 3.8 Flash ve DeepSeek Flash'ı kapasitelerine göre birlikte, GPT Luna ile kısa araştırma yaparak keşif yürütür, bulguları doğrulanabilir bir proje planına dönüştürür ve planı Sol denetiminden geçirir.
 ---
 
 # Proje Keşif ve Planlama
@@ -22,6 +22,8 @@ Küçük, kapsamı net ve doğrudan uygulanabilir görevlerde bu skill kullanıl
 - GPT Luna: hızlı fiyat/performans keşfi, dar ve iyi tanımlı araştırma soruları, ikinci hızlı görüş. Araç: `run_codex_subagent(model=gpt-5.6-luna)`, salt okunur.
 - Sol: plan denetimi ve nihai teknik değerlendirme. Araç: `run_codex_subagent(model=gpt-5.6-sol)`, salt okunur.
 
+Gemini 3.8 Flash ve DeepSeek Flash birbirinin alternatifi değildir; keşif aşamasında birlikte çalıştırılır ve her biri kendi kapasitesine göre kullanılır. Gemini 3.8 Flash dış ve kamuya açık bağlamı toplar; DeepSeek Flash yerel repository gerçeğini ve yapılandırılmış bulguları üretir. İkisinin çıktısı tek planda birleştirilir; birinin diğerinin yerine geçmesi veya yalnız biriyle keşfin bitirilmesi beklenmez.
+
 GLM aboneliği pasif olduğundan hiçbir GLM modeli, profili veya fallback'i çağrılmaz.
 
 ## Aşamalar
@@ -32,6 +34,7 @@ GLM aboneliği pasif olduğundan hiçbir GLM modeli, profili veya fallback'i ça
 - Araştırmayı bağımsız alt sorulara böl; aynı işi iki modele tekrar ettirme.
 - Gemini 3.8 Flash'a yalnız web ve bağlam toplama görevi ver; dosya inceleme, komut çalıştırma, kaynak satırı doğrulama veya karar verme görevi verme.
 - DeepSeek Flash ile yerel repository yapısını, mevcut desenleri, bağımlılıkları ve teknik kısıtları incele.
+- Gemini 3.8 Flash ve DeepSeek Flash'ı aynı keşif aşamasında birlikte çalıştır ve ikisini birbirinin alternatifi gibi kullanma; farklı sağlayıcılar olduklarından eşzamanlı başlatılabilirler.
 - Luna ile hızlı ve dar soruları yanıtla; sonuçları fiyat/performans ve hız açısından karşılaştır.
 - Antigravity çağrıları ortak ayar kilidi kullandığından Gemini çağrılarını seri çalıştır; paralel toplu Gemini çağrısı başlatma.
 - Her subagent çağrısına tek rol, açık hedef, ilgili dosyalar ve kabul kriterleri ver.
@@ -63,6 +66,7 @@ GLM aboneliği pasif olduğundan hiçbir GLM modeli, profili veya fallback'i ça
 - Subagent çağrılarına secret, kabuk erişimi, subagent delegasyonu, commit veya geri alınamaz işlem verilmez.
 - DeepSeek'e Vault kökü veya kişisel veri workspace olarak verilmez.
 - Yerel kod analizi ile internet araştırması aynı çağrıda birleştirilmez.
+- Gemini 3.8 Flash ve DeepSeek Flash birbirinin alternatifi değil, tamamlayıcısıdır; keşif ikisi birlikte yürütülerek tamamlanır.
 - Doğrulanmamış bilgi plana kesin iddia olarak yazılmaz.
 - Plan, Sol denetiminden geçmeden uygulamaya başlanmaz.
 
