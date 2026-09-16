@@ -1,6 +1,6 @@
 ---
 name: proje-kesif-planlama
-description: Yeni bir projeye veya büyük bir göreve başlamadan önce Gemini 3.8 Flash ve DeepSeek Flash'ı kapasitelerine göre birlikte, GPT Luna ile kısa araştırma yaparak keşif yürütür, bulguları doğrulanabilir bir proje planına dönüştürür ve planı Sol denetiminden geçirir.
+description: Yeni bir projeye veya büyük bir göreve başlamadan önce Gemini 3.8 Flash ve DeepSeek Flash'ı kapasitelerine göre birlikte, uygun salt-okunur rota varsa GPT Luna ile kısa araştırma yaparak keşif yürütür, bulguları doğrulanabilir bir proje planına dönüştürür ve planı Sol denetiminden geçirir.
 ---
 
 # Proje Keşif ve Planlama
@@ -17,10 +17,12 @@ Küçük, kapsamı net ve doğrudan uygulanabilir görevlerde bu skill kullanıl
 
 ## Rol ve model eşlemesi
 
-- Gemini 3.8 Flash: geniş web ve bağlam keşfi, kamuya açık sayfa ve doküman taraması, aday bulgu üretimi. Araç: `run_antigravity_subagent(model=gemini_flash_3_8)`, salt okunur.
+- Gemini 3.8 Flash: geniş web ve bağlam keşfi, kamuya açık sayfa ve doküman taraması, aday bulgu üretimi. Araç: `run_antigravity_subagent(model=gemini_flash_3_8)`, salt okunur. Prompt'u kısa tut ve uzun bağlamı parçalara böl. Aynı daraltılmış dış araştırma alt sorusunda `timeout` olarak sınıflandırılmış iki ardışık Gemini Flash sonucu alınırsa ikinci denemeden önce promptu küçült; toplam süre ve maliyet bütçesi uygunsa ve Gemini Pro rotası ile salt-okunur yetenekler doğrulanmışsa araştırmayı Gemini Pro'ya yükselt ve sınırlama olarak kaydet. İzin, kimlik doğrulama, rate-limit ve araç politikası hataları timeout sayılmaz.
 - DeepSeek Flash: yerel repository analizi, yapılandırılmış bulgular, sınır ve risk tespiti. Araç: `run_deepseek_subagent(model=deepseek_flash, mode=read_only)`.
-- GPT Luna: hızlı fiyat/performans keşfi, dar ve iyi tanımlı araştırma soruları, ikinci hızlı görüş. Araç: `run_codex_subagent(model=gpt-5.6-luna)`, salt okunur.
+- GPT Luna (opsiyonel): hızlı fiyat/performans keşfi, dar ve iyi tanımlı araştırma soruları. Araç: `run_codex_subagent(model=gpt-5.6-luna)`, salt okunur. Salt-okunur Luna rotası yoksa adımı atla ve sınırlama olarak kaydet; araştırma için yazma yetkili varyantı kullanma.
 - Sol: plan denetimi ve nihai teknik değerlendirme. Araç: `run_codex_subagent(model=gpt-5.6-sol)`, salt okunur.
+
+Çağrılardan önce erişilebilirliği `check_subagent_bridge` ve ilgili `check_*` aracıyla doğrula; rota yoksa adımı atla ve sınırlamayı kaydet.
 
 Gemini 3.8 Flash ve DeepSeek Flash birbirinin alternatifi değildir; keşif aşamasında birlikte çalıştırılır ve her biri kendi kapasitesine göre kullanılır. Gemini 3.8 Flash dış ve kamuya açık bağlamı toplar; DeepSeek Flash yerel repository gerçeğini ve yapılandırılmış bulguları üretir. İkisinin çıktısı tek planda birleştirilir; birinin diğerinin yerine geçmesi veya yalnız biriyle keşfin bitirilmesi beklenmez.
 
@@ -35,8 +37,10 @@ GLM aboneliği pasif olduğundan hiçbir GLM modeli, profili veya fallback'i ça
 - Gemini 3.8 Flash'a yalnız web ve bağlam toplama görevi ver; dosya inceleme, komut çalıştırma, kaynak satırı doğrulama veya karar verme görevi verme.
 - DeepSeek Flash ile yerel repository yapısını, mevcut desenleri, bağımlılıkları ve teknik kısıtları incele.
 - Gemini 3.8 Flash ve DeepSeek Flash'ı aynı keşif aşamasında birlikte çalıştır ve ikisini birbirinin alternatifi gibi kullanma; farklı sağlayıcılar olduklarından eşzamanlı başlatılabilirler.
-- Luna ile hızlı ve dar soruları yanıtla; sonuçları fiyat/performans ve hız açısından karşılaştır.
+- Luna varsa hızlı ve dar soruları yanıtla; rota yoksa adımı atla ve sınırlama olarak kaydet.
 - Antigravity çağrıları ortak ayar kilidi kullandığından Gemini çağrılarını seri çalıştır; paralel toplu Gemini çağrısı başlatma.
+- Uzun bağlam gerektiren dış araştırmayı küçük parçalara böl; rol eşlemesindeki timeout yükseltme kuralını uygula ve yükseltmeyi planda belirt.
+- Bir rota yoksa veya art arda başarısız olursa keşfi kilitleme; adımı atla, sınırlamayı kaydet ve kalan kanıtlarla ilerle.
 - Her subagent çağrısına tek rol, açık hedef, ilgili dosyalar ve kabul kriterleri ver.
 
 ### 2. Doğrulama ve sentez
@@ -51,22 +55,32 @@ GLM aboneliği pasif olduğundan hiçbir GLM modeli, profili veya fallback'i ça
 
 - Planı yazılı ve uygulanabilir hale getir; her iş kalemini doğrulanabilir kabul kriteriyle eşleştir.
 - Öncelik sırası, bağımlılıklar ve geri alınabilirlik notlarını ekle.
+- Planı, kullanıcı açıkça istediğinde ve mevcut oturum yazma yetkisine sahipse proje doküman alanına (ör. `belgeler/plan/` veya `docs/plans/`) tarihli bir Markdown dosyası olarak yaz ve dosya yolunu raporla; yazma yetkisi yoksa planı konuşma çıktısı olarak sun. Plan yazımı araştırma mutasyonu değil, ayrı yetkilendirilmiş teslim işlemidir.
 - Secret, kimlik bilgisi ve kişisel veri plan metnine yazılmaz.
 
 ### 4. Sol denetimi
 
 - Planı `run_codex_subagent(model=gpt-5.6-sol)` çağrısıyla salt okunur denetlet.
 - Sol'a planı, kararları, varsayımları ve doğrulanamayan noktaları eksiksiz ver; dosya erişimi yoksa ilgili içeriği prompt içinde sağla.
-- Sol bulgularını kritik, orta ve düşük olarak ayır; kritik ve orta bulguları planı güncelleyerek kapat.
+- Sol bulgularını kritik, orta ve düşük olarak ayır; her kritik ve orta bulguyu şu üç yoldan biriyle kapat: plan revizyonuyla gider ve yeniden doğrula, kanıtlı gerekçeyle kabul etme, ya da açık risk olarak kullanıcı kararına bırak (bu durumda plan uygulamaya hazır sayılmaz).
 - Sol çıktısı danışmanlıktır; nihai kararı ana orkestratör verir ve gerekli iddiaları bağımsız doğrular.
+
+## Doğrulama protokolü
+
+- Dış iddiaları kaynak URL ile teyit et; erişilemeyen veya doğrulanamayan kaynağı "doğrulanamadı" işaretle.
+- Yerel iddiaları dosya yolu ve mümkünse satır numarasıyla destekle; kilit iddiaları grep veya okuma ile doğrula.
+- Kaynaklı ve doğrulanamayan bulguları planda ayrı göster.
+- Sayısal veya mimari iddiayı ölçüme ya da koda bağlamadan kesin ifade kullanma.
 
 ## Kurallar ve sınırlar
 
-- Keşif ve planlama salt okunurdur; bu aşamada repository değiştirilmez.
+- Araştırma ve subagent çağrıları salt okunurdur; repository araştırma sırasında değiştirilmez. Plan belgesi yalnız kullanıcı açıkça istediğinde ve oturum yazma yetkisine sahipse proje doküman alanına yazılır; aksi durumda plan konuşma çıktısı olarak sunulur.
 - Subagent çağrılarına secret, kabuk erişimi, subagent delegasyonu, commit veya geri alınamaz işlem verilmez.
+- Araştırma için yazma yetkili subagent varyantları (edit) kullanılmaz.
+- Bir subagent rotası yoksa veya art arda başarısız olursa keşfi kilitleme; adımı atla, sınırlamayı kaydet ve planı kalan kanıtlarla tamamla.
 - DeepSeek'e Vault kökü veya kişisel veri workspace olarak verilmez.
 - Yerel kod analizi ile internet araştırması aynı çağrıda birleştirilmez.
-- Gemini 3.8 Flash ve DeepSeek Flash birbirinin alternatifi değil, tamamlayıcısıdır; keşif ikisi birlikte yürütülerek tamamlanır.
+- Gemini 3.8 Flash ve DeepSeek Flash birbirinin alternatifi değil, tamamlayıcısıdır; normal durumda keşif ikisi birlikte yürütülür, erişilemeyen rota sınırlama kaydıyla atlanabilir.
 - Doğrulanmamış bilgi plana kesin iddia olarak yazılmaz.
 - Plan, Sol denetiminden geçmeden uygulamaya başlanmaz.
 
@@ -81,11 +95,15 @@ Plan en az şu başlıkları içerir:
 - İş kırılımı ve kilometre taşları
 - Riskler ve azaltma önlemleri
 - Doğrulanamayan veya açık noktalar
+- Sınırlamalar ve atlanan adımlar (yükseltilen veya çalıştırılamayan rotalar)
+- Kaynaklar (doğrulanan ve doğrulanamayan)
 - Sol denetim özeti ve kapatılan bulgular
 
 ## Bitirme koşulu
 
 - Keşif bulguları kaynağa veya yerel doğrulamaya bağlıdır.
 - Plan kabul kriterleriyle ve doğrulama yöntemleriyle eşleşir.
-- Sol denetimi tamamlanmış, kritik ve orta bulgular kapatılmıştır.
+- Sol denetimi tamamlanmış; kritik ve orta bulgular giderilip yeniden doğrulanmış, kanıtla reddedilmiş veya açık risk olarak kullanıcıya bırakılmıştır.
 - Açık ve doğrulanamayan noktalar kullanıcıya açıkça bildirilmiştir.
+- Atlanan veya başarısız adımlar sınırlama olarak açıkça kaydedilmiştir.
+- Plan belgesi yazıldıysa biçim, zorunlu başlıklar, kaynak ayrımı ve `git diff --check` gibi uygulanabilir kontroller `dogrulama-kapisi` temel kapısına tabidir.
