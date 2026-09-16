@@ -65,7 +65,7 @@ export const publicToolSchemas = {
     workspace: z.string().min(1),
     files: z.array(z.string()).max(200).default([]),
     contextFiles: z.array(z.string()).max(100).default([]),
-    skills: z.array(z.enum(["commit-at", "guvenlik-ve-sertlestirme", "kod-denetleyicisi", "otomatik-dokumantasyon", "veri-seti-analizcisi", "proje-kesif-planlama"])).max(6).default([]),
+    skills: z.array(z.enum(["commit-at", "guvenlik-ve-sertlestirme", "kod-denetleyicisi", "otomatik-dokumantasyon", "veri-seti-analizcisi", "proje-kesif-planlama", "model-saglayici-ekleme", "dogrulama-kapisi", "mcp-sozlesme-denetimi", "hafiza-vault-bakimi", "maliyet-ve-butce-denetimi", "bagimlilik-guvenligi"])).max(12).default([]),
     acceptanceCriteria: z.array(z.string()).min(1).max(50),
     riskSignals: riskSignalsSchema.optional()
   }).strict(),

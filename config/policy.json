@@ -12,7 +12,13 @@
                                    "kod-denetleyicisi",
                                    "otomatik-dokumantasyon",
                                    "veri-seti-analizcisi",
-                                   "proje-kesif-planlama"
+                                   "proje-kesif-planlama",
+                                   "model-saglayici-ekleme",
+                                   "dogrulama-kapisi",
+                                   "mcp-sozlesme-denetimi",
+                                   "hafiza-vault-bakimi",
+                                   "maliyet-ve-butce-denetimi",
+                                   "bagimlilik-guvenligi"
                                ]
                },
     "deepseek":  {
