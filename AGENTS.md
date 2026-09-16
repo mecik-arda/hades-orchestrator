@@ -48,6 +48,7 @@ Bu projede ana orkestratör ve son karar verici, OpenCode oturumunda aktif kulla
 ## Skill kullanımı
 
 - Skill adı açıkça verilirse veya görev skill açıklamasıyla doğrudan eşleşirse `.agents/skills/<skill-name>/SKILL.md` dosyasını tamamen oku ve uygula.
+- Proje dışında global kullanım için skill'ler `~/.config/opencode/skills`, `~/.codex/skills`, `~/.claude/skills` ve `~/.agents/skills` altına aynı içerikle kurulur; proje kopyası her zaman kaynak kabul edilir.
 - DeepSeek danışmanlığı aynı uzmanlık talimatına ihtiyaç duyuyorsa `run_deepseek_subagent` çağrısındaki `skills` alanına ilgili adı ekle.
 
 ## Proje doğrulaması

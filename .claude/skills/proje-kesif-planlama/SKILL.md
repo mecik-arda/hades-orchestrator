@@ -1,6 +1,6 @@
 ---
 name: proje-kesif-planlama
-description: Yeni bir projeye veya büyük bir göreve başlamadan önce Gemini 3.8 Flash ve DeepSeek Flash'ı kapasitelerine göre birlikte, uygun salt-okunur rota varsa GPT Luna ile kısa araştırma yaparak keşif yürütür, bulguları doğrulanabilir bir proje planına dönüştürür ve planı Sol denetiminden geçirir.
+description: Yeni bir projeye veya büyük bir göreve başlamadan önce Gemini 3.8 Flash ve DeepSeek Flash'ı kapasitelerine göre birlikte, uygun salt-okunur rota varsa GPT Luna ile kısa araştırma yaparak keşif yürütür, doğrulanabilir plan belgesini GPT Luna edit ile seçili tek dosyaya yazdırır ve planı Sol denetiminden geçirir.
 ---
 
 # Proje Keşif ve Planlama
@@ -19,7 +19,7 @@ Küçük, kapsamı net ve doğrudan uygulanabilir görevlerde bu skill kullanıl
 
 - Gemini 3.8 Flash: geniş web ve bağlam keşfi, kamuya açık sayfa ve doküman taraması, aday bulgu üretimi. Araç: `run_antigravity_subagent(model=gemini_flash_3_8)`, salt okunur. Prompt'u kısa tut ve uzun bağlamı parçalara böl. Aynı daraltılmış dış araştırma alt sorusunda `timeout` olarak sınıflandırılmış iki ardışık Gemini Flash sonucu alınırsa ikinci denemeden önce promptu küçült; toplam süre ve maliyet bütçesi uygunsa ve Gemini Pro rotası ile salt-okunur yetenekler doğrulanmışsa araştırmayı Gemini Pro'ya yükselt ve sınırlama olarak kaydet. İzin, kimlik doğrulama, rate-limit ve araç politikası hataları timeout sayılmaz.
 - DeepSeek Flash: yerel repository analizi, yapılandırılmış bulgular, sınır ve risk tespiti. Araç: `run_deepseek_subagent(model=deepseek_flash, mode=read_only)`.
-- GPT Luna (opsiyonel): hızlı fiyat/performans keşfi, dar ve iyi tanımlı araştırma soruları. Araç: `run_codex_subagent(model=gpt-5.6-luna)`, salt okunur. Salt-okunur Luna rotası yoksa adımı atla ve sınırlama olarak kaydet; araştırma için yazma yetkili varyantı kullanma.
+- GPT Luna: iki rol. (a) Opsiyonel hızlı araştırma: dar ve iyi tanımlı sorular, salt okunur; araç `run_codex_subagent(model=gpt-5.6-luna)`. Salt-okunur rota yoksa bu adımı atla ve sınırlama olarak kaydet. (b) Plan belgesi yazımı: kontrollü edit; araç `codexLunaEdit`, yalnız seçili tek plan dosyası ve açık kabul kriterleriyle.
 - Sol: plan denetimi ve nihai teknik değerlendirme. Araç: `run_codex_subagent(model=gpt-5.6-sol)`, salt okunur.
 
 Çağrılardan önce erişilebilirliği `check_subagent_bridge` ve ilgili `check_*` aracıyla doğrula; rota yoksa adımı atla ve sınırlamayı kaydet.
@@ -55,7 +55,11 @@ GLM aboneliği pasif olduğundan hiçbir GLM modeli, profili veya fallback'i ça
 
 - Planı yazılı ve uygulanabilir hale getir; her iş kalemini doğrulanabilir kabul kriteriyle eşleştir.
 - Öncelik sırası, bağımlılıklar ve geri alınabilirlik notlarını ekle.
-- Planı, kullanıcı açıkça istediğinde ve mevcut oturum yazma yetkisine sahipse proje doküman alanına (ör. `belgeler/plan/` veya `docs/plans/`) tarihli bir Markdown dosyası olarak yaz ve dosya yolunu raporla; yazma yetkisi yoksa planı konuşma çıktısı olarak sun. Plan yazımı araştırma mutasyonu değil, ayrı yetkilendirilmiş teslim işlemidir.
+- Plan belgesini `codexLunaEdit` ile seçili tek dosyaya yazdır: hedef dosya yolunu (ör. `belgeler/plan/<tarih>-<konu>.md` veya `docs/plans/<tarih>-<konu>.md`), doğrulanmış plan içeriğini ve kabul kriterlerini ver.
+- Edit öncesi çalışma ağacı durumunu kaydet ve hedef yolu canonical olarak çöz; workspace dışı yol, symlink kaçışı veya `..` geçişini reddet.
+- Edit sonrası değişen yolları başlangıç durumuyla karşılaştır; değişiklik kümesi yalnız seçilen plan dosyasını içermelidir. Kapsam ihlalinde değişikliği kabul etme, yetkiyi genişletme; seçilen dosyanın diff'ini ve zorunlu başlıkları denetle.
+- Tek plan dosyası oluşturma, kullanıcı plan yazımını açıkça istediğinde izinlidir; aksi halde orkestratör onayına tabidir. Çoklu dosya değişikliği kapsam ihlalidir ve fail-closed reddedilir.
+- Kullanıcı açıkça istemediyse, yazma yetkisi yoksa veya Luna edit rotası yoksa planı konuşma çıktısı olarak sun ve planı yazma adımını sınırlama olarak kaydet. Plan yazımı araştırma mutasyonu değil, ayrı yetkilendirilmiş teslim işlemidir.
 - Secret, kimlik bilgisi ve kişisel veri plan metnine yazılmaz.
 
 ### 4. Sol denetimi
@@ -63,6 +67,7 @@ GLM aboneliği pasif olduğundan hiçbir GLM modeli, profili veya fallback'i ça
 - Planı `run_codex_subagent(model=gpt-5.6-sol)` çağrısıyla salt okunur denetlet.
 - Sol'a planı, kararları, varsayımları ve doğrulanamayan noktaları eksiksiz ver; dosya erişimi yoksa ilgili içeriği prompt içinde sağla.
 - Sol bulgularını kritik, orta ve düşük olarak ayır; her kritik ve orta bulguyu şu üç yoldan biriyle kapat: plan revizyonuyla gider ve yeniden doğrula, kanıtlı gerekçeyle kabul etme, ya da açık risk olarak kullanıcı kararına bırak (bu durumda plan uygulamaya hazır sayılmaz).
+- Plan belgesi yazıldıysa revizyonu `codexLunaEdit` ile aynı seçili dosyada uygula; revizyondan önce araç erişimini ve yazma yetkisini yeniden doğrula; rota kullanılamıyorsa revizyonu konuşma çıktısı olarak ver.
 - Sol çıktısı danışmanlıktır; nihai kararı ana orkestratör verir ve gerekli iddiaları bağımsız doğrular.
 
 ## Doğrulama protokolü
@@ -74,9 +79,10 @@ GLM aboneliği pasif olduğundan hiçbir GLM modeli, profili veya fallback'i ça
 
 ## Kurallar ve sınırlar
 
-- Araştırma ve subagent çağrıları salt okunurdur; repository araştırma sırasında değiştirilmez. Plan belgesi yalnız kullanıcı açıkça istediğinde ve oturum yazma yetkisine sahipse proje doküman alanına yazılır; aksi durumda plan konuşma çıktısı olarak sunulur.
+- Araştırma ve subagent çağrıları salt okunurdur; repository araştırma sırasında değiştirilmez. Plan belgesi yalnız kullanıcı açıkça istediğinde ve oturum yazma yetkisine sahipse `codexLunaEdit` ile seçili tek dosyaya yazılır; aksi durumda plan konuşma çıktısı olarak sunulur.
 - Subagent çağrılarına secret, kabuk erişimi, subagent delegasyonu, commit veya geri alınamaz işlem verilmez.
-- Araştırma için yazma yetkili subagent varyantları (edit) kullanılmaz.
+- Araştırma için yazma yetkili subagent varyantı kullanılmaz; edit yalnız plan belgesi teslimi için ve seçili tek dosyada kullanılır.
+- Luna edit çağrısı plan belgesi dışında hiçbir dosyayı değiştirmez; kod, yapılandırma veya çoklu dosya edit kapsamına girmez.
 - Bir subagent rotası yoksa veya art arda başarısız olursa keşfi kilitleme; adımı atla, sınırlamayı kaydet ve planı kalan kanıtlarla tamamla.
 - DeepSeek'e Vault kökü veya kişisel veri workspace olarak verilmez.
 - Yerel kod analizi ile internet araştırması aynı çağrıda birleştirilmez.
@@ -106,4 +112,4 @@ Plan en az şu başlıkları içerir:
 - Sol denetimi tamamlanmış; kritik ve orta bulgular giderilip yeniden doğrulanmış, kanıtla reddedilmiş veya açık risk olarak kullanıcıya bırakılmıştır.
 - Açık ve doğrulanamayan noktalar kullanıcıya açıkça bildirilmiştir.
 - Atlanan veya başarısız adımlar sınırlama olarak açıkça kaydedilmiştir.
-- Plan belgesi yazıldıysa biçim, zorunlu başlıklar, kaynak ayrımı ve `git diff --check` gibi uygulanabilir kontroller `dogrulama-kapisi` temel kapısına tabidir.
+- Plan belgesi `codexLunaEdit` ile yazıldıysa dosya mevcut, zorunlu başlıkları içeriyor ve edit öncesi/sonrası değişen yol karşılaştırmasıyla yalnız seçili dosya değişmiştir; `git diff --check` yalnız biçim kontrolü sağlar ve kapsam denetiminin yerine geçmez.
