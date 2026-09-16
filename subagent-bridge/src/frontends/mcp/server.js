@@ -224,7 +224,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
 
   server.registerTool("check_deepseek_subagent", {
     title: "DeepSeek subagent bağlantısını kontrol et",
-    description: "OpenCode yürütücüsünü ve DeepSeek Pro/Flash model eşlemesini secret değerlerini göstermeden kontrol eder.",
+    description: "OpenCode yürütücüsünü ve DeepSeek Pro/Flash model eşlemesini secret değerlerini göstermeden kontrol eder. flashModelAlias deepseek_flash canonical deepseek/deepseek-flash kimliğine, yani DeepSeek-V4.1-Flash sürümüne çözülür.",
     inputSchema: {},
     annotations: readOnlyAnnotations
   }, safe(async () => {
@@ -235,14 +235,14 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
 
   server.registerTool("run_deepseek_subagent", {
     title: "DeepSeek V4 Pro veya Flash subagent çalıştır",
-    description: "OpenCode üzerinden DeepSeek Pro veya Flash'ı read-only veya kontrollü edit modunda çalıştırır. Edit yalnız seçilmiş dosyaları disposable workspace sonrası trusted host workspace'e doğrulanmış promotion ile uygular.",
+    description: "OpenCode üzerinden DeepSeek Pro veya Flash'ı read-only veya kontrollü edit modunda çalıştırır. deepseek_flash aliası canonical deepseek/deepseek-flash kimliğine, yani DeepSeek-V4.1-Flash sürümüne çözülür. Edit yalnız seçilmiş dosyaları disposable workspace sonrası trusted host workspace'e doğrulanmış promotion ile uygular.",
     inputSchema: publicToolSchemas.runDeepSeek.shape,
     annotations: executionAnnotations
   }, safe(handlers.runDeepSeek));
 
   server.registerTool("run_deepseek_edit_pilot", {
     title: "DeepSeek disposable edit pilotu çalıştır",
-    description: "DeepSeek Pro veya Flash'a yalnız bridge-owned disposable workspace içinde kontrollü dosya düzenleme görevi verir; ana workspace'e değişiklik uygulamaz.",
+    description: "DeepSeek Pro veya Flash'a (deepseek_flash canonical deepseek/deepseek-flash, DeepSeek-V4.1-Flash) yalnız bridge-owned disposable workspace içinde kontrollü dosya düzenleme görevi verir; ana workspace'e değişiklik uygulamaz.",
     inputSchema: publicToolSchemas.runDeepSeekEditPilot.shape,
     annotations: executionAnnotations
   }, safe(handlers.runDeepSeekEditPilot));

@@ -10,6 +10,17 @@ function createRunId() {
   return crypto.randomUUID();
 }
 
+export const DEEPSEEK_FLASH_MODEL_DOCUMENTED_VERSION = "DeepSeek-V4.1-Flash";
+export const DEEPSEEK_FLASH_MODEL_VERSION_VERIFIED_AT = "2026-09-16";
+export const DEEPSEEK_FLASH_MODEL_VERSION_REVIEW_AFTER = "2026-12-15";
+export const DEEPSEEK_FLASH_MODEL_VERSION_SOURCE_URL = "https://api-docs.deepseek.com/quick_start/pricing";
+
+export function isCalendarDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
 export function resolveDeepSeekModel(configuration, model = "deepseek_pro") {
   if (model === "deepseek_pro") return configuration.deepseek.openCodeModel;
   if (model === "deepseek_flash") return configuration.deepseek.openCodeFlashModel;
@@ -89,7 +100,12 @@ export async function checkDeepSeek(configuration) {
     executable: health.executable,
     version: health.version,
     model: configuration.deepseek.openCodeModel,
+    flashModelAlias: "deepseek_flash",
     flashModel: configuration.deepseek.openCodeFlashModel,
+    flashModelDocumentedVersion: DEEPSEEK_FLASH_MODEL_DOCUMENTED_VERSION,
+    flashModelVersionVerifiedAt: DEEPSEEK_FLASH_MODEL_VERSION_VERIFIED_AT,
+    flashModelVersionReviewAfter: DEEPSEEK_FLASH_MODEL_VERSION_REVIEW_AFTER,
+    flashModelVersionSourceUrl: DEEPSEEK_FLASH_MODEL_VERSION_SOURCE_URL,
     proModelAvailable: hasExactModelId(models, configuration.deepseek.openCodeModel),
     flashModelAvailable: hasExactModelId(models, configuration.deepseek.openCodeFlashModel),
     exitCode: health.installed ? 0 : 1

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadConfiguration, loadRuntimeConfiguration, validateWorkspace } from "../subagent-bridge/src/config.js";
+import { assertOpenCodeModelsAllowed, loadConfiguration, loadRuntimeConfiguration, validateWorkspace } from "../subagent-bridge/src/config.js";
 
 test("izinli kök içindeki workspace kabul edilir", () => {
   const root = path.resolve("C:\\Users\\ornek\\Desktop\\Projeler");
@@ -114,8 +114,9 @@ test("provider rol profilleri exact model kullanır ve edit fallback policy ile 
   assert.deepEqual({ target: profiles.glm53_flash_implementation.target, model: profiles.glm53_flash_implementation.model, mode: profiles.glm53_flash_implementation.mode, priority: profiles.glm53_flash_implementation.priority, cacheable: profiles.glm53_flash_implementation.cacheable }, { target: "glm", model: "glm_5_3_flash", mode: "edit", priority: 6, cacheable: false });
   assert.deepEqual(profiles.glm53_flash_implementation.fallbackTargets, [
     { target: "glm", model: "glm_5_2" },
-    { target: "opencode", model: "deepseek/deepseek-v4-flash" }
+    { target: "opencode", model: "deepseek/deepseek-flash" }
   ]);
+  assert.deepEqual({ target: profiles.low_cost_analysis.target, model: profiles.low_cost_analysis.model, mode: profiles.low_cost_analysis.mode }, { target: "opencode", model: "deepseek/deepseek-flash", mode: "read_only" });
 });
 
 test("deepseek-readonly agent dış dizin erişimini açıkça reddeder", () => {
@@ -124,6 +125,32 @@ test("deepseek-readonly agent dış dizin erişimini açıkça reddeder", () => 
     : path.resolve("opencode.jsonc.example");
   const opencodeConfiguration = JSON.parse(fs.readFileSync(opencodePath, "utf8"));
   assert.equal(opencodeConfiguration.agent["deepseek-readonly"].permission.external_directory, "deny");
+});
+
+test("DeepSeek Flash canonical kimliğe bağlıdır ve legacy kimlik uyumluluk için korunur", () => {
+  const policy = JSON.parse(fs.readFileSync(path.resolve("config/policy.json"), "utf8"));
+  assert.equal(policy.deepseek.openCodeModel, "deepseek/deepseek-v4-pro");
+  assert.equal(policy.deepseek.openCodeFlashModel, "deepseek/deepseek-flash");
+  const agents = JSON.parse(fs.readFileSync(path.resolve("config/agents.json"), "utf8"));
+  const allowedModels = agents.agents.opencode.allowedModels;
+  assert.ok(allowedModels.includes("deepseek/deepseek-flash"));
+  assert.ok(allowedModels.includes("deepseek/deepseek-v4-flash"));
+  assert.equal(allowedModels.includes("deepseek/deepseek-v4.1-flash"), false);
+  assert.equal(JSON.stringify(policy).includes("deepseek-v4.1-flash"), false);
+  assert.ok(agents.agents.opencode.allowedModes.includes("read_only"));
+  assert.ok(agents.agents.opencode.allowedModes.includes("edit"));
+});
+
+test("opencode model politikası profil ve deepseek modellerini yükleme sınırında doğrular", () => {
+  const policy = JSON.parse(fs.readFileSync(path.resolve("config/policy.json"), "utf8"));
+  const agents = JSON.parse(fs.readFileSync(path.resolve("config/agents.json"), "utf8"));
+  assert.doesNotThrow(() => assertOpenCodeModelsAllowed(policy, agents.agents.opencode));
+  const tampered = JSON.parse(JSON.stringify(policy));
+  tampered.orchestration.taskProfiles.low_cost_analysis.model = "deepseek/deepseek-v4.1-flash";
+  assert.throws(() => assertOpenCodeModelsAllowed(tampered, agents.agents.opencode), /unlisted models/);
+  const tamperedFlash = JSON.parse(JSON.stringify(policy));
+  tamperedFlash.deepseek.openCodeFlashModel = "deepseek/deepseek-v4.1-flash";
+  assert.throws(() => assertOpenCodeModelsAllowed(tamperedFlash, agents.agents.opencode), /unlisted models/);
 });
 
 test("config v1→v2 migrate eksik alanları varsayılanlarla tamamlar", () => {

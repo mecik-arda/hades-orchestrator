@@ -959,3 +959,11 @@ test("WP5B-APPROVAL-09: ikinci recovery taraması kaydı beklemeye döndürür v
   assert.equal(applied.status, "completed");
   assert.equal(fs.readFileSync(path.join(root, "src", "created.txt"), "utf8"), "created\n");
 });
+
+test("DEEPSEEK-EDIT-10: canonical Flash aliası kabul edilir ve uydurma 4.1 kimliği reddedilir", () => {
+  const base = input({ workspace: "C:\\workspace" });
+  assert.equal(publicToolSchemas.runDeepSeek.safeParse({ ...base, model: "deepseek_flash" }).success, true);
+  assert.equal(publicToolSchemas.runDeepSeekEditPilot.safeParse({ taskId: "deepseek-flash", model: "deepseek_flash", objective: "x", files: ["src/value.txt"], acceptanceCriteria: ["y"] }).success, true);
+  assert.equal(publicToolSchemas.runDeepSeek.safeParse({ ...base, model: "deepseek_v4_1_flash" }).success, false);
+  assert.equal(publicToolSchemas.runDeepSeekEditPilot.safeParse({ taskId: "deepseek-flash", model: "deepseek_v4_1_flash", objective: "x", files: ["src/value.txt"], acceptanceCriteria: ["y"] }).success, false);
+});

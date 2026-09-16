@@ -16,7 +16,7 @@
                },
     "deepseek":  {
                      "openCodeModel":  "deepseek/deepseek-v4-pro",
-                     "openCodeFlashModel":  "deepseek/deepseek-v4-flash",
+                     "openCodeFlashModel":  "deepseek/deepseek-flash",
                      "subagentRules":  "config/deepseek-subagent-rules.md",
                      "workspaceTools":  [
                                             "Read",
@@ -126,7 +126,7 @@
                                                               },
                                                "low_cost_analysis":  {
                                                                          "target":  "opencode",
-                                                                         "model":  "deepseek/deepseek-v4-flash",
+                                                                         "model":  "deepseek/deepseek-flash",
                                                                          "mode":  "read_only",
                                                                          "priority":  25,
                                                                          "cacheable":  true
@@ -297,7 +297,7 @@
                                                                                                           },
                                                                                                           {
                                                                                                               "target":  "opencode",
-                                                                                                              "model":  "deepseek/deepseek-v4-flash"
+                                                                                                              "model":  "deepseek/deepseek-flash"
                                                                                                           }
                                                                                                       ]
                                                                               },

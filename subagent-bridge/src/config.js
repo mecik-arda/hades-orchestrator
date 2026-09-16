@@ -396,6 +396,34 @@ export function loadAgentsConfig(options = {}) {
   return validation.data;
 }
 
+function collectOpenCodeTargetModels(configuration) {
+  const models = [];
+  const profiles = configuration.orchestration?.taskProfiles || {};
+  for (const profile of Object.values(profiles)) {
+    const entries = [profile, ...(profile.fallbackTargets || [])];
+    for (const entry of entries) {
+      if (entry && entry.target === "opencode" && typeof entry.model === "string" && entry.model.length > 0) {
+        models.push(entry.model);
+      }
+    }
+  }
+  return models;
+}
+
+export function assertOpenCodeModelsAllowed(configuration, opencodeAgent) {
+  const allowedModels = opencodeAgent?.allowedModels;
+  if (!Array.isArray(allowedModels) || allowedModels.length === 0) return;
+  const requiredModels = new Set([
+    configuration.deepseek?.openCodeModel,
+    configuration.deepseek?.openCodeFlashModel,
+    ...collectOpenCodeTargetModels(configuration)
+  ].filter((model) => typeof model === "string" && model.length > 0));
+  const unlistedModels = [...requiredModels].filter((model) => !allowedModels.includes(model));
+  if (unlistedModels.length > 0) {
+    throw new Error(`opencode model policy rejects unlisted models: ${unlistedModels.join(", ")}`);
+  }
+}
+
 export function loadRuntimeConfiguration(options = {}) {
   const configuration = loadConfiguration(options);
   const agents = loadAgentsConfig(options);
@@ -405,6 +433,7 @@ export function loadRuntimeConfiguration(options = {}) {
   if (collisions.length > 0) {
     throw new Error(`agents.json backend name collides with policy key: ${collisions.join(", ")}`);
   }
+  assertOpenCodeModelsAllowed(configuration, agents.agents.opencode);
   return {
     ...configuration,
     ...agents.agents

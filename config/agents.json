@@ -36,6 +36,7 @@
                                                           "deepseek/deepseek-chat",
                                                           "deepseek/deepseek-v4-pro",
                                                           "deepseek/deepseek-v4-flash",
+                                                          "deepseek/deepseek-flash",
                                                           "zai-coding-plan/glm-5.2",
                                                           "zai-coding-plan/glm-5.2-highspeed",
                                                           "moonshot/kimi-k2.5-instruct",

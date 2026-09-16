@@ -94,7 +94,7 @@ It passes `configVersion: 2` schema validation; unknown or missing fields are re
 Gemini Pro / Flash      → AntigravityAdapter → AGY (gemini-3.1-pro-high / gemini-3.8-flash-high)
 Codex                   → CodexAdapter → official standalone codex.exe
 Native Claude Code      → ClaudeCodeAdapter
-DeepSeek V4 Pro / Flash → OpenCodeAdapter → deepseek/deepseek-v4-pro or -flash
+DeepSeek V4 Pro / Flash → OpenCodeAdapter → deepseek/deepseek-v4-pro or deepseek/deepseek-flash (DeepSeek-V4.1-Flash)
 GLM 5.2/5.3 (+Flash)    → OpenCodeAdapter → zai-coding-plan/glm-5.2, -highspeed, -5.3, -5.3-flash
 Independent OpenCode    → OpenCodeAdapter (only explicitly requested identities)
 ```
@@ -391,7 +391,7 @@ Aktif workspace package konumundan, config’ten veya runtime CWD’den türetil
 Gemini Pro / Flash      → AntigravityAdapter → AGY (gemini-3.1-pro-high / gemini-3.8-flash-high)
 Codex                   → CodexAdapter → official standalone codex.exe
 Native Claude Code      → ClaudeCodeAdapter
-DeepSeek V4 Pro / Flash → OpenCodeAdapter → deepseek/deepseek-v4-pro veya -flash
+DeepSeek V4 Pro / Flash → OpenCodeAdapter → deepseek/deepseek-v4-pro veya deepseek/deepseek-flash (DeepSeek-V4.1-Flash)
 GLM 5.2/5.3 (+Flash)    → OpenCodeAdapter → zai-coding-plan/glm-5.2, -highspeed, -5.3, -5.3-flash
 Bağımsız OpenCode model → OpenCodeAdapter (yalnız açıkça istenen kimlikler)
 ```
