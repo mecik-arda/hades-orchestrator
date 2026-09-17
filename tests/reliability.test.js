@@ -65,8 +65,21 @@ test("yalnızca geçici hata sınıfları retry için uygundur", () => {
   assert.equal(calculateRetryDelayMs(1, 1000, 8000, 0), 0);
   assert.equal(calculateRetryDelayMs(4, 1000, 8000, 1), 8000);
   assert.equal(calculateRetryDelayMs(1, 1000, 8000, 1, "rate_limited"), 4000);
-  assert.equal(calculateRetryDelayMs(1, 1000, 8000, 0, "rate_limited"), 2000);
+  assert.equal(calculateRetryDelayMs(1, 1000, 8000, 0, "rate_limited"), 0);
   assert.equal(calculateRetryDelayMs(2, 1000, 8000, 1, "rate_limited"), 8000);
+});
+
+test("retry full jitter deterministik aralıkta ilerler", () => {
+  assert.equal(calculateRetryDelayMs(1, 1000, 8000, 0, "rate_limited"), 0);
+  assert.equal(calculateRetryDelayMs(1, 1000, 8000, 0.5, "rate_limited"), 2000);
+  assert.equal(calculateRetryDelayMs(1, 1000, 8000, 1, "rate_limited"), 4000);
+  assert.equal(calculateRetryDelayMs(2, 1000, 8000, 0.5, "rate_limited"), 4000);
+  assert.equal(calculateRetryDelayMs(3, 1000, 8000, 1, "rate_limited"), 8000);
+  assert.equal(calculateRetryDelayMs(1, 1000, 8000, 0.5), 500);
+  assert.equal(calculateRetryDelayMs(2, 1000, 8000, 0.5), 1000);
+  assert.equal(calculateRetryDelayMs(5, 1000, 8000, 1), 8000);
+  assert.equal(calculateRetryDelayMs(1, 1000, 8000, -3, "rate_limited"), 0);
+  assert.equal(calculateRetryDelayMs(1, 1000, 8000, 4, "rate_limited"), 4000);
 });
 
 test("retry maliyet rezervi kalan bütçe rezervden küçük olduğunda retry engeller", () => {

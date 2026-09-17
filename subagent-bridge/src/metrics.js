@@ -632,34 +632,58 @@ export async function recordRoutingFeedback(configuration, feedbackId, outcome) 
   });
 }
 
-function periodCost(records, periodStart) {
-  const executions = new Map();
-  const reservations = new Map();
-  const settlements = new Map();
-  const now = Date.now();
+function isExpiredReservation(record, now = Date.now()) {
+  const expiresAt = Date.parse(record.expiresAt);
+  return Number.isFinite(expiresAt) && expiresAt <= now;
+}
+
+function foldCostBudgetState(records, now = Date.now()) {
+  const state = new Map();
+  const ensure = (executionIdHash) => {
+    if (!state.has(executionIdHash)) {
+      state.set(executionIdHash, { reservedCostUsd: null, expiresAt: null, chargedCostUsd: null, executionCostUsd: null, settled: false, expired: false, completed: false });
+    }
+    return state.get(executionIdHash);
+  };
   for (const record of records) {
+    if (!record.executionIdHash) continue;
+    if (record.recordType === "cost_reservation") {
+      const entry = ensure(record.executionIdHash);
+      if (Number.isFinite(record.reservedCostUsd)) entry.reservedCostUsd = record.reservedCostUsd;
+      if (record.expiresAt) entry.expiresAt = record.expiresAt;
+    } else if (record.recordType === "cost_settlement") {
+      const entry = ensure(record.executionIdHash);
+      entry.settled = true;
+      entry.chargedCostUsd = Number.isFinite(record.chargedCostUsd) ? record.chargedCostUsd : entry.reservedCostUsd;
+    } else if (record.recordType === "cost_reservation_expiry") {
+      ensure(record.executionIdHash).expired = true;
+    } else if (!record.recordType) {
+      const entry = ensure(record.executionIdHash);
+      entry.executionCostUsd = Number.isFinite(record.usage?.totalCostUsd) ? record.usage.totalCostUsd : 0;
+      entry.completed = true;
+    }
+  }
+  for (const entry of state.values()) {
+    if (entry.expired || entry.settled || entry.reservedCostUsd === null) continue;
+    if (isExpiredReservation({ expiresAt: entry.expiresAt }, now)) entry.expired = true;
+  }
+  return state;
+}
+
+function periodCost(records, periodStart, now = Date.now()) {
+  const scoped = records.filter((record) => {
     const recordedAt = Date.parse(record.recordedAt);
-    if (!Number.isFinite(recordedAt) || recordedAt < periodStart) continue;
-    if (record.recordType === "cost_reservation" && record.executionIdHash && Number.isFinite(record.reservedCostUsd) && (!record.expiresAt || Date.parse(record.expiresAt) > now)) {
-      reservations.set(record.executionIdHash, record.reservedCostUsd);
-    }
-    if (record.recordType === "cost_settlement" && record.executionIdHash && Number.isFinite(record.chargedCostUsd)) {
-      settlements.set(record.executionIdHash, record.chargedCostUsd);
-    }
-    if (!record.recordType && record.executionIdHash) {
-      executions.set(record.executionIdHash, Number.isFinite(record.usage?.totalCostUsd) ? record.usage.totalCostUsd : 0);
-    }
-  }
+    return Number.isFinite(recordedAt) && recordedAt >= periodStart;
+  });
   let total = 0;
-  for (const [executionIdHash, reservedCostUsd] of reservations) {
-    if (settlements.has(executionIdHash)) total += settlements.get(executionIdHash);
-    else total += executions.has(executionIdHash) ? executions.get(executionIdHash) : reservedCostUsd;
-  }
-  for (const [executionIdHash, totalCostUsd] of executions) {
-    if (!reservations.has(executionIdHash) && !settlements.has(executionIdHash)) total += totalCostUsd;
-  }
-  for (const [executionIdHash, chargedCostUsd] of settlements) {
-    if (!reservations.has(executionIdHash)) total += chargedCostUsd;
+  for (const entry of foldCostBudgetState(scoped, now).values()) {
+    if (entry.settled) {
+      total += Number.isFinite(entry.chargedCostUsd) ? entry.chargedCostUsd : (entry.reservedCostUsd || 0);
+    } else if (entry.executionCostUsd !== null) {
+      total += entry.executionCostUsd;
+    } else if (!entry.expired && entry.reservedCostUsd !== null) {
+      total += entry.reservedCostUsd;
+    }
   }
   return total;
 }
@@ -692,17 +716,39 @@ function currentPeriodStarts(now = new Date()) {
 }
 
 function activeReservationCount(records, now = Date.now()) {
+  let count = 0;
+  for (const entry of foldCostBudgetState(records, now).values()) {
+    if (entry.reservedCostUsd !== null && !entry.settled && !entry.expired && !entry.completed) count += 1;
+  }
+  return count;
+}
+
+function recoverExpiredReservations(configuration, metricsDirectory, now = Date.now()) {
+  const { records } = metricRecords(metricsDirectory);
   const reservations = new Map();
-  const completed = new Set();
+  const settled = new Set();
+  const expired = new Set();
   for (const record of records) {
     if (!record.executionIdHash) continue;
-    if (record.recordType === "cost_reservation" && Number.isFinite(record.reservedCostUsd) && Date.parse(record.expiresAt) > now) {
-      reservations.set(record.executionIdHash, record);
-    } else if (record.recordType === "cost_settlement" || !record.recordType) {
-      completed.add(record.executionIdHash);
-    }
+    if (record.recordType === "cost_reservation") reservations.set(record.executionIdHash, record);
+    else if (record.recordType === "cost_settlement") settled.add(record.executionIdHash);
+    else if (record.recordType === "cost_reservation_expiry") expired.add(record.executionIdHash);
   }
-  return [...reservations.keys()].filter((executionIdHash) => !completed.has(executionIdHash)).length;
+  const recovered = [];
+  for (const [executionIdHash, reservation] of reservations) {
+    if (settled.has(executionIdHash) || expired.has(executionIdHash)) continue;
+    if (!isExpiredReservation(reservation, now)) continue;
+    const record = {
+      recordType: "cost_reservation_expiry",
+      recordedAt: new Date().toISOString(),
+      executionIdHash,
+      expiresAt: reservation.expiresAt
+    };
+    const serializedBytes = Buffer.byteLength(`${JSON.stringify(record)}\n`, "utf8");
+    appendJournalRecord(rotateCostJournal(configuration, metricsDirectory, serializedBytes), record);
+    recovered.push(executionIdHash);
+  }
+  return recovered;
 }
 
 export async function getCostBudgetSnapshot(configuration, now = new Date()) {
@@ -713,10 +759,12 @@ export async function getCostBudgetSnapshot(configuration, now = new Date()) {
   const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
   fs.mkdirSync(metricsDirectory, { recursive: true });
   return withMetricLock(path.join(metricsDirectory, "cost-budget.lock"), async () => {
+    const nowMs = now.getTime();
+    recoverExpiredReservations(configuration, metricsDirectory, nowMs);
     const periods = currentPeriodStarts(now);
     const { records, invalidRecordCount } = metricRecords(metricsDirectory, periods.month);
-    const dailySpentUsd = normalizeCost(periodCost(records, periods.day));
-    const monthlySpentUsd = normalizeCost(periodCost(records, periods.month));
+    const dailySpentUsd = normalizeCost(periodCost(records, periods.day, nowMs));
+    const monthlySpentUsd = normalizeCost(periodCost(records, periods.month, nowMs));
     const dailyUsagePercent = dailyLimit === null ? null : normalizeCost((dailySpentUsd / dailyLimit) * 100);
     const monthlyUsagePercent = monthlyLimit === null ? null : normalizeCost((monthlySpentUsd / monthlyLimit) * 100);
     return {
@@ -726,13 +774,15 @@ export async function getCostBudgetSnapshot(configuration, now = new Date()) {
       monthlyLimitUsd: monthlyLimit,
       monthlySpentUsd,
       monthlyRemainingUsd: monthlyLimit === null ? null : normalizeCost(Math.max(0, monthlyLimit - monthlySpentUsd)),
+      dailyOverageUsd: dailyLimit === null ? null : normalizeCost(Math.max(0, dailySpentUsd - dailyLimit)),
+      monthlyOverageUsd: monthlyLimit === null ? null : normalizeCost(Math.max(0, monthlySpentUsd - monthlyLimit)),
       enforced,
       dailyUsagePercent,
       monthlyUsagePercent,
       dailyWarning: dailyUsagePercent !== null && dailyUsagePercent >= warningThresholdPercent,
       monthlyWarning: monthlyUsagePercent !== null && monthlyUsagePercent >= warningThresholdPercent,
       warningThresholdPercent,
-      activeReservations: activeReservationCount(records, now.getTime()),
+      activeReservations: activeReservationCount(records, nowMs),
       droppedMetricRecords: invalidRecordCount
     };
   });
@@ -746,14 +796,16 @@ export async function reserveCostBudget(configuration, executionId, reservedCost
   const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
   fs.mkdirSync(metricsDirectory, { recursive: true });
   return withMetricLock(path.join(metricsDirectory, "cost-budget.lock"), async () => {
+    const nowMs = Date.now();
+    recoverExpiredReservations(configuration, metricsDirectory, nowMs);
     const periods = currentPeriodStarts();
     const { records } = metricRecords(metricsDirectory);
     const executionIdHash = hashValue(executionId);
     if (records.some((record) => record.executionIdHash === executionIdHash && ["cost_reservation", "cost_settlement"].includes(record.recordType))) {
       return { allowed: false, reason: "duplicate_cost_reservation" };
     }
-    const dailyCostUsd = periodCost(records, periods.day);
-    const monthlyCostUsd = periodCost(records, periods.month);
+    const dailyCostUsd = periodCost(records, periods.day, nowMs);
+    const monthlyCostUsd = periodCost(records, periods.month, nowMs);
     if (enforced && Number.isFinite(dailyCostLimitUsd) && dailyCostUsd + reservedCostUsd > dailyCostLimitUsd) {
       return {
         allowed: false,
@@ -798,6 +850,7 @@ export async function settleCostBudget(configuration, executionId, actualCostUsd
   const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
   fs.mkdirSync(metricsDirectory, { recursive: true });
   return withMetricLock(path.join(metricsDirectory, "cost-budget.lock"), async () => {
+    recoverExpiredReservations(configuration, metricsDirectory);
     const executionIdHash = hashValue(executionId);
     const { records } = metricRecords(metricsDirectory);
     const reservation = [...records].reverse().find((record) => record.recordType === "cost_reservation" && record.executionIdHash === executionIdHash);

@@ -33,6 +33,6 @@ export function calculateRetryDelayMs(attemptNumber, baseDelayMs, maxDelayMs, ra
   const exponent = failureClass === "rate_limited" ? Math.max(1, attemptNumber) : Math.max(0, attemptNumber - 1);
   const multiplier = failureClass === "rate_limited" ? 4 : 2;
   const exponentialDelay = Math.min(maxDelayMs, baseDelayMs * (multiplier ** exponent));
-  const jitter = failureClass === "rate_limited" ? 0.5 + Math.min(Math.max(randomValue, 0), 1) * 0.5 : Math.min(Math.max(randomValue, 0), 1);
+  const jitter = Math.min(Math.max(randomValue, 0), 1);
   return Math.round(exponentialDelay * jitter);
 }

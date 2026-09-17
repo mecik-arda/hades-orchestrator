@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { performance } from "node:perf_hooks";
 import { analyzePersistentMemoryWrite, checkPersistentMemory, promotePersistentMemory, pruneMemoryAuditFiles, readPersistentMemory, reviewPersistentMemory, searchPersistentMemory, storePersistentMemory, suggestConsolidationCandidates } from "../subagent-bridge/src/memory.js";
 
@@ -373,6 +375,38 @@ test("hafıza denetimi geçersiz metadata alanlarını içerik göstermeden rapo
   assert.equal(JSON.stringify(report).includes("özel gövde"), false);
 });
 
+test("hafıza denetimi updated<created sırasını raporlar ve eşit/geçerli tarihleri kabul eder", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const noteDirectory = path.join(vaultRootPath, "03_Resources");
+  fs.mkdirSync(noteDirectory, { recursive: true });
+  const writeNote = (fileName, created, updated) => fs.writeFileSync(path.join(noteDirectory, fileName), [
+    "---",
+    `title: "${fileName}"`,
+    `created: "${created}"`,
+    `updated: "${updated}"`,
+    "confidence: \"high\"",
+    "verification: \"verified\"",
+    "---",
+    "",
+    `# ${fileName}`,
+    "",
+    "Sıralama kontrolü için içerik."
+  ].join("\n"), "utf8");
+  writeNote("Once.md", "2026-08-11T00:00:00.000Z", "2026-08-10T00:00:00.000Z");
+  writeNote("Esit.md", "2026-08-11T00:00:00.000Z", "2026-08-11T00:00:00.000Z");
+  writeNote("Sonra.md", "2026-08-10T00:00:00.000Z", "2026-08-11T00:00:00.000Z");
+  writeNote("BozukCreated.md", "dun", "2026-08-11T00:00:00.000Z");
+  writeNote("BozukUpdated.md", "2026-08-11T00:00:00.000Z", "dun");
+  const report = reviewPersistentMemory(createConfiguration(vaultRootPath), { now: "2026-08-11T00:00:00.000Z" });
+  const fieldsFor = (relativePath) => report.invalidMetadata.find((entry) => entry.relativePath.endsWith(relativePath))?.fields || [];
+  assert.deepEqual(fieldsFor("Once.md"), [{ field: "updated", issue: "before_created" }]);
+  assert.deepEqual(fieldsFor("Esit.md"), []);
+  assert.deepEqual(fieldsFor("Sonra.md"), []);
+  assert.deepEqual(fieldsFor("BozukCreated.md"), [{ field: "created", issue: "invalid" }]);
+  assert.deepEqual(fieldsFor("BozukUpdated.md"), [{ field: "updated", issue: "invalid" }]);
+});
+
 test("audit yazımı başarısız olsa da tamamlanan mutation açıkça raporlanır", (context) => {
   const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-"));
   context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
@@ -570,4 +604,95 @@ test("kalıcı hafıza NFC ve NFD biçimindeki sorguyu aynı notla eşleştirir"
   const searchResult = searchPersistentMemory(configuration, { query: "Kafe\u0301", limit: 5 });
   assert.equal(searchResult.matches.length, 1);
   assert.equal(searchResult.matches[0].relativePath, "03_Resources/Kaf\u00e9.md");
+});
+
+test("hafıza mutation kilidi eşzamanlı aynı-hash yazımında tek kazanan üretir", async (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-mutation-lock-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const memoryModule = pathToFileURL(path.resolve("subagent-bridge/src/memory.js")).href;
+  const childSource = (label) => [
+    `import { storePersistentMemory } from ${JSON.stringify(memoryModule)};`,
+    `const configuration = ${JSON.stringify(configuration)};`,
+    "try {",
+    `  storePersistentMemory(configuration, { relativePath: "00_Inbox/EsZamanli.md", title: "Eşzamanlı ${label}", content: "Eşzamanlı yazım için yeterince uzun ve anlamlı ortak gövde içeriği.", tags: ["es-zamanli"], sources: [{ title: "Kaynak", url: "https://example.com/kaynak", accessedAt: "2026-08-03T10:00:00.000Z" }], confidence: "high", verificationStatus: "verified", taskId: "mutation-lock", acknowledgeMemoryConflicts: true });`,
+    '  process.stdout.write("stored");',
+    "} catch (error) {",
+    '  process.stdout.write("error:" + error.message);',
+    "}"
+  ].join("\n");
+  const runChild = (label) => new Promise((resolve, reject) => {
+    const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", childSource(label)], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.once("error", reject);
+    child.once("exit", () => resolve({ stdout, stderr }));
+  });
+  const results = await Promise.all([runChild("A"), runChild("B")]);
+  assert.equal(results.filter((result) => result.stdout === "stored").length, 1);
+  assert.equal(results.filter((result) => result.stdout.startsWith("error:")).length, 1);
+  assert.equal(fs.existsSync(path.join(vaultRootPath, "00_Inbox", "EsZamanli.md")), true);
+});
+
+test("hafıza araması 5000 notta performans sınırını korur", { timeout: 35000 }, (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-search-benchmark-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const noteDirectory = path.join(vaultRootPath, "03_Resources");
+  fs.mkdirSync(noteDirectory, { recursive: true });
+  for (let index = 0; index < 5000; index += 1) {
+    fs.writeFileSync(path.join(noteDirectory, `Not-${index}.md`), [
+      "---",
+      `title: "Not ${index}"`,
+      "created: \"2026-08-11T00:00:00.000Z\"",
+      "updated: \"2026-08-11T00:00:00.000Z\"",
+      "confidence: \"high\"",
+      "verification: \"verified\"",
+      "stage: \"published\"",
+      "memory_type: \"semantic\"",
+      "tags:",
+      `  - \"etiket-${index}\"`,
+      "sources:",
+      "---",
+      "",
+      `# Not ${index}`,
+      "",
+      `kelime${index} alfa${index} beta${index} gama${index} delta${index} epsilon${index} zeta${index}`
+    ].join("\n"), "utf8");
+  }
+  const configuration = createConfiguration(vaultRootPath);
+  configuration.memory.maxIndexedFiles = 5000;
+  const startedAt = performance.now();
+  const result = searchPersistentMemory(configuration, { query: "kelime4321", limit: 5 });
+  assert.ok(performance.now() - startedAt < 30000);
+  assert.equal(result.matches.some((match) => match.relativePath.endsWith("Not-4321.md")), true);
+});
+
+test("promote_memory kaynak ve hedef sınırlarını zorlar ve PROMOTE audit olayı yazar", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-promote-audit-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const published = storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/Disari.md", title: "Dışarı", content: "Yayınlanmış not gövdesi yeterince uzun." }));
+  assert.throws(() => promotePersistentMemory(configuration, {
+    sourceRelativePath: published.relativePath,
+    targetRelativePath: "03_Resources/Hedef.md",
+    expectedSourceSha256: published.sha256
+  }), /gelen kutusunda değil/);
+  const draft = storePersistentMemory(configuration, createMemoryInput({ relativePath: "00_Inbox/Taslak.md", title: "Taslak", content: "Taslak not gövdesi yeterince uzun.", stage: "draft", acknowledgeMemoryConflicts: true }));
+  assert.throws(() => promotePersistentMemory(configuration, {
+    sourceRelativePath: draft.relativePath,
+    targetRelativePath: "00_Inbox/Yayin.md",
+    expectedSourceSha256: draft.sha256
+  }), /00_Inbox dışında olmalı/);
+  const promoted = promotePersistentMemory(configuration, {
+    sourceRelativePath: draft.relativePath,
+    targetRelativePath: "03_Resources/Yayin.md",
+    expectedSourceSha256: draft.sha256
+  });
+  assert.equal(promoted.promoted, true);
+  assert.equal(fs.existsSync(path.join(vaultRootPath, "00_Inbox", "Taslak.md")), false);
+  const auditPath = path.join(configuration.statePaths.logs, "audit", "memory-events.jsonl");
+  const auditContent = fs.readFileSync(auditPath, "utf8");
+  assert.match(auditContent, /"event":"PROMOTE"/);
 });

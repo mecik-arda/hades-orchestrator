@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -725,6 +726,43 @@ test("P0-HEALTH: runtime returns canonical adapter health", async (t) => {
   assert.ok(Object.hasOwn(health.circuits, "opencode:deepseek/deepseek-v4-pro"));
   const healthMetricsPath = path.join(root, "logs", "metrics", "bridge-health-runs.jsonl");
   assert.equal(fs.readFileSync(healthMetricsPath, "utf8").trim().split("\n").length, 1);
+});
+
+test("P0-LOCK-SNAPSHOT: leaseHeartbeatMs runtime configuration'dan koordinatöre aktarılır", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-p0-lease-wiring-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = createConfiguration(root, root);
+  configuration.orchestration = { scheduler: { leaseHeartbeatMs: 45000, staleLockMs: 120000 } };
+  const runtime = createBridgeRuntime({ configuration, adapters: {} });
+  assert.equal(runtime.workspaceLockSnapshot().leaseHeartbeatMs, 45000);
+});
+
+test("P0-COST-VISIBILITY: bütçe görünümü açık veya kapalı devreyi raporlar", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-p0-cost-visibility-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const adapters = {};
+  for (const id of ["antigravity", "codex", "claude_code", "opencode"]) {
+    const adapter = createFakeAdapter(id, async () => successResult(id, "test"));
+    adapter.healthCheck = async () => ({ installed: true, version: "1.0", authValid: true, executable: id });
+    adapters[id] = adapter;
+  }
+  const configuration = createConfiguration(root, root);
+  const closedRuntime = createBridgeRuntime({ configuration, adapters });
+  const closedHealth = await closedRuntime.health();
+  assert.equal(closedHealth.costBudget.circuitBreakerOpen, false);
+  const stateDirectory = path.join(root, "state", "provider-circuits");
+  fs.mkdirSync(stateDirectory, { recursive: true });
+  const key = crypto.createHash("sha256").update("codex").digest("hex");
+  fs.writeFileSync(path.join(stateDirectory, `${key}.json`), JSON.stringify({
+    state: "open",
+    failures: [Date.now()],
+    openedAt: Date.now(),
+    probeUntil: null,
+    transitionedAt: new Date().toISOString()
+  }), "utf8");
+  const openRuntime = createBridgeRuntime({ configuration, adapters });
+  const openHealth = await openRuntime.health();
+  assert.equal(openHealth.costBudget.circuitBreakerOpen, true);
 });
 
 test("P0-MCP-PARITY: MCP handler and direct runtime preserve canonical result fields", async (t) => {

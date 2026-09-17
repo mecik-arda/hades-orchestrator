@@ -86,7 +86,7 @@ The active workspace is not derived from the package location, configuration or 
 
 ### Personal configuration
 
-It passes `configVersion: 2` schema validation; unknown or missing fields are rejected. Providers are constrained by `defaultMode`/`allowedModes`. `reliability.monthlyCostLimitUsd: 50` and `warningThresholdPercent: 80` are enforced; `npm run budget` shows the current state. Set `reliability.costBudgetEnforced: false` to disable hard-cap enforcement while spend tracking and snapshots stay active; the default is enforced. Codex `allowNonGitWorkspace` is enabled only through the personal machine config; DeepSeek preserves denied-root and Zod validation without requiring a Git repository.
+It passes `configVersion: 2` schema validation; unknown or missing fields are rejected. Providers are constrained by `defaultMode`/`allowedModes`. `reliability.monthlyCostLimitUsd: 50` and `warningThresholdPercent: 80` are enforced; `npm run budget` shows the current state. Set `reliability.costBudgetEnforced: false` to disable admission-time budget enforcement while spend tracking and snapshots stay active; the default is enforced. The limit is checked atomically at reservation time against active reservations and recorded spend; a late settlement after an expired reservation is still counted, and any exceedance is surfaced as `dailyOverageUsd`/`monthlyOverageUsd`. Codex `allowNonGitWorkspace` is enabled only through the personal machine config; DeepSeek preserves denied-root and Zod validation without requiring a Git repository.
 
 ### Canonical routing
 
@@ -234,7 +234,7 @@ npm run accept:edit:deepseek  DeepSeek Pro controlled promotion acceptance (temp
 npm run accept:edit:glm       GLM 5.2 controlled promotion acceptance (temporary workspace)
 npm run accept:read:glm       GLM 5.2 read-only acceptance (temporary workspace)
 npm run smoke                 MCP tool schema and runtime health smoke test
-npm run budget                Daily/monthly hard cap snapshot
+npm run budget                Daily/monthly budget limit snapshot
 npm run p0:e2e                Trusted workspace portability acceptance
 npm run p2b:e2e               Personal global integration acceptance
 npm test                      All Node.js regression tests
@@ -385,7 +385,7 @@ Aktif workspace package konumundan, config’ten veya runtime CWD’den türetil
 
 ### Kişisel yapılandırma
 
-`configVersion: 2` şema doğrulamasından geçer; bilinmeyen veya eksik alan reddedilir. Provider’lar `defaultMode`/`allowedModes` ile sınırlıdır. `reliability.monthlyCostLimitUsd: 50` ve `warningThresholdPercent: 80` uygulanır; `npm run budget` anlık durumu gösterir. `reliability.costBudgetEnforced: false` hard-cap uygulamasını devre dışı bırakır; harcama takibi ve anlık görünüm aktif kalır, varsayılan uygulanır. Codex `allowNonGitWorkspace` yalnız kişisel machine config ile açılır; DeepSeek Git repository zorunluluğu olmadan denied-root ve Zod doğrulamasını korur.
+`configVersion: 2` şema doğrulamasından geçer; bilinmeyen veya eksik alan reddedilir. Provider’lar `defaultMode`/`allowedModes` ile sınırlıdır. `reliability.monthlyCostLimitUsd: 50` ve `warningThresholdPercent: 80` uygulanır; `npm run budget` anlık durumu gösterir. `reliability.costBudgetEnforced: false` admission-time bütçe uygulamasını devre dışı bırakır; harcama takibi ve anlık görünüm aktif kalır, varsayılan uygulanır. Limit, rezervasyon anında aktif rezervasyonlar ve kayıtlı harcamaya göre atomik kontrol edilir; süresi dolmuş rezervasyondan sonra gelen geç settlement yine sayılır ve aşım `dailyOverageUsd`/`monthlyOverageUsd` olarak raporlanır. Codex `allowNonGitWorkspace` yalnız kişisel machine config ile açılır; DeepSeek Git repository zorunluluğu olmadan denied-root ve Zod doğrulamasını korur.
 
 ### Kanonik yönlendirme
 
@@ -533,7 +533,7 @@ npm run accept:edit:deepseek  DeepSeek Pro kontrollü promotion kabulü (geçici
 npm run accept:edit:glm       GLM 5.2 kontrollü promotion kabulü (geçici workspace)
 npm run accept:read:glm       GLM 5.2 salt-okunur kabulü (geçici workspace)
 npm run smoke                 MCP araç şeması ve runtime health smoke testi
-npm run budget                Günlük/aylık hard cap snapshot'ı
+npm run budget                Günlük/aylık bütçe limiti anlık görünümü
 npm run p0:e2e                Trusted workspace portability kabulü
 npm run p2b:e2e               Kişisel global entegrasyon kabulü
 npm test                      Tüm Node.js regresyon testleri

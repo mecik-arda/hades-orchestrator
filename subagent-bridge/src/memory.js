@@ -459,6 +459,9 @@ function collectInvalidMetadata(record) {
   for (const field of ["created", "updated", "reviewAfter", "validUntil"]) {
     if (record[field] && !isValidUtcIsoDate(record[field])) fields.push({ field, issue: "invalid" });
   }
+  if (isValidUtcIsoDate(record.created) && isValidUtcIsoDate(record.updated) && Date.parse(record.updated) < Date.parse(record.created)) {
+    fields.push({ field: "updated", issue: "before_created" });
+  }
   if (record.confidence && !allowedConfidenceValues.has(record.confidence)) fields.push({ field: "confidence", issue: "invalid" });
   if (record.verificationStatus && !allowedVerificationValues.has(record.verificationStatus)) fields.push({ field: "verification", issue: "invalid" });
   if (record.memoryType && !allowedMemoryTypes.has(record.memoryType)) fields.push({ field: "memory_type", issue: "invalid" });

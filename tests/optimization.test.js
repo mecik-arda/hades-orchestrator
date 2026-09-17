@@ -460,6 +460,26 @@ test("OPT-03b: provider circuit open ve half-open tek probe sözleşmesini uygul
   assert.equal(serializedState.includes("codex"), false);
 });
 
+test("OPT-03c: süreçler arası circuit state tutarlılığı bozulmaz", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-provider-circuit-cross-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const circuitModule = pathToFileURL(path.resolve("subagent-bridge/src/services/provider-circuit-breaker.js")).href;
+  const fixedNow = 1000000;
+  const recordFailureInChild = () => new Promise((resolve, reject) => {
+    const source = `import { createProviderCircuitBreaker } from ${JSON.stringify(circuitModule)}; const breaker = createProviderCircuitBreaker({ stateDirectory: ${JSON.stringify(root)}, failureThreshold: 5, windowMs: 60000 }); await breaker.recordFailure("codex", ${fixedNow}); process.stdout.write("ok");`;
+    const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", source], { stdio: ["ignore", "pipe", "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0 ? resolve(true) : reject(new Error(`circuit process exited with ${code}: ${stderr}`)));
+  });
+  await Promise.all(Array.from({ length: 10 }, () => recordFailureInChild()));
+  const breaker = createProviderCircuitBreaker({ stateDirectory: root, failureThreshold: 5, windowMs: 60000 });
+  const snapshot = await breaker.snapshot(["codex"], fixedNow);
+  assert.equal(snapshot.codex.state, "open");
+  assert.equal(snapshot.codex.failureCount, 10);
+});
+
 test("OPT-04: reliability budget provider ve global sınırı birlikte uygular", () => {
   const budget = resolveReliabilityBudget({
     reliability: { maxAttempts: 3, maxTotalDurationMs: 60000, maxRetryCostUsd: 1, baseRetryDelayMs: 500, maxRetryDelayMs: 2000 },
@@ -777,6 +797,198 @@ test("OPT-06f: bütçe snapshot harcama kalan tutar ve aktif rezervleri raporlar
   assert.equal(snapshot.monthlyUsagePercent, 6);
   assert.equal(snapshot.dailyWarning, true);
   assert.equal(snapshot.monthlyWarning, false);
+});
+
+test("OPT-06k: süresi dolan rezervasyon kalıcı expiry kaydı üretir, idempotent kalır ve bütçeyi serbest bırakır", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cost-expiry-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = {
+    statePaths: { logs: root },
+    observability: { maxMetricFileBytes: 65536 },
+    reliability: { dailyCostLimitUsd: 1, monthlyCostLimitUsd: 5, maxTotalDurationMs: 1 }
+  };
+  assert.deepEqual(await reserveCostBudget(configuration, "crashed-process", 0.4), { allowed: true });
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const first = await getCostBudgetSnapshot(configuration);
+  assert.equal(first.dailySpentUsd, 0);
+  assert.equal(first.activeReservations, 0);
+  configuration.reliability.maxTotalDurationMs = 60000;
+  assert.deepEqual(await reserveCostBudget(configuration, "next-process", 0.9), { allowed: true });
+  const journalPath = path.join(root, "metrics", "cost-budget-runs.jsonl");
+  const journal = fs.readFileSync(journalPath, "utf8");
+  assert.equal((journal.match(/"recordType":"cost_reservation_expiry"/g) || []).length, 1);
+  assert.equal(journal.includes("crashed-process"), false);
+  const second = await getCostBudgetSnapshot(configuration);
+  assert.equal(second.dailySpentUsd, 0.9);
+  const journalAfter = fs.readFileSync(journalPath, "utf8");
+  assert.equal((journalAfter.match(/"recordType":"cost_reservation_expiry"/g) || []).length, 1);
+});
+
+test("OPT-06l: settlement yapılan rezervasyon expire edilmez ve gerçek maliyet sayılır", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cost-settled-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = {
+    statePaths: { logs: root },
+    observability: { maxMetricFileBytes: 65536 },
+    reliability: { dailyCostLimitUsd: 1, monthlyCostLimitUsd: 5, maxTotalDurationMs: 60 }
+  };
+  await reserveCostBudget(configuration, "settled-process", 0.4);
+  assert.deepEqual(await settleCostBudget(configuration, "settled-process", 0.05), { settled: true, chargedCostUsd: 0.05 });
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const snapshot = await getCostBudgetSnapshot(configuration);
+  assert.equal(snapshot.dailySpentUsd, 0.05);
+  assert.equal(snapshot.activeReservations, 0);
+  const journal = fs.readFileSync(path.join(root, "metrics", "cost-budget-runs.jsonl"), "utf8");
+  assert.equal((journal.match(/"recordType":"cost_reservation_expiry"/g) || []).length, 0);
+});
+
+test("OPT-06m: expiry sonrası geç settlement gerçek maliyeti tam bir kez sayar", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cost-late-settlement-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = {
+    statePaths: { logs: root },
+    observability: { maxMetricFileBytes: 65536 },
+    reliability: { dailyCostLimitUsd: 1, monthlyCostLimitUsd: 5, maxTotalDurationMs: 1 }
+  };
+  await reserveCostBudget(configuration, "late-process", 0.4);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  await getCostBudgetSnapshot(configuration);
+  assert.deepEqual(await settleCostBudget(configuration, "late-process", 0.05), { settled: true, chargedCostUsd: 0.05 });
+  const snapshot = await getCostBudgetSnapshot(configuration);
+  assert.equal(snapshot.dailySpentUsd, 0.05);
+  const journal = fs.readFileSync(path.join(root, "metrics", "cost-budget-runs.jsonl"), "utf8");
+  assert.equal((journal.match(/"recordType":"cost_reservation_expiry"/g) || []).length, 1);
+  assert.equal((journal.match(/"recordType":"cost_settlement"/g) || []).length, 1);
+});
+
+test("OPT-06n: geçersiz expiresAt rezervi sessizce serbest bırakmaz", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cost-invalid-expiry-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = {
+    statePaths: { logs: root },
+    observability: { maxMetricFileBytes: 65536 },
+    reliability: { dailyCostLimitUsd: 1, monthlyCostLimitUsd: 5, maxTotalDurationMs: 60000 }
+  };
+  const metricsDirectory = path.join(root, "metrics");
+  fs.mkdirSync(metricsDirectory, { recursive: true });
+  fs.appendFileSync(path.join(metricsDirectory, "cost-budget-runs.jsonl"), `${JSON.stringify({
+    recordType: "cost_reservation",
+    recordedAt: new Date().toISOString(),
+    executionIdHash: "deadbeefdeadbeef",
+    reservedCostUsd: 0.3,
+    expiresAt: "bozuk-tarih"
+  })}\n`, "utf8");
+  const snapshot = await getCostBudgetSnapshot(configuration);
+  assert.equal(snapshot.dailySpentUsd, 0.3);
+  assert.equal(snapshot.activeReservations, 1);
+  const journal = fs.readFileSync(path.join(metricsDirectory, "cost-budget-runs.jsonl"), "utf8");
+  assert.equal((journal.match(/"recordType":"cost_reservation_expiry"/g) || []).length, 0);
+});
+
+test("OPT-06o: eşzamanlı süreçlerin recovery'si tek expiry kaydı üretir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cost-concurrent-expiry-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = {
+    statePaths: { logs: root },
+    observability: { maxMetricFileBytes: 65536 },
+    reliability: { dailyCostLimitUsd: 1, monthlyCostLimitUsd: 5, maxTotalDurationMs: 1 }
+  };
+  await reserveCostBudget(configuration, "crashed-again", 0.4);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const metricsModule = pathToFileURL(path.resolve("subagent-bridge/src/metrics.js")).href;
+  const snapshotInChild = () => new Promise((resolve, reject) => {
+    const source = `import { getCostBudgetSnapshot } from ${JSON.stringify(metricsModule)}; await getCostBudgetSnapshot(${JSON.stringify(configuration)}); process.stdout.write("ok");`;
+    const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", source], { stdio: ["ignore", "pipe", "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0 ? resolve(true) : reject(new Error(`snapshot process exited with ${code}: ${stderr}`)));
+  });
+  await Promise.all([snapshotInChild(), snapshotInChild()]);
+  const journal = fs.readFileSync(path.join(root, "metrics", "cost-budget-runs.jsonl"), "utf8");
+  assert.equal((journal.match(/"recordType":"cost_reservation_expiry"/g) || []).length, 1);
+});
+
+test("OPT-06p: rotasyon sonrası eski rezervasyon da bulunup expire edilir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cost-rotated-expiry-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = {
+    statePaths: { logs: root },
+    observability: { maxMetricFileBytes: 200 },
+    reliability: { dailyCostLimitUsd: 1, monthlyCostLimitUsd: 5, maxTotalDurationMs: 1 }
+  };
+  await reserveCostBudget(configuration, "rotated-crashed", 0.4);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  configuration.reliability.maxTotalDurationMs = 60000;
+  await reserveCostBudget(configuration, "rotated-next", 0.1);
+  await getCostBudgetSnapshot(configuration);
+  const metricsDirectory = path.join(root, "metrics");
+  const rotatedEntries = fs.readdirSync(metricsDirectory).filter((entry) => entry.startsWith("cost-budget-runs-") && entry.endsWith(".jsonl"));
+  assert.equal(rotatedEntries.length >= 1, true);
+  const allJournals = fs.readdirSync(metricsDirectory)
+    .filter((entry) => entry.startsWith("cost-budget-runs") && entry.endsWith(".jsonl"))
+    .map((entry) => fs.readFileSync(path.join(metricsDirectory, entry), "utf8"))
+    .join("\n");
+  assert.equal((allJournals.match(/"recordType":"cost_reservation_expiry"/g) || []).length, 1);
+});
+
+test("OPT-06q: expiry sonrası yeni rezervasyon ve geç settlement overage olarak raporlanır", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cost-expiry-overage-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = {
+    statePaths: { logs: root },
+    observability: { maxMetricFileBytes: 65536 },
+    reliability: { dailyCostLimitUsd: 1, monthlyCostLimitUsd: 5, maxTotalDurationMs: 60 }
+  };
+  assert.deepEqual(await reserveCostBudget(configuration, "expired-a", 0.6), { allowed: true });
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const afterExpiry = await getCostBudgetSnapshot(configuration);
+  assert.equal(afterExpiry.dailySpentUsd, 0);
+  configuration.reliability.maxTotalDurationMs = 60000;
+  assert.deepEqual(await reserveCostBudget(configuration, "replacement-b", 0.6), { allowed: true });
+  assert.deepEqual(await settleCostBudget(configuration, "expired-a", 0.6), { settled: true, chargedCostUsd: 0.6 });
+  const snapshot = await getCostBudgetSnapshot(configuration);
+  assert.equal(snapshot.dailySpentUsd, 1.2);
+  assert.equal(snapshot.dailyOverageUsd, 0.2);
+});
+
+test("OPT-06r: snapshot enjekte edilen now ile tutarlıdır", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cost-injected-now-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = {
+    statePaths: { logs: root },
+    observability: { maxMetricFileBytes: 65536 },
+    reliability: { dailyCostLimitUsd: 10, monthlyCostLimitUsd: 10, maxTotalDurationMs: 60000 }
+  };
+  await reserveCostBudget(configuration, "future-process", 0.4);
+  const injectedNow = new Date(Date.now() + 120000);
+  const snapshot = await getCostBudgetSnapshot(configuration, injectedNow);
+  assert.equal(snapshot.activeReservations, 0);
+  assert.equal(snapshot.dailySpentUsd, 0);
+  const journal = fs.readFileSync(path.join(root, "metrics", "cost-budget-runs.jsonl"), "utf8");
+  assert.equal((journal.match(/"recordType":"cost_reservation_expiry"/g) || []).length, 1);
+});
+
+test("OPT-06s: settlement yazılamasa da execution metriği rezervasyonu terminal yapar", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cost-metric-terminal-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = {
+    statePaths: { logs: root },
+    observability: { maxMetricFileBytes: 65536 },
+    reliability: { dailyCostLimitUsd: 1, monthlyCostLimitUsd: 5, maxTotalDurationMs: 60000 }
+  };
+  await reserveCostBudget(configuration, "metric-terminal", 0.4);
+  await appendRedactedRunMetric(configuration, {
+    backend: "opencode",
+    executionIdHash: crypto.createHash("sha256").update("metric-terminal").digest("hex"),
+    recordedAt: new Date().toISOString(),
+    mode: "read_only",
+    outcomeStatus: "completed",
+    usage: { totalCostUsd: 0.05 }
+  });
+  const snapshot = await getCostBudgetSnapshot(configuration);
+  assert.equal(snapshot.activeReservations, 0);
+  assert.equal(snapshot.dailySpentUsd, 0.05);
 });
 
 test("OPT-06h: pruneMetricFiles yalnız retention dışı rotated dosyaları siler", async (t) => {
