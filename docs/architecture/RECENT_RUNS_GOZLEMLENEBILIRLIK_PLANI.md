@@ -1,5 +1,7 @@
 # Recent Runs Gözlemlenebilirlik Planı
 
+> Durum notu (2026-09-18): Bu belge tarihsel plandır; uygulama denetimi `ayrintili denetim kaydi (ozel depo, docs/reports)` içindedir. Plandaki test ve araç sayıları oluşturulma tarihine aittir; güncel doğrulama için `npm test`. Denetim sonucu: tamamlandı (opt-in mirror varsayılan kapalı).
+
 ## Karar
 
 İki katmanlı agent çalışma geçmişi uygulanacaktır:

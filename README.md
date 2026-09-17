@@ -285,6 +285,8 @@ Key decisions live under [`docs/architecture`](docs/architecture):
 - [`DEEPSEEK_EDIT_PILOT_VE_MIRROR_KARARLILIK_PLANI.md`](docs/architecture/DEEPSEEK_EDIT_PILOT_VE_MIRROR_KARARLILIK_PLANI.md)
 - [`RECENT_RUNS_GOZLEMLENEBILIRLIK_PLANI.md`](docs/architecture/RECENT_RUNS_GOZLEMLENEBILIRLIK_PLANI.md)
 
+These documents are historical plans. Each audited plan starts with a dated status note; current verification is `npm test` and CI rather than the fixed test or tool counts captured at plan creation time.
+
 ## Continuous integration
 
 `.github/workflows/validate.yml` runs `npm ci`, `npm test` and `npm run verify:ci` on Windows and Linux with Node 22/24. `verify:ci` requires no local executable, provider auth or Vault. Use `npm run config:backup` before a personal policy change and `npm run config:rollback -- <backup>` to roll back.
@@ -581,6 +583,8 @@ Temel kararlar [`docs/architecture`](docs/architecture) altındadır:
 - [`MODEL_KIMLIGI_VE_ERISIM_MODU_PLANI.md`](docs/architecture/MODEL_KIMLIGI_VE_ERISIM_MODU_PLANI.md)
 - [`DEEPSEEK_EDIT_PILOT_VE_MIRROR_KARARLILIK_PLANI.md`](docs/architecture/DEEPSEEK_EDIT_PILOT_VE_MIRROR_KARARLILIK_PLANI.md)
 - [`RECENT_RUNS_GOZLEMLENEBILIRLIK_PLANI.md`](docs/architecture/RECENT_RUNS_GOZLEMLENEBILIRLIK_PLANI.md)
+
+Bu dokümanlar tarihsel planlardır. Denetlenen her planın başında tarihli durum notu bulunur; güncel doğrulama, plan oluşturma anındaki sabit test veya araç sayıları yerine `npm test` ve CI ile yapılır.
 
 ## Sürekli entegrasyon
 

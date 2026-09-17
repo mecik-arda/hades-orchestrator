@@ -58,6 +58,13 @@ Bu projede ana orkestratör ve son karar verici, OpenCode oturumunda aktif kulla
 - MCP araç şeması değiştiğinde `npm run smoke` çalıştır.
 - DeepSeek köprü davranışı değiştiğinde kontrollü `npm run pilot` testi çalıştır.
 
+## Dokümantasyon düzeni
+
+- `docs/plans` altındaki planlar tarihsel kayıttır. Denetlenen planların başında tarihli durum notu bulunur ve güncel durum bu nottan izlenir.
+- Planda sabit test veya araç sayısı verme; güncel doğrulamaya (`npm test`, `npm run verify:ci`) atıf yap. Sabit sayılar zamanla bayatlar.
+- Uygulama denetimleri `docs/reports` altında tutulur ve planları geriye dönük değiştirmez; açık maddeler `karar kapısı`, `dış-bağımlı`, `reddedildi` veya `opt-in` olarak etiketlenir.
+- Public dışa aktarımda `docs/plans` yalnız seçili mimari dokümanları `docs/architecture` altına taşır; private rapor referansları temizlenir.
+
 ## Güvenilirlik ve gözlemlenebilirlik
 
 - DeepSeek sonucunu yalnızca çalışma zamanı Zod doğrulamasından geçerse kullan. Şema dışı veya parse edilemeyen çıktı ana orkestratöre danışmanlık sonucu olarak aktarılmaz.

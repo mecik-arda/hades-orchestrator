@@ -1,5 +1,7 @@
 # DeepSeek Edit Pilotu Ve Mirror Kararlılık Planı
 
+> Durum notu (2026-09-18): Bu belge tarihsel plandır; uygulama denetimi `ayrintili denetim kaydi (ozel depo, docs/reports)` içindedir. Plandaki test ve araç sayıları oluşturulma tarihine aittir; güncel doğrulama için `npm test`. Denetim sonucu: tamamlandı; operasyonel kabul 2026-09-18 tarihli canlı pilot ve kabul çalıştırması ile alındı.
+
 ## Amaç
 
 Her subagent provider'ında ortak `read_only` ve `edit` erişim modları hedefi içinde, DeepSeek edit yetkisini ana repository'ye açmadan önce disposable workspace üzerinde güvenlik pilotu tasarlamak ve `RUNS-10` mirror eşzamanlılık testindeki başarısızlıkların kök nedenini görünür hale getirmek.

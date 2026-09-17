@@ -1,5 +1,7 @@
 SUBAGENT MODEL KİMLİĞİ VE İKİLİ YETKİ MODU HEDEFİ
 
+> Durum notu (2026-09-18): Bu belge tarihsel plandır; uygulama denetimi `ayrintili denetim kaydi (ozel depo, docs/reports)` içindedir. Plandaki test ve araç sayıları oluşturulma tarihine aittir; güncel doğrulama için `npm test`. Denetim sonucu: Faz 1-3 uygulandı; Faz 4 native Claude edit kabulü kimlik doğrulaması nedeniyle dış-bağımlı.
+
 Araştırma sonucu: Bu hedef projeye uygulanabilir. Altyapının önemli kısmı şimdiden read_only ve edit modlarını destekliyor. Ancak her modele edit yetkisi varsayılan olarak verilmemeli; provider bazında doğrulandıktan sonra policy ile açılmalı.
 
 UYGULAMA DURUMU - 2026-08-11
