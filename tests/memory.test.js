@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { performance } from "node:perf_hooks";
-import { analyzePersistentMemoryWrite, checkPersistentMemory, promotePersistentMemory, pruneMemoryAuditFiles, readPersistentMemory, reviewPersistentMemory, searchPersistentMemory, storePersistentMemory, suggestConsolidationCandidates } from "../subagent-bridge/src/memory.js";
+import { analyzePersistentMemoryWrite, checkPersistentMemory, inspectMemoryVaultSchema, promotePersistentMemory, pruneMemoryAuditFiles, readPersistentMemory, reviewPersistentMemory, searchPersistentMemory, storePersistentMemory, suggestConsolidationCandidates } from "../subagent-bridge/src/memory.js";
 
 function createConfiguration(vaultRootPath) {
   return {
@@ -740,6 +740,30 @@ test("Faz 2C: aynı başlık, ortak etiket ve shingle benzerliği konsolidasyon 
   assert.equal(reasonFor("03_Resources/T1.md", "03_Resources/T2.md"), "same_title");
   assert.equal(reasonFor("03_Resources/G1.md", "03_Resources/G2.md"), "shared_tags");
   assert.equal(reasonFor("03_Resources/S1.md", "03_Resources/S2.md"), "body_shingles");
+});
+
+test("Vault şeması: yeni not vault_schema taşır ve ileri sürüm uyumsuz raporlanır", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-vault-schema-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const stored = storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/Schema.md", title: "Şema", content: "Şema alanı taşıyan yeterince uzun gövde içeriği." }));
+  const readBack = readPersistentMemory(configuration, { relativePath: stored.relativePath });
+  assert.match(readBack.content, /vault_schema: 1/);
+  const current = inspectMemoryVaultSchema(configuration);
+  assert.equal(current.expectedVersion, 1);
+  assert.equal(current.versions["1"], 1);
+  assert.deepEqual(current.incompatiblePaths, []);
+  const futureDirectory = path.join(vaultRootPath, "03_Resources");
+  fs.writeFileSync(path.join(futureDirectory, "Gelecek.md"), [
+    "---", "title: \"Gelecek\"", "created: \"2026-08-11T00:00:00.000Z\"", "updated: \"2026-08-11T00:00:00.000Z\"", "confidence: \"high\"", "verification: \"verified\"", "vault_schema: 99", "---", "", "# Gelecek", "", "İleri şema sürümlü gövde."
+  ].join("\n"), "utf8");
+  const incompatible = inspectMemoryVaultSchema(configuration);
+  assert.ok(incompatible.incompatiblePaths.includes("03_Resources/Gelecek.md"));
+  assert.equal(incompatible.scanErrorCount, 0);
+  assert.throws(() => readPersistentMemory(configuration, { relativePath: "03_Resources/Gelecek.md" }), /Vault şema sürümü uyumsuz/);
+  const searchResult = searchPersistentMemory(configuration, { query: "İleri şema sürümlü", limit: 5 });
+  assert.equal(searchResult.matches.some((match) => match.relativePath === "03_Resources/Gelecek.md"), false);
+  assert.ok(searchResult.incompatibleMatches.some((entry) => entry.relativePath === "03_Resources/Gelecek.md" && entry.reason === "future_incompatible"));
 });
 
 test("M0: yayınlanmış not yeni süreçte deterministik geri okunur", async (context) => {

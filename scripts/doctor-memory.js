@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { currentConfigurationVersion, loadConfiguration } from "../subagent-bridge/src/config.js";
-import { checkPersistentMemory, findQuarantinedMemoryNotes, reviewPersistentMemory } from "../subagent-bridge/src/memory.js";
+import { checkPersistentMemory, findQuarantinedMemoryNotes, inspectMemoryVaultSchema, reviewPersistentMemory } from "../subagent-bridge/src/memory.js";
+import { planRuntimeStateMigration } from "../subagent-bridge/src/runtime-state-migration.js";
+import { applicationVersion, configurationSchemaVersion, runtimeStateSchemaVersion, vaultSchemaVersion } from "../subagent-bridge/src/version-contract.js";
 
 const doctorSchemaVersion = 2;
 
@@ -47,15 +49,18 @@ function readAuditRaceEvents(configuration) {
   return { events, error };
 }
 
-function buildAttentionFlags(review, bodyCollisions, quarantine, auditRaceEvents, configurationVersion) {
-  return review.counts.invalidMetadata > 0
-    || review.counts.expiredNotes > 0
-    || bodyCollisions.length > 0
-    || quarantine.notes.length > 0
-    || quarantine.scanErrorCount > 0
-    || auditRaceEvents.events.length > 0
-    || auditRaceEvents.error
-    || !(configurationVersion && configurationVersion.active === currentConfigurationVersion);
+function runtimeStateDiagnostics(configuration) {
+  if (!configuration.statePaths?.state) {
+    return { expectedVersion: runtimeStateSchemaVersion, manifestStatus: "unknown", compatible: true, failClosed: false };
+  }
+  const plan = planRuntimeStateMigration({ stateRoot: configuration.statePaths.state });
+  return {
+    expectedVersion: runtimeStateSchemaVersion,
+    manifestStatus: plan.manifestStatus,
+    compatible: plan.compatible && !plan.failClosed,
+    failClosed: plan.failClosed,
+    legacyArtifactCount: plan.legacyArtifactCount
+  };
 }
 
 export function buildMemoryDoctorReport(configuration) {
@@ -108,15 +113,36 @@ export function buildMemoryDoctorReport(configuration) {
     publishedPaths: entry.publishedPaths
   }));
   const configurationVersion = configuration.configurationVersion || null;
+  const activeConfigurationVersion = configurationVersion?.active ?? currentConfigurationVersion;
+  const vaultSchema = inspectMemoryVaultSchema(configuration);
+  const runtimeState = runtimeStateDiagnostics(configuration);
+  const configurationCompatible = activeConfigurationVersion === configurationSchemaVersion;
+  const vaultCompatible = vaultSchema.incompatiblePaths.length === 0 && vaultSchema.scanErrorCount === 0;
+  const attention = review.counts.invalidMetadata > 0
+    || review.counts.expiredNotes > 0
+    || bodyCollisions.length > 0
+    || quarantine.notes.length > 0
+    || quarantine.scanErrorCount > 0
+    || auditRaceEvents.events.length > 0
+    || auditRaceEvents.error
+    || !configurationCompatible
+    || !vaultCompatible
+    || !runtimeState.compatible;
   return {
     enabled: true,
     readable: true,
     writable: health.writable,
-    status: buildAttentionFlags(review, bodyCollisions, quarantine, auditRaceEvents, configurationVersion) ? "attention" : "ok",
+    status: attention ? "attention" : "ok",
     schemaVersion: doctorSchemaVersion,
     indexedFiles: review.indexedFiles,
     truncatedIndex: review.truncatedIndex,
     counts: review.counts,
+    versions: {
+      application: applicationVersion,
+      configuration: { active: activeConfigurationVersion, expected: configurationSchemaVersion, compatible: configurationCompatible },
+      vault: { expected: vaultSchemaVersion, versions: vaultSchema.versions, incompatiblePaths: vaultSchema.incompatiblePaths, scanErrorCount: vaultSchema.scanErrorCount, compatible: vaultCompatible },
+      runtimeState
+    },
     diagnostics: {
       invalidMetadata: review.invalidMetadata.map((entry) => ({
         relativePath: entry.relativePath,
@@ -130,11 +156,6 @@ export function buildMemoryDoctorReport(configuration) {
         auditRaceEvents: auditRaceEvents.events.length,
         auditEventHashes: auditRaceEvents.events.map((entry) => entry.noteIdHash),
         auditReadError: auditRaceEvents.error
-      },
-      versionCompatibility: {
-        configuration: configurationVersion,
-        expectedActive: currentConfigurationVersion,
-        compatible: Boolean(configurationVersion && configurationVersion.active === currentConfigurationVersion)
       }
     }
   };

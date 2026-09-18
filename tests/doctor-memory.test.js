@@ -77,6 +77,11 @@ test("DOCTOR-MEMORY: salt-okunur teşhis üretir ve Vault'u değiştirmez", (con
   assert.equal(report.readable, true);
   assert.equal(report.status, "attention");
   assert.equal(report.schemaVersion, 2);
+  assert.equal(report.versions.configuration.compatible, true);
+  assert.equal(report.versions.vault.compatible, true);
+  assert.equal(report.versions.vault.expected, 1);
+  assert.equal(report.versions.runtimeState.compatible, true);
+  assert.equal(typeof report.versions.application, "string");
   assert.equal(report.diagnostics.quarantineScanErrorCount, 0);
   assert.equal(report.diagnostics.hashIntegrity.auditReadError, false);
   assert.ok(report.counts.invalidMetadata >= 1);
@@ -88,7 +93,7 @@ test("DOCTOR-MEMORY: salt-okunur teşhis üretir ve Vault'u değiştirmez", (con
   assert.deepEqual(report.diagnostics.hashIntegrity.bodyCollisions[0].draftPaths, ["00_Inbox/Yaris.md"]);
   assert.equal(report.diagnostics.hashIntegrity.auditRaceEvents, 2);
   assert.deepEqual([...report.diagnostics.hashIntegrity.auditEventHashes].sort(), [auditHash, rotatedAuditHash].sort());
-  assert.equal(report.diagnostics.versionCompatibility.compatible, true);
+  assert.equal(report.versions.configuration.compatible, true);
   const serialized = JSON.stringify(report);
   assert.equal(serialized.includes("Gövde içeriği raporda görünmemeli."), false);
   assert.equal(serialized.includes("system prompt"), false);
@@ -100,7 +105,7 @@ test("DOCTOR-MEMORY: uyumsuz sürüm ve erişilemez Vault güvenli raporlanır",
   const incompatible = createConfiguration(vaultRootPath);
   incompatible.configurationVersion = { source: 1, active: 1, migrated: false };
   const report = buildMemoryDoctorReport(incompatible);
-  assert.equal(report.diagnostics.versionCompatibility.compatible, false);
+  assert.equal(report.versions.configuration.compatible, false);
   assert.equal(report.status, "attention");
   const unreadable = createConfiguration(path.join(vaultRootPath, "yok-boyle-vault"));
   const unreadableReport = buildMemoryDoctorReport(unreadable);

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { getPersonalBridgeLayout } from "./personal-layout.js";
+import { planRuntimeStateMigration } from "./runtime-state-migration.js";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(moduleDirectory, "..", "..");
@@ -306,6 +307,10 @@ export function requireGitRepository(workspace) {
 }
 
 export function ensureRuntimeDirectories(configuration) {
+  const migrationPlan = planRuntimeStateMigration({ stateRoot: configuration.statePaths.state });
+  if (migrationPlan.failClosed) {
+    throw new Error("Runtime state schema is incompatible; run npm run state:migrate");
+  }
   const directories = [
     path.join(configuration.statePaths.logs, "runs"),
     path.join(configuration.statePaths.logs, "metrics"),
