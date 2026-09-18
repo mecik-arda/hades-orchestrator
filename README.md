@@ -247,6 +247,9 @@ npm run runs:mirror -- ...    Project-local mirror lifecycle
 npm run edit:feedback         Record a direct-edit user outcome
 npm run routing:feedback      Record a task-profile user outcome
 npm run memory:review         Persistent memory lifecycle review
+npm run memory:doctor         Read-only Vault health, version and audit diagnosis
+npm run state:migrate         Explicit runtime state migration (dry-run by default)
+npm run hook:install          Generate the opt-in read-only memory hook (--client=opencode|codex|claude)
 npm run memory:evaluate       Retrieval quality evaluation
 npm run config:backup         Personal policy backup
 ```
@@ -258,6 +261,10 @@ DeepSeek applies promotion to selected files only in `implementer` + `edit` mode
 ## Persistent memory
 
 The Obsidian-compatible local Vault under `memory` is outside Git tracking. `check_persistent_memory`, `search_persistent_memory`, `read_persistent_memory`, `review_persistent_memory`, `analyze_memory_write`, `store_persistent_memory` and `promote_memory` manage secure access, drafts and SHA-256 controlled publishing. DeepSeek cannot access the Vault and cannot write to memory.
+
+`npm run memory:doctor` reports frontmatter, soft-expiry, quarantine, hash-integrity, schema-version and audit-race findings read-only; it never deletes, moves, merges or repairs a note. The Vault and runtime state carry explicit schema versions; incompatible state fails closed at startup and requires `npm run state:migrate`.
+
+The optional hook enriches a client session with at most five read-only Vault excerpts (1200 characters). It never writes or publishes, excludes drafts, expired and quarantined notes, and stays silent when memory is unavailable. Consumption profiles (`normal`, `economic`, `manual`) only change automation parameters; secret scanning, path/symlink protection, SHA-256 locking, schema validation, quarantine and write permissions are invariant. Install per client with `npm run hook:install -- --client=opencode` (add `--apply`), `--client=codex` (`~/.codex/hooks.json`, requires `/hooks` trust review) or `--client=claude` (prints the `settings.json` snippet; merge manually). The OpenCode plugin additionally requires `SUBAGENT_SECOND_BRAIN_HOOK=1`.
 
 ## Reliability and metrics
 
@@ -546,6 +553,9 @@ npm run runs:mirror -- ...    Proje-local mirror yaşam döngüsü
 npm run edit:feedback         Direct-edit kullanıcı sonucu kaydı
 npm run routing:feedback      Task-profile kullanıcı sonucu kaydı
 npm run memory:review         Kalıcı hafıza yaşam döngüsü denetimi
+npm run memory:doctor         Salt-okunur Vault sağlık, sürüm ve audit teşhisi
+npm run state:migrate         Explicit runtime state migrasyonu (varsayılan dry-run)
+npm run hook:install          Opt-in salt-okunur hafıza hook'u üretir (--client=opencode|codex|claude)
 npm run memory:evaluate       Retrieval kalite değerlendirmesi
 npm run config:backup         Kişisel policy backup'ı
 ```
@@ -557,6 +567,10 @@ DeepSeek yalnız `implementer` + `edit` modunda seçili dosyalara promotion uygu
 ## Kalıcı hafıza
 
 `memory` klasöründeki Obsidian uyumlu yerel Vault, Git takibinin dışındadır. `check_persistent_memory`, `search_persistent_memory`, `read_persistent_memory`, `review_persistent_memory`, `analyze_memory_write`, `store_persistent_memory` ve `promote_memory` güvenli erişim, taslak ve SHA-256 kontrollü yayını yönetir. DeepSeek Vault’a erişemez ve belleğe yazamaz.
+
+`npm run memory:doctor` frontmatter, soft-expiry, karantina, hash bütünlüğü, şema sürümü ve audit yarış bulgularını salt-okunur raporlar; hiçbir notu silmez, taşımaz, birleştirmez veya onarmaz. Vault ve runtime state açık şema sürümleri taşır; uyumsuz state başlangıçta fail-closed olur ve `npm run state:migrate` gerektirir.
+
+İsteğe bağlı hook, istemci oturumuna en fazla beş salt-okunur Vault alıntısı (1200 karakter) ekler. Asla yazmaz veya yayınlamaz; taslak, süresi dolmuş ve karantina notlarını dışlar; hafıza erişilemezse sessiz kalır. Tüketim profilleri (`normal`, `economic`, `manual`) yalnız otomasyon parametrelerini değiştirir; secret taraması, path/symlink koruması, SHA-256 kilidi, şema doğrulaması, karantina ve yazma izinleri değişmez. İstemci bazında kurulum: `npm run hook:install -- --client=opencode` (`--apply` ekle), `--client=codex` (`~/.codex/hooks.json`, `/hooks` güven incelemesi gerekir) veya `--client=claude` (`settings.json` snippet'ini yazdırır; elle birleştir). OpenCode plugin'i ayrıca `SUBAGENT_SECOND_BRAIN_HOOK=1` gerektirir.
 
 ## Güvenilirlik ve metrikler
 

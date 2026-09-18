@@ -63,8 +63,11 @@ export async function runVerification() {
     "subagent-bridge/src/services/prepared-edit-registry.js",
     "subagent-bridge/src/services/slo-service.js",
     "subagent-bridge/src/services/memory-hook.js",
+    "subagent-bridge/src/services/memory-hook-client.js",
     "subagent-bridge/src/services/memory-hook-plugin.js",
+    "subagent-bridge/src/services/memory-profile.js",
     "scripts/install-memory-hook.js",
+    "scripts/memory-hook-client.js",
     "subagent-bridge/src/server.js",
     "subagent-bridge/schemas/deepseek-result.schema.json"
   ];

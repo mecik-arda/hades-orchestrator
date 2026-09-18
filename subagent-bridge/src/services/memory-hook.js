@@ -1,8 +1,9 @@
 import { loadConfiguration } from "../config.js";
 import { searchPersistentMemory } from "../memory.js";
+import { memoryProfileCeilings, resolveMemoryConsumptionProfile } from "./memory-profile.js";
 
-export const memoryHookMaxResults = 5;
-export const memoryHookMaxContextChars = 1200;
+export const memoryHookMaxResults = memoryProfileCeilings.maxResults;
+export const memoryHookMaxContextChars = memoryProfileCeilings.maxContextChars;
 
 export function buildMemoryHookContext({ configuration, query, search = searchPersistentMemory, maxResults = memoryHookMaxResults, maxContextChars = memoryHookMaxContextChars } = {}) {
   if (!configuration || typeof query !== "string" || query.trim().length === 0) return "";
@@ -29,12 +30,20 @@ export function buildMemoryHookContext({ configuration, query, search = searchPe
   return "";
 }
 
-export function createMemoryHook({ configurationLoader = loadConfiguration, search = searchPersistentMemory } = {}) {
+export function createMemoryHook({ configurationLoader = loadConfiguration, search = searchPersistentMemory, userPreference } = {}) {
   return async function memoryHook(input = {}) {
     try {
       const configuration = configurationLoader();
       const query = typeof input?.query === "string" ? input.query : "";
-      return buildMemoryHookContext({ configuration, query, search });
+      const profile = resolveMemoryConsumptionProfile({ configuration, userPreference });
+      if (!profile.autoRetrieval) return "";
+      return buildMemoryHookContext({
+        configuration,
+        query,
+        search,
+        maxResults: profile.maxResults,
+        maxContextChars: profile.maxContextChars
+      });
     } catch {
       return "";
     }

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -12,10 +11,6 @@ export const currentConfigurationVersion = 2;
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
-
-function hashCheckpointId(value) {
-  return crypto.createHash("sha256").update(String(value)).digest("hex");
 }
 
 function normalizeForComparison(value) {
@@ -122,6 +117,13 @@ const configurationSchema = z.object({
     maxReadBytes: z.number().int().positive(),
     maxWriteBytes: z.number().int().positive(),
     auditMaxBytes: z.number().int().positive().optional(),
+    activeProfile: z.enum(["normal", "economic", "manual"]).optional(),
+    consumptionProfiles: z.record(z.enum(["normal", "economic", "manual"]), z.object({
+      autoRetrieval: z.boolean(),
+      maxResults: z.number().int().min(0).max(5),
+      maxContextChars: z.number().int().min(0).max(1200),
+      healthCheckIntervalMinutes: z.number().int().positive().max(10080)
+    }).strict()).optional(),
     reviewDefaults: z.object({
       sourceStalenessDays: z.number().int().positive(),
       maxDuplicateGroups: z.number().int().positive(),
@@ -320,35 +322,6 @@ export function ensureRuntimeDirectories(configuration) {
   ];
   for (const directory of directories) {
     fs.mkdirSync(directory, { recursive: true });
-  }
-  const checkpointDirectory = path.join(configuration.statePaths.state, "checkpoints");
-  for (const entry of fs.readdirSync(checkpointDirectory)) {
-    if (!entry.endsWith(".json")) continue;
-    const checkpointPath = path.join(checkpointDirectory, entry);
-    try {
-      const checkpoint = readJson(checkpointPath);
-      if (checkpoint.runIdHash && !checkpoint.runId) continue;
-      const runIdHash = checkpoint.runIdHash || hashCheckpointId(checkpoint.runId || entry);
-      const redacted = {
-        runIdHash,
-        agent: checkpoint.agent,
-        role: checkpoint.role,
-        model: checkpoint.model,
-        exitCode: checkpoint.exitCode,
-        completedAt: checkpoint.completedAt,
-        failureClass: checkpoint.failureClass,
-        attempts: checkpoint.attempts,
-        usage: checkpoint.usage,
-        result: {
-          status: checkpoint.result?.status || "failed",
-          requires_human_approval: checkpoint.result?.requires_human_approval === true
-        }
-      };
-      const redactedPath = path.join(checkpointDirectory, `${runIdHash}.json`);
-      fs.writeFileSync(redactedPath, JSON.stringify(redacted, null, 2), "utf8");
-      if (redactedPath !== checkpointPath) fs.rmSync(checkpointPath, { force: true });
-    } catch {
-    }
   }
 }
 

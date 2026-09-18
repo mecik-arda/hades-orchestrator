@@ -99,6 +99,27 @@
                    "maxReadBytes":  262144,
                    "maxWriteBytes":  65536,
                    "auditMaxBytes":  5242880,
+                   "activeProfile":  "normal",
+                   "consumptionProfiles":  {
+                                               "normal":  {
+                                                              "autoRetrieval":  true,
+                                                              "maxResults":  5,
+                                                              "maxContextChars":  1200,
+                                                              "healthCheckIntervalMinutes":  60
+                                                          },
+                                               "economic":  {
+                                                                "autoRetrieval":  true,
+                                                                "maxResults":  2,
+                                                                "maxContextChars":  600,
+                                                                "healthCheckIntervalMinutes":  240
+                                                            },
+                                               "manual":  {
+                                                              "autoRetrieval":  false,
+                                                              "maxResults":  5,
+                                                              "maxContextChars":  1200,
+                                                              "healthCheckIntervalMinutes":  1440
+                                                          }
+                                           },
                    "reviewDefaults":  {
                                           "sourceStalenessDays":  365,
                                           "maxDuplicateGroups":  20,
