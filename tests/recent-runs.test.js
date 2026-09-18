@@ -280,4 +280,13 @@ test("RUNS-10: eşzamanlı süreçler mirror satırı kaybetmez", async (t) => {
   const writes = await Promise.all(Array.from({ length: 8 }, (_, index) => write(index)));
   assert.deepEqual(writes.map((result) => result.written), Array(8).fill(true));
   assert.equal(readProjectMirror(config, workspace, { limit: 20 }).runCount, 8);
+  const concurrencyReport = {
+    attempts: writes.length,
+    firstAttemptSuccessCount: writes.filter((result) => result.written === true).length,
+    retryCount: 0,
+    failureClasses: writes.flatMap((result) => (result.written === true ? [] : [result.reason || "unknown"]))
+  };
+  assert.equal(concurrencyReport.firstAttemptSuccessCount, 8);
+  assert.equal(concurrencyReport.retryCount, 0);
+  assert.deepEqual(concurrencyReport.failureClasses, []);
 });

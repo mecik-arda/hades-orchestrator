@@ -561,6 +561,25 @@ test("audit retention yalnız süresi geçmiş döndürülmüş journal dosyalar
   assert.equal(fs.existsSync(activePath), true);
 });
 
+test("audit prune kilidi tutulurken silme yapmaz", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-prune-lock-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  configuration.observability = { maxMetricRetentionDays: 30 };
+  const auditDirectory = path.join(configuration.statePaths.logs, "audit");
+  fs.mkdirSync(auditDirectory, { recursive: true });
+  const oldPath = path.join(auditDirectory, "memory-events-2026-old.jsonl");
+  fs.writeFileSync(oldPath, "{}\n", "utf8");
+  fs.utimesSync(oldPath, new Date("2026-01-01T00:00:00.000Z"), new Date("2026-01-01T00:00:00.000Z"));
+  const lockPath = path.join(auditDirectory, "memory-events.jsonl.lock");
+  fs.writeFileSync(lockPath, JSON.stringify({ token: "held-by-test", pid: process.pid, createdAt: new Date().toISOString() }), "utf8");
+  assert.equal(pruneMemoryAuditFiles(configuration, Date.parse("2026-08-11T00:00:00.000Z")), 0);
+  assert.equal(fs.existsSync(oldPath), true);
+  fs.rmSync(lockPath, { force: true });
+  assert.equal(pruneMemoryAuditFiles(configuration, Date.parse("2026-08-11T00:00:00.000Z")), 1);
+  assert.equal(fs.existsSync(oldPath), false);
+});
+
 test("kalıcı hafıza taraması ataya işaret eden dizin symlinkini izlemez", (context) => {
   const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-symlink-"));
   context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));

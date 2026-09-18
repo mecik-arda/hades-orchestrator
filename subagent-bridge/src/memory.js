@@ -1739,16 +1739,22 @@ export function pruneMemoryAuditFiles(configuration, now = Date.now()) {
   if (!Number.isInteger(retentionDays) || retentionDays < 1 || !fs.existsSync(auditDirectory)) return 0;
   const cutoff = now - retentionDays * 86400000;
   let deleted = 0;
-  for (const entry of fs.readdirSync(auditDirectory)) {
-    if (!/^memory-events-.+\.jsonl$/i.test(entry)) continue;
-    const auditPath = path.join(auditDirectory, entry);
-    try {
-      if (fs.statSync(auditPath).mtimeMs < cutoff) {
-        fs.rmSync(auditPath, { force: true });
-        deleted += 1;
+  try {
+    withMemoryAuditLock(path.join(auditDirectory, "memory-events.jsonl.lock"), () => {
+      for (const entry of fs.readdirSync(auditDirectory)) {
+        if (!/^memory-events-.+\.jsonl$/i.test(entry)) continue;
+        const auditPath = path.join(auditDirectory, entry);
+        try {
+          if (fs.statSync(auditPath).mtimeMs < cutoff) {
+            fs.rmSync(auditPath, { force: true });
+            deleted += 1;
+          }
+        } catch {
+        }
       }
-    } catch {
-    }
+    });
+  } catch {
+    return 0;
   }
   return deleted;
 }
