@@ -26,6 +26,7 @@
     "memory:review": "node scripts/review-memory.js",
     "memory:doctor": "node scripts/doctor-memory.js",
     "state:migrate": "node scripts/migrate-runtime-state.js",
+    "hook:install": "node scripts/install-memory-hook.js",
     "memory:evaluate": "node scripts/evaluate-memory.js",
     "model-fit:evaluate": "node scripts/evaluate-model-fit.js",
     "model-fit:live": "node scripts/evaluate-model-fit.js --live config/model-fit-live-evaluation.json",

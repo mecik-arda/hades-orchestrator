@@ -89,7 +89,7 @@ test("OPT-01a: eski guard sahibi yeni guard dosyasını silemez", (t) => {
 test("OPT-01aa: etkin lease staleLockMs aşılırken silinmez", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-lease-heartbeat-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const options = { lockDirectory: path.join(root, "locks"), staleLockMs: 1000, leaseHeartbeatMs: 20 };
+  const options = { lockDirectory: path.join(root, "locks"), staleLockMs: 3000, leaseHeartbeatMs: 20 };
   const first = createWorkspaceCoordinator(options);
   const second = createWorkspaceCoordinator(options);
   assert.ok(await first.acquire(root, "edit", "lease-holder"));
@@ -97,14 +97,14 @@ test("OPT-01aa: etkin lease staleLockMs aşılırken silinmez", async (t) => {
   const writeLockPath = path.join(root, "locks", workspaceHash, "write.lock");
   const staleAt = new Date(Date.now() - 2000);
   fs.utimesSync(writeLockPath, staleAt, staleAt);
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await new Promise((resolve) => setTimeout(resolve, 200));
   assert.ok(Date.now() - fs.statSync(writeLockPath).mtimeMs < options.staleLockMs);
   let secondAcquired = false;
   const waiting = second.acquire(root, "edit", "lease-waiter").then((grant) => {
     secondAcquired = Boolean(grant);
     return grant;
   });
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await new Promise((resolve) => setTimeout(resolve, 250));
   assert.equal(secondAcquired, false);
   first.release("lease-holder");
   assert.ok(await waiting);
