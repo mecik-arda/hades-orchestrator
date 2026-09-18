@@ -6,7 +6,7 @@ import { checkCapability } from "../subagent-bridge/src/services/capability-serv
 import { shouldRetry, isMutationStateUnknown } from "../subagent-bridge/src/services/retry-service.js";
 import { normalizeSubagentResult, normalizeTimedOutResult, normalizeUnknownMutationResult } from "./support/result-normalizer.js";
 import { validateSubagentResult, validateHealthResult, subagentExecutionRequestSchema, subagentResultSchema } from "../subagent-bridge/src/schemas/core-schemas.js";
-import { healthCheck, invalidateHealthCache } from "../subagent-bridge/src/services/health-service.js";
+import { createHealthCache, healthCheck, invalidateHealthCache } from "../subagent-bridge/src/services/health-service.js";
 import { acquireReadLock, releaseReadLock, acquireWriteLock, releaseWriteLock, releaseAllLocks } from "./support/workspace-lock.js";
 
 function createOrchestratedRetryFlow(adapter, baseRequest, maxAttempts = 3, budgetConstraints = {}) {
@@ -181,6 +181,23 @@ test("HEALTH: 10 concurrent → 1 real check (stampede fixed)", async () => {
   const results = await Promise.all(promises);
   assert.equal(results.length, 10);
   assert.ok(results.every(r => r.installed));
+});
+
+test("HEALTH-TTL: TTL içinde tek çalıştırma, TTL sonrasında yeni çalıştırma yapılır", async () => {
+  let calls = 0;
+  const cache = createHealthCache({ ttlMs: 30 });
+  const operation = async () => {
+    calls += 1;
+    return { installed: true, call: calls };
+  };
+  const first = await cache.check("ttl-key", operation);
+  const second = await cache.check("ttl-key", operation);
+  assert.deepEqual(second, first);
+  assert.equal(calls, 1);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const third = await cache.check("ttl-key", operation);
+  assert.equal(calls, 2);
+  assert.equal(third.call, 2);
 });
 
 test("LOCK: path variations do not bypass workspace lock", () => {

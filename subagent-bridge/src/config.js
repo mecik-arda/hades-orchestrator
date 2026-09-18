@@ -7,7 +7,7 @@ import { getPersonalBridgeLayout } from "./personal-layout.js";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(moduleDirectory, "..", "..");
-const currentConfigurationVersion = 2;
+export const currentConfigurationVersion = 2;
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));

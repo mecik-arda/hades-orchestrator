@@ -407,7 +407,7 @@ function extractQuotedFrontmatterValue(content, fieldName) {
 
 function extractFrontmatterList(content, fieldName) {
   const frontmatter = extractFrontmatterBlock(content);
-  const section = frontmatter.match(new RegExp(`^${fieldName}:\s*\n((?:\s+-\s+.+\n?)*)`, "m"));
+  const section = frontmatter.match(new RegExp(`^${fieldName}:\\s*\n((?:\\s+-\\s+.+\n?)*)`, "m"));
   if (!section) return [];
   return [...section[1].matchAll(/^\s+-\s+(.+)$/gm)].map((match) => {
     try {
@@ -741,6 +741,39 @@ export function checkPersistentMemory(configuration) {
     maxReadBytes: configuration.memory.maxReadBytes,
     maxWriteBytes: configuration.memory.maxWriteBytes
   };
+}
+
+function readFileHead(filePath, maximumBytes) {
+  const descriptor = fs.openSync(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(maximumBytes);
+    const bytesRead = fs.readSync(descriptor, buffer, 0, maximumBytes, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+export function findQuarantinedMemoryNotes(configuration) {
+  const { vaultRoot, files } = collectMarkdownFiles(configuration);
+  const maximumBytes = configuration.memory.reviewDefaults?.maxReadBytesPerFile ?? 32768;
+  const quarantined = [];
+  let scanErrorCount = 0;
+  for (const filePath of files) {
+    try {
+      const content = readFileHead(filePath, maximumBytes);
+      const riskCategories = detectInjectionCategories(content);
+      if (riskCategories.length > 0) {
+        quarantined.push({
+          relativePath: path.relative(vaultRoot, filePath).replace(/\\/g, "/"),
+          riskCategories
+        });
+      }
+    } catch {
+      scanErrorCount += 1;
+    }
+  }
+  return { notes: quarantined, scanErrorCount };
 }
 
 export function searchPersistentMemory(configuration, input) {

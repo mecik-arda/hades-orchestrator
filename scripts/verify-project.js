@@ -42,6 +42,7 @@ export async function runVerification() {
     "scripts/pilot-deepseek-edit.js",
     "scripts/manage-project-logs.js",
     "scripts/review-memory.js",
+    "scripts/doctor-memory.js",
     "scripts/report-recent-runs.js",
     "scripts/prune-memory-audit.js",
     "subagent-bridge/src/memory-evaluation.js",

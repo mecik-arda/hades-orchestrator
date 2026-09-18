@@ -696,3 +696,77 @@ test("promote_memory kaynak ve hedef sınırlarını zorlar ve PROMOTE audit ola
   const auditContent = fs.readFileSync(auditPath, "utf8");
   assert.match(auditContent, /"event":"PROMOTE"/);
 });
+
+test("Faz 2A: stage geçiş kuralları korunur", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-stage-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const draft = storePersistentMemory(configuration, createMemoryInput({ relativePath: "00_Inbox/Stage.md", title: "Stage", content: "Taslak gövdesi yeterince uzun ve anlamlı içerik.", stage: "draft", acknowledgeMemoryConflicts: true }));
+  const draftUpdated = storePersistentMemory(configuration, createMemoryInput({ relativePath: "00_Inbox/Stage.md", title: "Stage güncel", content: "Taslak gövdesi güncellendi ve yeterince uzun içerik.", stage: "draft", expectedSha256: draft.sha256, acknowledgeMemoryConflicts: true }));
+  const omittedStageInput = createMemoryInput({ relativePath: "00_Inbox/Stage.md", title: "Stage üç", content: "Taslak gövdesi üçüncü kez güncellendi ve yeterince uzun içerik.", expectedSha256: draftUpdated.sha256, acknowledgeMemoryConflicts: true });
+  delete omittedStageInput.stage;
+  const stagePreserved = storePersistentMemory(configuration, omittedStageInput);
+  assert.equal(stagePreserved.relativePath, "00_Inbox/Stage.md");
+  assert.throws(() => storePersistentMemory(configuration, createMemoryInput({ relativePath: "00_Inbox/Stage.md", title: "Stage yayın", content: "Taslak doğrudan yayına çevrilemez ve yeterince uzun içerik.", stage: "published", expectedSha256: stagePreserved.sha256, acknowledgeMemoryConflicts: true })), /promote_memory|aşama/);
+  const published = storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/Yayin.md", title: "Yayın", content: "Yayınlanmış gövde yeterince uzun ve anlamlı içerik." }));
+  const publishedUpdated = storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/Yayin.md", title: "Yayın güncel", content: "Yayınlanmış gövde güncellendi ve yeterince uzun içerik.", expectedSha256: published.sha256, acknowledgeMemoryConflicts: true }));
+  assert.equal(publishedUpdated.relativePath, "03_Resources/Yayin.md");
+  assert.throws(() => storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/Yayin.md", title: "Yayın taslak", content: "Yayın doğrudan taslağa çevrilemez ve yeterince uzun içerik.", stage: "draft", expectedSha256: publishedUpdated.sha256, acknowledgeMemoryConflicts: true })), /promote_memory|00_Inbox|aşama/);
+  const review = reviewPersistentMemory(configuration);
+  assert.equal(review.counts.drafts, 1);
+  const hidden = searchPersistentMemory(configuration, { query: "taslak", limit: 5 });
+  assert.equal(hidden.matches.some((match) => match.relativePath === "00_Inbox/Stage.md"), false);
+  const visible = searchPersistentMemory(configuration, { query: "yayınlanmış", limit: 5 });
+  assert.equal(visible.matches.some((match) => match.relativePath === "03_Resources/Yayin.md"), true);
+  const withDrafts = searchPersistentMemory(configuration, { query: "taslak", includeDrafts: true, limit: 5 });
+  assert.equal(withDrafts.matches.some((match) => match.relativePath === "00_Inbox/Stage.md"), true);
+  const readBack = readPersistentMemory(configuration, { relativePath: "00_Inbox/Stage.md" });
+  assert.match(readBack.content, /stage: "draft"/);
+  assert.throws(() => storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/Olmayan.md", title: "Olmayan", content: "Taslak dışarıda olamaz ve yeterince uzun içerik.", stage: "draft" })), /00_Inbox altında olmalı/);
+});
+
+test("Faz 2C: aynı başlık, ortak etiket ve shingle benzerliği konsolidasyon adayı olur", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-consolidation-paths-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/T1.md", title: "Ortak Başlık", content: `birinci tamamen farklı içerik ${"x".repeat(60)}` }));
+  storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/T2.md", title: "Ortak Başlık", content: `ikinci bambaşka içerik ${"y".repeat(60)}`, acknowledgeMemoryConflicts: true }));
+  storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/G1.md", title: "G1", content: "paylaşılan ortak gövde parçası yeterince uzun ve anlamlı kelimelerden oluşur alfa", tags: ["ortak-etiket"] }));
+  storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/G2.md", title: "G2", content: "paylaşılan ortak gövde parçası yeterince uzun ve anlamlı kelimelerden oluşur beta", tags: ["ortak-etiket"], acknowledgeMemoryConflicts: true }));
+  storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/S1.md", title: "S1", content: "alfa beta gama delta epsilon zeta eta theta iota kappa lambda", tags: [] }));
+  storePersistentMemory(configuration, createMemoryInput({ relativePath: "03_Resources/S2.md", title: "S2", content: "alfa beta gama delta epsilon zeta eta theta iota kappa omega", tags: [], acknowledgeMemoryConflicts: true }));
+  const candidates = suggestConsolidationCandidates(configuration, { now: "2026-08-11T00:00:00.000Z" });
+  const reasonFor = (left, right) => candidates.find((group) => group.relativePaths.includes(left) && group.relativePaths.includes(right))?.reason;
+  assert.equal(reasonFor("03_Resources/T1.md", "03_Resources/T2.md"), "same_title");
+  assert.equal(reasonFor("03_Resources/G1.md", "03_Resources/G2.md"), "shared_tags");
+  assert.equal(reasonFor("03_Resources/S1.md", "03_Resources/S2.md"), "body_shingles");
+});
+
+test("M0: yayınlanmış not yeni süreçte deterministik geri okunur", async (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-m0-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const draft = storePersistentMemory(configuration, createMemoryInput({ relativePath: "00_Inbox/M0.md", title: "M0 Notu", content: "M0 geri okuma için benzersiz ve yeterince uzun gövde içeriği.", stage: "draft", acknowledgeMemoryConflicts: true }));
+  const promoted = promotePersistentMemory(configuration, { sourceRelativePath: draft.relativePath, targetRelativePath: "03_Resources/M0.md", expectedSourceSha256: draft.sha256 });
+  const memoryModule = pathToFileURL(path.resolve("subagent-bridge/src/memory.js")).href;
+  const childSource = [
+    `import { readPersistentMemory, searchPersistentMemory } from ${JSON.stringify(memoryModule)};`,
+    `const configuration = ${JSON.stringify(configuration)};`,
+    'const read = readPersistentMemory(configuration, { relativePath: "03_Resources/M0.md" });',
+    'const match = searchPersistentMemory(configuration, { query: "benzersiz geri okuma", limit: 5 });',
+    'const miss = searchPersistentMemory(configuration, { query: "zzzzqqqq wwwwwwww", limit: 5 });',
+    'process.stdout.write(JSON.stringify({ sha256: read.sha256, matched: match.matches.some((entry) => entry.relativePath === "03_Resources/M0.md"), abstained: miss.matches.length === 0 }));'
+  ].join("\n");
+  const result = await new Promise((resolve, reject) => {
+    const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", childSource], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(`M0 child exited with ${code}: ${stderr}`)));
+  });
+  assert.equal(result.sha256, promoted.sha256);
+  assert.equal(result.matched, true);
+  assert.equal(result.abstained, true);
+});

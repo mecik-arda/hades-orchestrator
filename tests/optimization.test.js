@@ -610,6 +610,80 @@ test("OPT-05b: routing değerlendirmesi profile kalite süre ve maliyetini özet
   await assert.rejects(() => recordRoutingFeedback(configuration, executionIdHash.slice(0, 12), "not_useful"), /already recorded/);
 });
 
+test("V2-DECISION-01: direct edit karar hazırlığı 30 etikette açılır ve oranlar hesaplanır", () => {
+  const buildRecords = (labeled, outcomeForIndex) => {
+    const records = [];
+    for (let index = 0; index < 30; index += 1) {
+      const executionIdHash = `edit-${index}`;
+      records.push({ backend: "codex", mode: "edit", outcomeStatus: "completed", executionIdHash, usage: { durationMs: 10, totalCostUsd: 0 } });
+      if (index < labeled) records.push({ recordType: "direct_edit_feedback", executionIdHash, outcome: outcomeForIndex(index) });
+    }
+    return records;
+  };
+  const partial = summarizeMetrics(buildRecords(29, () => "accepted")).directEditBaseline;
+  assert.equal(partial.labeledEditRuns, 29);
+  assert.equal(partial.pendingFeedback, 1);
+  assert.equal(partial.decisionReady, false);
+  const ready = summarizeMetrics(buildRecords(30, (index) => (index === 0 ? "reverted" : index === 1 ? "minor_fix" : "accepted"))).directEditBaseline;
+  assert.equal(ready.labeledEditRuns, 30);
+  assert.equal(ready.pendingFeedback, 0);
+  assert.equal(ready.decisionReady, true);
+  assert.equal(ready.interventionRate, Number((2 / 30).toFixed(4)));
+  assert.equal(ready.rollbackOrSecurityRate, Number((1 / 30).toFixed(4)));
+});
+
+test("V2-DECISION-02: profil ve routing karar hazırlığı 15 etikette açılır", () => {
+  const editRecords = (labeled) => {
+    const records = [];
+    for (let index = 0; index < 30; index += 1) {
+      const executionIdHash = `profile-edit-${index}`;
+      records.push({ backend: "codex", mode: "edit", outcomeStatus: "completed", profile: "implementation", executionIdHash, usage: {} });
+      if (index < labeled) records.push({ recordType: "direct_edit_feedback", executionIdHash, outcome: "accepted" });
+    }
+    return records;
+  };
+  assert.equal(summarizeMetrics(editRecords(29)).directEditBaseline.byProfile.implementation.decisionReady, false);
+  assert.equal(summarizeMetrics(editRecords(30)).directEditBaseline.byProfile.implementation.decisionReady, true);
+  const routingRecords = (labeled) => {
+    const records = [];
+    for (let index = 0; index < 15; index += 1) {
+      const executionIdHash = `route-${index}`;
+      records.push({ backend: "codex", profile: "review", executionIdHash, outcomeStatus: "completed", usage: {} });
+      if (index < labeled) records.push({ recordType: "routing_feedback", executionIdHash, outcome: "useful" });
+    }
+    return records;
+  };
+  assert.equal(summarizeMetrics(routingRecords(14)).routingEvaluation.byProfile.review.decisionReady, false);
+  const readyRouting = summarizeMetrics(routingRecords(15)).routingEvaluation.byProfile.review;
+  assert.equal(readyRouting.decisionReady, true);
+  assert.equal(readyRouting.usefulRate, 1);
+});
+
+test("V2-DECISION-03: edit feedback kaydı provider çağrısını veya execution kaydını değiştirmez", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-feedback-noop-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = { statePaths: { logs: root }, observability: { maxMetricFileBytes: 65536 } };
+  const executionIdHash = crypto.createHash("sha256").update("provider-run").digest("hex");
+  await appendRedactedRunMetric(configuration, {
+    recordedAt: "2026-08-11T00:00:00.000Z",
+    backend: "codex",
+    executionIdHash,
+    mode: "edit",
+    profile: "implementation",
+    outcomeStatus: "completed",
+    usage: { durationMs: 10, totalCostUsd: 0.01 },
+    attempts: [{}]
+  });
+  const beforeExecution = readMetricsDirectory(path.join(root, "metrics")).filter((record) => !record.recordType);
+  await recordDirectEditFeedback(configuration, executionIdHash.slice(0, 12), "accepted");
+  const afterRecords = readMetricsDirectory(path.join(root, "metrics"));
+  const afterExecution = afterRecords.filter((record) => !record.recordType);
+  assert.equal(afterExecution.length, beforeExecution.length);
+  assert.deepEqual(afterExecution[0], beforeExecution[0]);
+  assert.equal(afterRecords.filter((record) => record.recordType === "direct_edit_feedback").length, 1);
+  await assert.rejects(() => recordDirectEditFeedback(configuration, executionIdHash.slice(0, 12), "accepted"), /already recorded/);
+});
+
 test("OPT-06: metrics dosyası sınırda rotasyon yapar", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-metrics-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
