@@ -416,8 +416,10 @@ test("audit yazımı başarısız olsa da tamamlanan mutation açıkça raporlan
   const result = storePersistentMemory(configuration, createMemoryInput());
   assert.equal(result.mutationCompleted, true);
   assert.equal(result.auditWritten, false);
-  assert.equal(result.audit.reason, "audit_write_failed");
+  assert.equal(result.audit.reason, "audit_pending_recovery");
   assert.equal(fs.existsSync(path.join(vaultRootPath, "03_Resources", "Orkestrasyon", "Hafiza.md")), true);
+  const journalDirectory = path.join(configuration.statePaths.state, "memory-mutations");
+  assert.equal(fs.readdirSync(journalDirectory).filter((entry) => entry.endsWith(".json")).length, 1);
 });
 
 test("yeni not varsayılan olarak Inbox taslağıdır ve normal aramada gizlenir", (context) => {

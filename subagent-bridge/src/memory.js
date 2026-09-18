@@ -576,6 +576,275 @@ function recordMemorySecurityEvent(configuration, event, relativePath, contentSh
   }
 }
 
+function mutationJournalDirectory(configuration) {
+  if (!configuration.statePaths?.state) return null;
+  return path.join(configuration.statePaths.state, "memory-mutations");
+}
+
+function syncDirectoryBestEffort(directoryPath) {
+  try {
+    const descriptor = fs.openSync(directoryPath, "r");
+    try {
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  } catch {
+  }
+}
+
+function writeMutationIntent(configuration, intent) {
+  const directory = mutationJournalDirectory(configuration);
+  if (!directory) return { written: false, reason: "journal_path_not_configured" };
+  fs.mkdirSync(directory, { recursive: true });
+  const journalPath = path.join(directory, `${intent.journalId}.json`);
+  if (fs.existsSync(journalPath)) return { written: false, reason: "journal_exists" };
+  const temporaryPath = `${journalPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  const descriptor = fs.openSync(temporaryPath, "wx");
+  try {
+    fs.writeFileSync(descriptor, JSON.stringify(intent), "utf8");
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  fs.renameSync(temporaryPath, journalPath);
+  syncDirectoryBestEffort(directory);
+  return { written: true };
+}
+
+function removeMutationIntent(configuration, journalId) {
+  const directory = mutationJournalDirectory(configuration);
+  if (!directory) return;
+  fs.rmSync(path.join(directory, `${journalId}.json`), { force: true });
+}
+
+function listMutationIntents(configuration) {
+  const directory = mutationJournalDirectory(configuration);
+  if (!directory || !fs.existsSync(directory)) return { intents: [], error: false };
+  let entries;
+  try {
+    entries = fs.readdirSync(directory).filter((entry) => entry.endsWith(".json"));
+  } catch {
+    return { intents: [], error: true };
+  }
+  const intents = [];
+  let error = false;
+  for (const entry of entries) {
+    try {
+      const intent = JSON.parse(fs.readFileSync(path.join(directory, entry), "utf8"));
+      if (typeof intent?.journalId !== "string" || !hashPattern.test(intent.journalId)) {
+        error = true;
+        continue;
+      }
+      if (!["store", "promote", "repair"].includes(intent.kind)) {
+        error = true;
+        continue;
+      }
+      intents.push(intent);
+    } catch {
+      error = true;
+    }
+  }
+  return { intents, error };
+}
+
+function memoryAuditHasEvent(configuration, { event, noteIdHash, newSha256, oldSha256 }) {
+  const logsRoot = configuration.statePaths?.logs;
+  if (!logsRoot) return false;
+  const auditDirectory = path.join(logsRoot, "audit");
+  if (!fs.existsSync(auditDirectory)) return false;
+  const maximumBytes = configuration.memory?.auditMaxBytes ?? 5242880;
+  let names;
+  try {
+    names = fs.readdirSync(auditDirectory).filter((name) => /^memory-events.*\.jsonl$/.test(name));
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    let content;
+    try {
+      content = fs.readFileSync(path.join(auditDirectory, name), "utf8");
+    } catch {
+      continue;
+    }
+    const capped = content.length > maximumBytes ? content.slice(-maximumBytes) : content;
+    for (const line of capped.split("\n").filter(Boolean)) {
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (record.event !== event || record.noteIdHash !== noteIdHash) continue;
+      if (newSha256 && record.newSha256 !== newSha256) continue;
+      if (oldSha256 && record.oldSha256 !== oldSha256) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+function replayMutationAudit(configuration, intent) {
+  if (memoryAuditHasEvent(configuration, { event: intent.event, noteIdHash: intent.noteIdHash, newSha256: intent.newSha256 })) return;
+  appendMemoryAuditEvent(configuration, {
+    recordedAt: new Date().toISOString(),
+    event: intent.event,
+    noteIdHash: intent.noteIdHash,
+    oldSha256: intent.oldSha256 || null,
+    newSha256: intent.newSha256 || null,
+    ...(intent.auditMeta || {})
+  });
+}
+
+function classifyMutationIntent(configuration, intent) {
+  const item = { journalId: intent.journalId, kind: intent.kind, noteIdHash: intent.noteIdHash || null };
+  if (intent.kind === "promote") {
+    const source = resolveMemoryPath(configuration, intent.sourceRelativePath, true);
+    const target = resolveMemoryPath(configuration, intent.targetRelativePath, true);
+    item.sourceRelativePath = source.normalizedRelativePath.replace(/\\/g, "/");
+    item.targetRelativePath = target.normalizedRelativePath.replace(/\\/g, "/");
+    const targetExists = fs.existsSync(target.candidatePath);
+    const sourceExists = fs.existsSync(source.candidatePath);
+    if (targetExists) {
+      const targetHash = calculateSha256(fs.readFileSync(target.candidatePath, "utf8"));
+      if (targetHash !== intent.newSha256) {
+        item.action = "unresolved";
+        item.reason = "target_hash_mismatch";
+      } else if (!sourceExists) {
+        item.action = "replay_audit";
+      } else {
+        const sourceHash = calculateSha256(fs.readFileSync(source.candidatePath, "utf8"));
+        if (sourceHash === intent.oldSha256) {
+          item.action = "complete_promote";
+        } else {
+          item.action = "unresolved";
+          item.reason = "source_hash_mismatch";
+        }
+      }
+    } else if (sourceExists) {
+      const sourceHash = calculateSha256(fs.readFileSync(source.candidatePath, "utf8"));
+      if (sourceHash === intent.oldSha256) {
+        item.action = "discard";
+      } else {
+        item.action = "unresolved";
+        item.reason = "source_hash_mismatch";
+      }
+    } else {
+      item.action = "unresolved";
+      item.reason = "both_missing";
+    }
+    return item;
+  }
+  const note = resolveMemoryPath(configuration, intent.relativePath, true);
+  item.relativePath = note.normalizedRelativePath.replace(/\\/g, "/");
+  if (!fs.existsSync(note.candidatePath)) {
+    if (intent.oldSha256) {
+      item.action = "unresolved";
+      item.reason = "note_missing";
+    } else {
+      item.action = "discard";
+    }
+    return item;
+  }
+  const noteHash = calculateSha256(fs.readFileSync(note.candidatePath, "utf8"));
+  if (noteHash === intent.newSha256) {
+    item.action = "replay_audit";
+  } else if (intent.oldSha256 && noteHash === intent.oldSha256) {
+    item.action = "discard";
+  } else {
+    item.action = "unresolved";
+    item.reason = "note_hash_mismatch";
+  }
+  return item;
+}
+
+export function planMemoryMutationRecovery(configuration) {
+  const { intents, error } = listMutationIntents(configuration);
+  const items = [];
+  for (const intent of intents) {
+    try {
+      items.push(classifyMutationIntent(configuration, intent));
+    } catch {
+      items.push({ journalId: intent.journalId, kind: intent.kind, noteIdHash: intent.noteIdHash || null, action: "unresolved", reason: "invalid_journal" });
+    }
+  }
+  const countBy = (action) => items.filter((item) => item.action === action).length;
+  return {
+    journalCount: intents.length,
+    error,
+    replayAuditCount: countBy("replay_audit"),
+    completePromoteCount: countBy("complete_promote"),
+    discardCount: countBy("discard"),
+    unresolvedCount: countBy("unresolved"),
+    items
+  };
+}
+
+export function applyMemoryMutationRecovery(configuration, { applyPromoteCompletion = true } = {}) {
+  const { intents, error } = listMutationIntents(configuration);
+  if (error) return { mode: "apply", journalCount: intents.length, applied: false, reason: "journal_scan_error", appliedCount: 0, appliedItems: [], unresolved: [] };
+  const applied = [];
+  const unresolved = [];
+  for (const intent of intents) {
+    let item;
+    try {
+      item = classifyMutationIntent(configuration, intent);
+    } catch {
+      unresolved.push({ journalId: intent.journalId, kind: intent.kind, action: "unresolved", reason: "invalid_journal" });
+      continue;
+    }
+    if (item.action === "unresolved") {
+      unresolved.push(item);
+      continue;
+    }
+    try {
+      if (item.action === "discard") {
+        removeMutationIntent(configuration, item.journalId);
+        applied.push({ journalId: item.journalId, action: "discard" });
+        continue;
+      }
+      if (item.action === "replay_audit") {
+        replayMutationAudit(configuration, intent);
+        removeMutationIntent(configuration, item.journalId);
+        applied.push({ journalId: item.journalId, action: "replay_audit" });
+        continue;
+      }
+      if (item.action === "complete_promote") {
+        if (!applyPromoteCompletion) {
+          unresolved.push({ ...item, action: "complete_promote", reason: "completion_not_authorized" });
+          continue;
+        }
+        const source = resolveMemoryPath(configuration, intent.sourceRelativePath, true);
+        const target = resolveMemoryPath(configuration, intent.targetRelativePath, true);
+        withMemoryMutationLocks(configuration, [source.normalizedRelativePath, target.normalizedRelativePath], () => {
+          const sourcePath = requireSafeExistingFile(source.vaultRoot, source.candidatePath);
+          const targetPath = requireSafeExistingFile(target.vaultRoot, target.candidatePath);
+          const sourceHash = calculateSha256(fs.readFileSync(sourcePath, "utf8"));
+          const targetHash = calculateSha256(fs.readFileSync(targetPath, "utf8"));
+          if (sourceHash !== intent.oldSha256 || targetHash !== intent.newSha256) {
+            throw new Error("Promote uzlaştırma doğrulaması başarısız");
+          }
+          fs.rmSync(sourcePath);
+          replayMutationAudit(configuration, intent);
+          removeMutationIntent(configuration, item.journalId);
+        });
+        applied.push({ journalId: item.journalId, action: "complete_promote", sourceRelativePath: item.sourceRelativePath, targetRelativePath: item.targetRelativePath });
+      }
+    } catch {
+      unresolved.push({ ...item, action: item.action, reason: "apply_failed" });
+    }
+  }
+  return {
+    mode: "apply",
+    journalCount: intents.length,
+    applied: unresolved.length === 0,
+    appliedCount: applied.length,
+    appliedItems: applied,
+    unresolvedCount: unresolved.length,
+    unresolved
+  };
+}
+
 function findDuplicateGroups(records, maximumGroups) {
   const identities = new Map();
   for (const record of records) {
@@ -719,6 +988,24 @@ function writeAtomicFile(candidatePath, content) {
     fs.rmSync(temporaryPath, { force: true });
     throw error;
   }
+}
+
+function writeAtomicFileDurable(candidatePath, content) {
+  const temporaryPath = path.join(path.dirname(candidatePath), `.${path.basename(candidatePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
+  const descriptor = fs.openSync(temporaryPath, "wx");
+  try {
+    fs.writeFileSync(descriptor, content, "utf8");
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  try {
+    fs.renameSync(temporaryPath, candidatePath);
+  } catch (error) {
+    fs.rmSync(temporaryPath, { force: true });
+    throw error;
+  }
+  syncDirectoryBestEffort(path.dirname(candidatePath));
 }
 
 export function checkPersistentMemory(configuration) {
@@ -1008,6 +1295,10 @@ export function analyzePersistentMemoryWrite(configuration, input) {
 
 export function storePersistentMemory(configuration, input) {
   requireSafeMemoryContent(input);
+  try {
+    applyMemoryMutationRecovery(configuration, { applyPromoteCompletion: false });
+  } catch {
+  }
   const { vaultRoot, candidatePath, normalizedRelativePath } = resolveMemoryPath(configuration, input.relativePath, true);
   return withMemoryMutationLock(configuration, normalizedRelativePath, () => {
     const fileExists = fs.existsSync(candidatePath);
@@ -1050,21 +1341,44 @@ export function storePersistentMemory(configuration, input) {
     if (byteCount > configuration.memory.maxWriteBytes) {
       throw new Error(`Hafıza notu yazma sınırını aşıyor: ${byteCount} bayt`);
     }
+    const journalId = calculateSha256(normalizedRelativePath.replace(/\\/g, "/"));
+    const event = fileExists ? "UPDATE" : "ADD";
+    let intentWritten = false;
+    try {
+      intentWritten = writeMutationIntent(configuration, {
+        journalId,
+        kind: "store",
+        event,
+        noteIdHash: journalId,
+        relativePath: normalizedRelativePath.replace(/\\/g, "/"),
+        oldSha256,
+        newSha256,
+        auditMeta: {
+          memoryType: input.memoryType || null,
+          confidence: input.confidence,
+          verificationStatus: input.verificationStatus
+        }
+      }).written === true;
+    } catch {
+      intentWritten = false;
+    }
     writeAtomicFile(candidatePath, document);
     let audit;
     try {
-      audit = appendMemoryAuditEvent(configuration, {
+      appendMemoryAuditEvent(configuration, {
         recordedAt: now,
-        event: fileExists ? "UPDATE" : "ADD",
-        noteIdHash: calculateSha256(normalizedRelativePath.replace(/\\/g, "/")),
+        event,
+        noteIdHash: journalId,
         oldSha256,
         newSha256,
         memoryType: input.memoryType || null,
         confidence: input.confidence,
         verificationStatus: input.verificationStatus
       });
+      if (intentWritten) removeMutationIntent(configuration, journalId);
+      audit = { written: true };
     } catch {
-      audit = { written: false, reason: "audit_write_failed" };
+      audit = { written: false, reason: intentWritten ? "audit_pending_recovery" : "audit_write_failed" };
     }
     return {
       relativePath: normalizedRelativePath.replace(/\\/g, "/"),
@@ -1082,6 +1396,10 @@ export function storePersistentMemory(configuration, input) {
 }
 
 export function promotePersistentMemory(configuration, input) {
+  try {
+    applyMemoryMutationRecovery(configuration, { applyPromoteCompletion: true });
+  } catch {
+  }
   const source = resolveMemoryPath(configuration, input.sourceRelativePath, true);
   const target = resolveMemoryPath(configuration, input.targetRelativePath, true);
   if (source.normalizedRelativePath.split(path.sep)[0] !== "00_Inbox") throw new Error("Kaynak gelen kutusunda değil");
@@ -1121,27 +1439,50 @@ export function promotePersistentMemory(configuration, input) {
     }
     const sourcePath = requireSafeExistingFile(source.vaultRoot, source.candidatePath);
     const sourceContent = fs.readFileSync(sourcePath, "utf8");
-    if (calculateSha256(sourceContent) !== input.expectedSourceSha256) throw new Error("Kaynak not eşzamanlı değişmiş");
+    const sourceSha256 = calculateSha256(sourceContent);
+    if (sourceSha256 !== input.expectedSourceSha256) throw new Error("Kaynak not eşzamanlı değişmiş");
     if (extractQuotedFrontmatterValue(sourceContent, "stage") !== "draft") throw new Error("Kaynak not taslak aşamasında değil");
     ensureSafeParentDirectory(target.vaultRoot, target.candidatePath);
     const publishedContent = sourceContent.replace(/^stage:\s*.+$/m, `stage: ${quoteYaml("published")}`);
     const targetSha256 = calculateSha256(publishedContent);
-    writeAtomicFile(target.candidatePath, publishedContent);
+    const noteIdHash = calculateSha256(`${source.normalizedRelativePath}:${target.normalizedRelativePath}`);
+    const memoryType = extractQuotedFrontmatterValue(sourceContent, "memory_type");
+    const confidence = extractQuotedFrontmatterValue(sourceContent, "confidence");
+    const verificationStatus = extractQuotedFrontmatterValue(sourceContent, "verification");
+    let intentWritten = false;
+    try {
+      intentWritten = writeMutationIntent(configuration, {
+        journalId: noteIdHash,
+        kind: "promote",
+        event: "PROMOTE",
+        noteIdHash,
+        sourceRelativePath: source.normalizedRelativePath.replace(/\\/g, "/"),
+        targetRelativePath: target.normalizedRelativePath.replace(/\\/g, "/"),
+        oldSha256: sourceSha256,
+        newSha256: targetSha256,
+        auditMeta: { memoryType, confidence, verificationStatus }
+      }).written === true;
+    } catch {
+      intentWritten = false;
+    }
+    writeAtomicFileDurable(target.candidatePath, publishedContent);
     fs.rmSync(sourcePath);
     let audit;
     try {
-      audit = appendMemoryAuditEvent(configuration, {
+      appendMemoryAuditEvent(configuration, {
         recordedAt: new Date().toISOString(),
         event: "PROMOTE",
-        noteIdHash: calculateSha256(`${source.normalizedRelativePath}:${target.normalizedRelativePath}`),
-        oldSha256: calculateSha256(sourceContent),
+        noteIdHash,
+        oldSha256: sourceSha256,
         newSha256: targetSha256,
-        memoryType: extractQuotedFrontmatterValue(sourceContent, "memory_type"),
-        confidence: extractQuotedFrontmatterValue(sourceContent, "confidence"),
-        verificationStatus: extractQuotedFrontmatterValue(sourceContent, "verification")
+        memoryType,
+        confidence,
+        verificationStatus
       });
+      if (intentWritten) removeMutationIntent(configuration, noteIdHash);
+      audit = { written: true };
     } catch {
-      audit = { written: false, reason: "audit_write_failed" };
+      audit = { written: false, reason: intentWritten ? "audit_pending_recovery" : "audit_write_failed" };
     }
     return {
       promoted: true,
@@ -1156,7 +1497,7 @@ export function promotePersistentMemory(configuration, input) {
   });
 }
 
-export const memoryRepairKinds = ["vault-schema"];
+export const memoryRepairKinds = ["vault-schema", "promote-reconcile"];
 
 function buildVaultSchemaRepair(content) {
   const blockMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -1184,6 +1525,7 @@ function normalizeRepairRelativePath(relativePath) {
 
 export function planMemoryVaultRepair(configuration, { kind = "vault-schema" } = {}) {
   if (!memoryRepairKinds.includes(kind)) throw new Error("Desteklenmeyen hafıza onarım türü");
+  if (kind === "promote-reconcile") return planMemoryMutationRecovery(configuration);
   const maximumReadBytes = configuration.memory.reviewDefaults?.maxReadBytesPerFile ?? 32768;
   const { vaultRoot, files } = collectMarkdownFiles(configuration);
   const items = [];
@@ -1251,6 +1593,7 @@ export function planMemoryVaultRepair(configuration, { kind = "vault-schema" } =
 }
 
 export function applyMemoryVaultRepair(configuration, { kind = "vault-schema", relativePaths = [], force = false, plan = null, writeFile = writeAtomicFile } = {}) {
+  if (kind === "promote-reconcile") return applyMemoryMutationRecovery(configuration, { applyPromoteCompletion: true });
   const effectivePlan = plan && plan.kind === kind && Array.isArray(plan.items) ? plan : planMemoryVaultRepair(configuration, { kind });
   const planForResult = effectivePlan;
   if (planForResult.scanErrorCount > 0) return { ...planForResult, mode: "apply", applied: false, reason: "scan_error" };
@@ -1295,14 +1638,34 @@ export function applyMemoryVaultRepair(configuration, { kind = "vault-schema", r
     }
     const written = [];
     for (const entry of prepared) {
+      const normalizedPath = entry.candidate.item.relativePath.replace(/\\/g, "/");
+      entry.newSha256 = calculateSha256(entry.repair.content);
+      entry.noteIdHash = calculateSha256(normalizedPath);
+      try {
+        entry.intentWritten = writeMutationIntent(configuration, {
+          journalId: entry.noteIdHash,
+          kind: "repair",
+          event: "UPDATE",
+          noteIdHash: entry.noteIdHash,
+          relativePath: normalizedPath,
+          oldSha256: entry.oldSha256,
+          newSha256: entry.newSha256
+        }).written === true;
+      } catch {
+        entry.intentWritten = false;
+      }
+    }
+    for (const entry of prepared) {
       try {
         writeFile(entry.candidate.candidatePath, entry.repair.content);
       } catch {
+        if (entry.intentWritten) removeMutationIntent(configuration, entry.noteIdHash);
         const rolledBack = [];
         let rollbackFailed = false;
         for (const completed of written) {
           try {
             writeFile(completed.candidate.candidatePath, completed.originalContent);
+            if (completed.intentWritten) removeMutationIntent(configuration, completed.noteIdHash);
             rolledBack.push(completed.candidate.item.relativePath);
           } catch {
             rollbackFailed = true;
@@ -1320,24 +1683,25 @@ export function applyMemoryVaultRepair(configuration, { kind = "vault-schema", r
     }
     const applied = [];
     for (const entry of written) {
-      const newSha256 = calculateSha256(entry.repair.content);
       let audit;
       try {
-        audit = appendMemoryAuditEvent(configuration, {
+        appendMemoryAuditEvent(configuration, {
           recordedAt: new Date().toISOString(),
           event: "UPDATE",
-          noteIdHash: calculateSha256(entry.candidate.item.relativePath),
+          noteIdHash: entry.noteIdHash,
           oldSha256: entry.oldSha256,
-          newSha256
+          newSha256: entry.newSha256
         });
+        if (entry.intentWritten) removeMutationIntent(configuration, entry.noteIdHash);
+        audit = { written: true };
       } catch {
-        audit = { written: false, reason: "audit_write_failed" };
+        audit = { written: false, reason: entry.intentWritten ? "audit_pending_recovery" : "audit_write_failed" };
       }
       applied.push({
         relativePath: entry.candidate.item.relativePath,
         action: entry.repair.action,
         oldSha256: entry.oldSha256,
-        sha256: newSha256,
+        sha256: entry.newSha256,
         auditWritten: audit.written === true
       });
     }

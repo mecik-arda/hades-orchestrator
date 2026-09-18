@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { currentConfigurationVersion, loadConfiguration } from "../subagent-bridge/src/config.js";
-import { checkPersistentMemory, findQuarantinedMemoryNotes, inspectMemoryVaultSchema, reviewPersistentMemory } from "../subagent-bridge/src/memory.js";
+import { checkPersistentMemory, findQuarantinedMemoryNotes, inspectMemoryVaultSchema, planMemoryMutationRecovery, reviewPersistentMemory } from "../subagent-bridge/src/memory.js";
 import { planRuntimeStateMigration } from "../subagent-bridge/src/runtime-state-migration.js";
 import { applicationVersion, configurationSchemaVersion, runtimeStateSchemaVersion, vaultSchemaVersion } from "../subagent-bridge/src/version-contract.js";
 
@@ -108,6 +108,7 @@ export function buildMemoryDoctorReport(configuration) {
     quarantine = { notes: [], scanErrorCount: 1 };
   }
   const auditRaceEvents = readAuditRaceEvents(configuration);
+  const mutationRecovery = planMemoryMutationRecovery(configuration);
   const bodyCollisions = review.promotionRaceConditions.map((entry) => ({
     draftPaths: entry.draftPaths,
     publishedPaths: entry.publishedPaths
@@ -125,6 +126,8 @@ export function buildMemoryDoctorReport(configuration) {
     || quarantine.scanErrorCount > 0
     || auditRaceEvents.events.length > 0
     || auditRaceEvents.error
+    || mutationRecovery.error
+    || mutationRecovery.unresolvedCount > 0
     || !configurationCompatible
     || !vaultCompatible
     || !runtimeState.compatible;
@@ -156,6 +159,15 @@ export function buildMemoryDoctorReport(configuration) {
         auditRaceEvents: auditRaceEvents.events.length,
         auditEventHashes: auditRaceEvents.events.map((entry) => entry.noteIdHash),
         auditReadError: auditRaceEvents.error
+      },
+      mutationRecovery: {
+        journalCount: mutationRecovery.journalCount,
+        replayAuditCount: mutationRecovery.replayAuditCount,
+        completePromoteCount: mutationRecovery.completePromoteCount,
+        discardCount: mutationRecovery.discardCount,
+        unresolvedCount: mutationRecovery.unresolvedCount,
+        error: mutationRecovery.error,
+        unresolved: mutationRecovery.items.filter((item) => item.action === "unresolved")
       }
     }
   };
