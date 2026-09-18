@@ -27,7 +27,7 @@ Her iki faz 2026-08-11 tarihinde uygulanmıştır:
 - Canonical metric başarıyla yazıldıktan sonra etkin workspace mirror'ına metadata-only kayıt fail-soft eklenir.
 - Enable binding'leri strict kişisel config'i değiştirmeden machine-owned state kökünde opaque hash olarak saklanır.
 - Hedefli recent-runs/mirror testleri, hard-link reddi, bounded rotation ve bağımsız process eşzamanlılığı dahil geçmiştir.
-- `npm test` sonucu `234/234 PASS`; `npm run verify`, `npm run verify:ci` ve `npm run smoke` geçmiştir.
+- Güncel regresyon `npm test` ile izlenir; `npm run verify`, `npm run verify:ci` ve `npm run smoke` geçmiştir.
 - Gerçek global metrics üzerinde recent-runs görünümü doğrulanmıştır. Bu repository için mirror kullanıcı opt-in vermediği için kapalı kalmıştır.
 
 ## Amaç

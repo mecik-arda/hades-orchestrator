@@ -23,7 +23,7 @@ DeepSeek Pro ile yapılan ilk salt-okunur tasarım incelemesinde eksik olduğu b
 - Edit pilotu tek provider denemesi kullanır; timeout veya belirsiz mutation durumunda retry yapmaz.
 - Pilot değişen dosyaları ve unified diff'i döndürür; secret benzeri çıktı fail-closed reddedilir.
 - Gerçek DeepSeek Pro pilotu disposable kopyada yeni bir fonksiyon eklemiş, ana kaynak dosyası değişmemiş ve cleanup tamamlanmıştır.
-- Güncel regresyon `264/264 PASS` sonucundadır.
+- Güncel regresyon doğrulaması `npm test` ile izlenir.
 
 Production edit karar kapısı unit/adversarial testler, gerçek DeepSeek Pro promotion kabulü ve bağımsız Gemini güvenlik incelemesi sonrasında açılmıştır. Repository template ve aktif kişisel config içinde OpenCode `allowedModes` artık `read_only` ve `edit` değerlerini kabul eder. Varsayılan mod `read_only` kalır.
 

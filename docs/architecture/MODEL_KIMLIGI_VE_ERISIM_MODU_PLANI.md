@@ -16,7 +16,7 @@ Faz 3 mevcut güvenlik kapılarıyla tamamlandı. Codex read_only ve edit, Antig
 
 Faz 4 beklemededir. Native Claude edit acceptance provider authentication gerektirir.
 
-Güncel otomatik regresyon: 264/264 PASS. Gerçek provider edit güvenlik kabulleri aşağıdaki zorunlu test matrisinden bağımsız olarak atlanmış sayılmaz.
+Güncel otomatik regresyon `npm test` ile izlenir. Gerçek provider edit güvenlik kabulleri aşağıdaki zorunlu test matrisinden bağımsız olarak atlanmış sayılmaz.
 
 1. GERÇEK MODEL KİMLİĞİ
 

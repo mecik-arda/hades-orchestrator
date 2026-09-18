@@ -49,7 +49,7 @@ The runtime policy is loaded from `~/.config/subagent-bridge/config.json`; execu
 
 ## Verified baseline
 
-The package is `hades-orchestrator@2.2.0`, the runtime is Node.js 20.9+ and ESM; CI uses Node.js 22/24. The canonical record lives under `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, with the optional view at `<workspace>/.hades/runs.jsonl`. The current regression is `533/533 PASS`; `npm run verify`, `npm run verify:ci` and `npm run smoke` succeed.
+The package is `hades-orchestrator@2.2.0`, the runtime is Node.js 20.9+ and ESM; CI uses Node.js 22/24. The canonical record lives under `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, with the optional view at `<workspace>/.hades/runs.jsonl`. Run `npm test` for the current regression; `npm run verify`, `npm run verify:ci` and `npm run smoke` succeed.
 
 ## Quick start
 
@@ -357,7 +357,7 @@ Runtime policy’si `~/.config/subagent-bridge/config.json`, executable ve adapt
 
 ## Doğrulanmış taban
 
-Paket `hades-orchestrator@2.2.0`, çalışma zamanı Node.js 20.9+ ve ESM’dir; CI Node.js 22/24 kullanır. Kanonik kayıt `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, isteğe bağlı görünüm `<workspace>/.hades/runs.jsonl` altındadır. Güncel regresyon `515/515 PASS`; `npm run verify`, `npm run verify:ci` ve `npm run smoke` başarılıdır.
+Paket `hades-orchestrator@2.2.0`, çalışma zamanı Node.js 20.9+ ve ESM’dir; CI Node.js 22/24 kullanır. Kanonik kayıt `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, isteğe bağlı görünüm `<workspace>/.hades/runs.jsonl` altındadır. Güncel regresyon için `npm test` çalıştırılır; `npm run verify`, `npm run verify:ci` ve `npm run smoke` başarılıdır.
 
 ## Hızlı başlangıç
 
