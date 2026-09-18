@@ -22,6 +22,7 @@
     "runs:recent": "node scripts/report-recent-runs.js",
     "runs:mirror": "node scripts/manage-project-logs.js",
     "edit:feedback": "node scripts/record-edit-feedback.js",
+    "edit:classify": "node scripts/classify-edit-feedback.js",
     "routing:feedback": "node scripts/record-routing-feedback.js",
     "memory:review": "node scripts/review-memory.js",
     "memory:doctor": "node scripts/doctor-memory.js",

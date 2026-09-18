@@ -509,8 +509,12 @@ test("OPT-05: telemetry özeti provider, percentile ve cache bilgisini taşır",
   assert.equal(summary.health.byAdapter.codex.availabilityRate, 0.5);
   assert.deepEqual(summary.directEditBaseline, {
     totalEditRuns: 0,
+    eligibleEditRuns: 0,
+    ineligibleEditRuns: 0,
     labeledEditRuns: 0,
+    conflictingLabeledRuns: 0,
     pendingFeedback: 0,
+    dispositionCounts: {},
     outcomes: { accepted: 0, minor_fix: 0, reverted: 0, security_concern: 0 },
     interventionRate: null,
     rollbackOrSecurityRate: null,
@@ -562,8 +566,12 @@ test("OPT-05a: direct edit baseline yalnız redacted kullanıcı sonucunu özetl
   assert.equal(summary.directEditBaseline.interventionRate, 1);
   assert.deepEqual(summary.directEditBaseline.byBackend.codex, {
     totalEditRuns: 1,
+    eligibleEditRuns: 1,
+    ineligibleEditRuns: 0,
     labeledEditRuns: 1,
+    conflictingLabeledRuns: 0,
     pendingFeedback: 0,
+    dispositionCounts: {},
     outcomes: { accepted: 0, minor_fix: 1, reverted: 0, security_concern: 0 },
     interventionRate: 1,
     rollbackOrSecurityRate: 0,

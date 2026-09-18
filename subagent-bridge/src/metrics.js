@@ -22,6 +22,7 @@ function normalizeCost(value) {
 }
 
 export const directEditFeedbackOutcomes = ["accepted", "minor_fix", "reverted", "security_concern"];
+export const directEditDispositions = ["eligible_real_user", "ineligible_instrumentation", "ineligible_synthetic", "ineligible_duplicate", "indeterminate_legacy"];
 export const routingFeedbackOutcomes = ["useful", "partial", "not_useful"];
 
 const tokenPattern = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -487,11 +488,26 @@ function sanitizeFeedbackMetric(metric, recordType) {
   };
 }
 
+function sanitizeDispositionMetric(metric) {
+  if (!directEditDispositions.includes(metric.disposition)) throw new Error("invalid direct edit disposition");
+  const executionIdHash = sanitizeHash(metric.executionIdHash);
+  if (!executionIdHash) throw new Error("invalid feedback execution id hash");
+  return {
+    recordType: "direct_edit_disposition",
+    recordedAt: sanitizeRecordedAt(metric.recordedAt),
+    backend: sanitizeBackend(metric.backend),
+    executionIdHash,
+    disposition: metric.disposition,
+    reason: typeof metric.reason === "string" && tokenPattern.test(metric.reason) ? metric.reason : "unspecified"
+  };
+}
+
 function sanitizeRecordTypeMetric(metric) {
   if (metric.recordType === "health_snapshot") return sanitizeHealthSnapshotMetric(metric);
   if (metric.recordType === "live_observation") return sanitizeLiveObservationMetric(metric);
   if (metric.recordType === "model_fit_evaluation") return sanitizeModelFitEvaluationMetric(metric);
   if (metric.recordType === "direct_edit_feedback") return sanitizeFeedbackMetric(metric, "direct_edit_feedback");
+  if (metric.recordType === "direct_edit_disposition") return sanitizeDispositionMetric(metric);
   if (metric.recordType === "routing_feedback") return sanitizeFeedbackMetric(metric, "routing_feedback");
   return {
     recordType: typeof metric.recordType === "string" && tokenPattern.test(metric.recordType) ? metric.recordType : "unknown_record",
@@ -535,7 +551,10 @@ function directEditFeedbackState(records) {
   const feedbackByExecution = new Map(records
     .filter((record) => record.recordType === "direct_edit_feedback" && record.executionIdHash)
     .map((record) => [record.executionIdHash, record]));
-  return { editRuns, feedbackByExecution };
+  const dispositionByExecution = new Map(records
+    .filter((record) => record.recordType === "direct_edit_disposition" && record.executionIdHash)
+    .map((record) => [record.executionIdHash, record]));
+  return { editRuns, feedbackByExecution, dispositionByExecution };
 }
 
 function routingFeedbackState(records) {
@@ -549,9 +568,13 @@ function routingFeedbackState(records) {
 export function listPendingDirectEditFeedback(configuration) {
   const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
   const { records } = metricRecords(metricsDirectory);
-  const { editRuns, feedbackByExecution } = directEditFeedbackState(records);
+  const { editRuns, feedbackByExecution, dispositionByExecution } = directEditFeedbackState(records);
   return editRuns
-    .filter((record) => !feedbackByExecution.has(record.executionIdHash))
+    .filter((record) => {
+      if (feedbackByExecution.has(record.executionIdHash)) return false;
+      const disposition = dispositionByExecution.get(record.executionIdHash);
+      return !disposition || disposition.disposition === "eligible_real_user";
+    })
     .sort((left, right) => Date.parse(right.recordedAt) - Date.parse(left.recordedAt))
     .map((record) => ({
       feedbackId: record.executionIdHash.slice(0, 12),
@@ -563,6 +586,81 @@ export function listPendingDirectEditFeedback(configuration) {
     }));
 }
 
+export function listDirectEditDispositions(configuration) {
+  const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
+  const { records } = metricRecords(metricsDirectory);
+  const { dispositionByExecution } = directEditFeedbackState(records);
+  const counts = Object.fromEntries(directEditDispositions.map((disposition) => [disposition, 0]));
+  const entries = [...dispositionByExecution.values()].map((record) => {
+    if (record.disposition in counts) counts[record.disposition] += 1;
+    return {
+      feedbackId: record.executionIdHash.slice(0, 12),
+      disposition: record.disposition,
+      reason: record.reason,
+      recordedAt: record.recordedAt
+    };
+  });
+  return { count: entries.length, counts, entries };
+}
+
+export async function recordDirectEditDisposition(configuration, feedbackId, disposition, reason = "unspecified") {
+  if (!directEditDispositions.includes(disposition)) throw new Error("unsupported direct edit disposition");
+  if (!/^[a-f0-9]{8,64}$/i.test(feedbackId)) throw new Error("invalid feedback ID");
+  if (typeof reason !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(reason)) throw new Error("invalid disposition reason");
+  const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
+  fs.mkdirSync(metricsDirectory, { recursive: true });
+  return withMetricLock(path.join(metricsDirectory, "direct-edit-feedback.lock"), async () => {
+    const { records } = metricRecords(metricsDirectory);
+    const { editRuns, feedbackByExecution, dispositionByExecution } = directEditFeedbackState(records);
+    const matches = editRuns.filter((record) => record.executionIdHash.startsWith(feedbackId.toLowerCase()));
+    if (matches.length === 0) throw new Error("direct edit feedback ID not found");
+    if (matches.length > 1) throw new Error("direct edit feedback ID is ambiguous");
+    const executionIdHash = matches[0].executionIdHash;
+    if (feedbackByExecution.has(executionIdHash)) throw new Error("direct edit feedback already labeled");
+    if (dispositionByExecution.has(executionIdHash)) throw new Error("direct edit disposition already recorded");
+    await appendRedactedRunMetric(configuration, {
+      recordType: "direct_edit_disposition",
+      recordedAt: new Date().toISOString(),
+      backend: "direct-edit-baseline",
+      executionIdHash,
+      disposition,
+      reason
+    });
+    return { recorded: true, feedbackId: executionIdHash.slice(0, 12), disposition, reason };
+  });
+}
+
+export async function classifyLegacyDirectEditFeedback(configuration, { before, disposition = "indeterminate_legacy", reason = "provenance_unverifiable_legacy" } = {}) {
+  if (!directEditDispositions.includes(disposition)) throw new Error("unsupported direct edit disposition");
+  if (disposition === "eligible_real_user") throw new Error("bulk classification cannot grant eligibility");
+  if (typeof reason !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(reason)) throw new Error("invalid disposition reason");
+  const cutoff = Date.parse(before);
+  if (!Number.isFinite(cutoff)) throw new Error("invalid classification cutoff");
+  const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
+  fs.mkdirSync(metricsDirectory, { recursive: true });
+  return withMetricLock(path.join(metricsDirectory, "direct-edit-feedback.lock"), async () => {
+    const { records } = metricRecords(metricsDirectory);
+    const { editRuns, feedbackByExecution, dispositionByExecution } = directEditFeedbackState(records);
+    const eligible = editRuns
+      .filter((record) => !feedbackByExecution.has(record.executionIdHash) && !dispositionByExecution.has(record.executionIdHash))
+      .filter((record) => Number.isFinite(Date.parse(record.recordedAt)) && Date.parse(record.recordedAt) < cutoff)
+      .sort((left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt));
+    const classifiedFeedbackIds = [];
+    for (const record of eligible) {
+      await appendRedactedRunMetric(configuration, {
+        recordType: "direct_edit_disposition",
+        recordedAt: new Date().toISOString(),
+        backend: "direct-edit-baseline",
+        executionIdHash: record.executionIdHash,
+        disposition,
+        reason
+      });
+      classifiedFeedbackIds.push(record.executionIdHash.slice(0, 12));
+    }
+    return { classified: classifiedFeedbackIds.length, disposition, reason, cutoff: new Date(cutoff).toISOString(), classifiedFeedbackIds };
+  });
+}
+
 export async function recordDirectEditFeedback(configuration, feedbackId, outcome) {
   if (!directEditFeedbackOutcomes.includes(outcome)) throw new Error("unsupported direct edit feedback outcome");
   if (!/^[a-f0-9]{8,64}$/i.test(feedbackId)) throw new Error("invalid feedback ID");
@@ -570,12 +668,16 @@ export async function recordDirectEditFeedback(configuration, feedbackId, outcom
   fs.mkdirSync(metricsDirectory, { recursive: true });
   return withMetricLock(path.join(metricsDirectory, "direct-edit-feedback.lock"), async () => {
     const { records } = metricRecords(metricsDirectory);
-    const { editRuns, feedbackByExecution } = directEditFeedbackState(records);
+    const { editRuns, feedbackByExecution, dispositionByExecution } = directEditFeedbackState(records);
     const matches = editRuns.filter((record) => record.executionIdHash.startsWith(feedbackId.toLowerCase()));
     if (matches.length === 0) throw new Error("direct edit feedback ID not found");
     if (matches.length > 1) throw new Error("direct edit feedback ID is ambiguous");
     const executionIdHash = matches[0].executionIdHash;
     if (feedbackByExecution.has(executionIdHash)) throw new Error("direct edit feedback already recorded");
+    const disposition = dispositionByExecution.get(executionIdHash);
+    if (disposition && disposition.disposition !== "eligible_real_user") {
+      throw new Error("direct edit record is not eligible for outcome labeling");
+    }
     const metric = {
       recordType: "direct_edit_feedback",
       recordedAt: new Date().toISOString(),

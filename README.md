@@ -245,6 +245,7 @@ npm run metrics:prune         Retention-expired rotated metric cleanup
 npm run runs:recent           Show recent runs read-only
 npm run runs:mirror -- ...    Project-local mirror lifecycle
 npm run edit:feedback         Record a direct-edit user outcome
+npm run edit:classify         Append-only direct-edit eligibility disposition (list|dispose|classify-legacy)
 npm run routing:feedback      Record a task-profile user outcome
 npm run memory:review         Persistent memory lifecycle review
 npm run memory:doctor         Read-only Vault health, version and audit diagnosis
@@ -551,6 +552,7 @@ npm run metrics:prune         Retention dışı rotated metric temizliği
 npm run runs:recent           Son çalışmaları salt-okunur gösterir
 npm run runs:mirror -- ...    Proje-local mirror yaşam döngüsü
 npm run edit:feedback         Direct-edit kullanıcı sonucu kaydı
+npm run edit:classify         Append-only direct-edit uygunluk sınıflandırması (list|dispose|classify-legacy)
 npm run routing:feedback      Task-profile kullanıcı sonucu kaydı
 npm run memory:review         Kalıcı hafıza yaşam döngüsü denetimi
 npm run memory:doctor         Salt-okunur Vault sağlık, sürüm ve audit teşhisi

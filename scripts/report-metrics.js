@@ -23,6 +23,9 @@ export function summarizeMetrics(records, sloPolicy) {
   const directEditFeedback = new Map(records
     .filter((record) => record.recordType === "direct_edit_feedback" && record.executionIdHash)
     .map((record) => [record.executionIdHash, record.outcome]));
+  const directEditDispositionByExecution = new Map(records
+    .filter((record) => record.recordType === "direct_edit_disposition" && record.executionIdHash)
+    .map((record) => [record.executionIdHash, record.disposition]));
   const routingFeedback = new Map(records
     .filter((record) => record.recordType === "routing_feedback" && record.executionIdHash)
     .map((record) => [record.executionIdHash, record.outcome]));
@@ -30,16 +33,31 @@ export function summarizeMetrics(records, sloPolicy) {
   const editRecords = records.filter((record) => record.mode === "edit" && record.outcomeStatus === "completed" && record.executionIdHash);
   const summarizeDirectEditRuns = (runs) => {
     const outcomes = { accepted: 0, minor_fix: 0, reverted: 0, security_concern: 0 };
+    const dispositionCounts = {};
+    let eligibleEditRuns = 0;
+    let conflictingLabeledRuns = 0;
     for (const record of runs) {
+      const disposition = directEditDispositionByExecution.get(record.executionIdHash);
+      if (disposition) dispositionCounts[disposition] = (dispositionCounts[disposition] || 0) + 1;
+      const eligible = !disposition || disposition === "eligible_real_user";
       const outcome = directEditFeedback.get(record.executionIdHash);
+      if (!eligible) {
+        if (outcome in outcomes) conflictingLabeledRuns += 1;
+        continue;
+      }
+      eligibleEditRuns += 1;
       if (outcome in outcomes) outcomes[outcome] += 1;
     }
     const labeledEditRuns = Object.values(outcomes).reduce((total, count) => total + count, 0);
     const interventionCount = outcomes.minor_fix + outcomes.reverted + outcomes.security_concern;
     return {
       totalEditRuns: runs.length,
+      eligibleEditRuns,
+      ineligibleEditRuns: runs.length - eligibleEditRuns,
       labeledEditRuns,
-      pendingFeedback: runs.length - labeledEditRuns,
+      conflictingLabeledRuns,
+      pendingFeedback: eligibleEditRuns - labeledEditRuns,
+      dispositionCounts,
       outcomes,
       interventionRate: labeledEditRuns > 0 ? Number((interventionCount / labeledEditRuns).toFixed(4)) : null,
       rollbackOrSecurityRate: labeledEditRuns > 0 ? Number(((outcomes.reverted + outcomes.security_concern) / labeledEditRuns).toFixed(4)) : null,
