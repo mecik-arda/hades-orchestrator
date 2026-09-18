@@ -249,6 +249,7 @@ npm run edit:classify         Append-only direct-edit eligibility disposition (l
 npm run routing:feedback      Record a task-profile user outcome
 npm run memory:review         Persistent memory lifecycle review
 npm run memory:doctor         Read-only Vault health, version and audit diagnosis
+npm run memory:repair         Explicit Vault repair (dry-run by default, --apply to write)
 npm run state:migrate         Explicit runtime state migration (dry-run by default)
 npm run hook:install          Generate the opt-in read-only memory hook (--client=opencode|codex|claude)
 npm run memory:evaluate       Retrieval quality evaluation
@@ -556,6 +557,7 @@ npm run edit:classify         Append-only direct-edit uygunluk sınıflandırmas
 npm run routing:feedback      Task-profile kullanıcı sonucu kaydı
 npm run memory:review         Kalıcı hafıza yaşam döngüsü denetimi
 npm run memory:doctor         Salt-okunur Vault sağlık, sürüm ve audit teşhisi
+npm run memory:repair         Açık Vault onarımı (varsayılan dry-run, yazmak için --apply)
 npm run state:migrate         Explicit runtime state migrasyonu (varsayılan dry-run)
 npm run hook:install          Opt-in salt-okunur hafıza hook'u üretir (--client=opencode|codex|claude)
 npm run memory:evaluate       Retrieval kalite değerlendirmesi

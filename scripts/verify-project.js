@@ -69,6 +69,7 @@ export async function runVerification() {
     "scripts/install-memory-hook.js",
     "scripts/memory-hook-client.js",
     "scripts/classify-edit-feedback.js",
+    "scripts/repair-memory.js",
     "subagent-bridge/src/server.js",
     "subagent-bridge/schemas/deepseek-result.schema.json"
   ];

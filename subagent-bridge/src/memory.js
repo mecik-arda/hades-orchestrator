@@ -1156,6 +1156,219 @@ export function promotePersistentMemory(configuration, input) {
   });
 }
 
+export const memoryRepairKinds = ["vault-schema"];
+
+function buildVaultSchemaRepair(content) {
+  const blockMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!blockMatch) return null;
+  const frontmatter = blockMatch[1];
+  const matches = frontmatter.match(/^vault_schema\s*:.*$/gm) || [];
+  if (matches.length > 1) return { refused: "duplicate_vault_schema" };
+  if (matches.length === 0) {
+    const eol = content.startsWith("---\r\n") ? "\r\n" : "\n";
+    const firstLineEnd = content.indexOf(eol) + eol.length;
+    return {
+      content: `${content.slice(0, firstLineEnd)}vault_schema: ${vaultSchemaVersion}${eol}${content.slice(firstLineEnd)}`,
+      action: "inserted"
+    };
+  }
+  const matchedLine = matches[0];
+  const hasCarriageReturn = matchedLine.endsWith("\r");
+  const replacement = `vault_schema: ${vaultSchemaVersion}${hasCarriageReturn ? "\r" : ""}`;
+  return { content: content.replace(matchedLine, replacement), action: "replaced" };
+}
+
+function normalizeRepairRelativePath(relativePath) {
+  return normalizeRelativePath(relativePath).replace(/\\/g, "/");
+}
+
+export function planMemoryVaultRepair(configuration, { kind = "vault-schema" } = {}) {
+  if (!memoryRepairKinds.includes(kind)) throw new Error("Desteklenmeyen hafıza onarım türü");
+  const maximumReadBytes = configuration.memory.reviewDefaults?.maxReadBytesPerFile ?? 32768;
+  const { vaultRoot, files } = collectMarkdownFiles(configuration);
+  const items = [];
+  let scanErrorCount = 0;
+  let tooLargeCount = 0;
+  for (const filePath of files) {
+    let content;
+    try {
+      if (fs.statSync(filePath).size > configuration.memory.maxWriteBytes) {
+        tooLargeCount += 1;
+        continue;
+      }
+      content = fs.readFileSync(filePath, "utf8");
+    } catch {
+      scanErrorCount += 1;
+      continue;
+    }
+    const relativePath = path.relative(vaultRoot, filePath).replace(/\\/g, "/");
+    const frontmatter = extractFrontmatterBlock(content);
+    const schemaKeyCount = (frontmatter.match(/^vault_schema\s*:/gm) || []).length;
+    if (schemaKeyCount > 1) {
+      items.push({ relativePath, action: "refused", reason: "duplicate_vault_schema", status: "invalid", requiresForce: false });
+      continue;
+    }
+    const classification = classifyVaultSchemaVersion(extractQuotedFrontmatterValue(content, "vault_schema"));
+    if (classification.status === "current") continue;
+    if (classification.status === "future_incompatible") {
+      items.push({ relativePath, action: "refused", reason: "future_incompatible", status: classification.status, requiresForce: false });
+      continue;
+    }
+    const repair = buildVaultSchemaRepair(content);
+    if (!repair || repair.refused) {
+      items.push({ relativePath, action: "refused", reason: repair?.refused ?? "frontmatter_missing", status: classification.status, requiresForce: false });
+      continue;
+    }
+    const record = extractMemoryReviewRecord(vaultRoot, filePath, maximumReadBytes);
+    const otherIssueCount = collectInvalidMetadata(record).length;
+    const riskCategories = detectInjectionCategories(content);
+    const containsSecret = hasSecretLikeContent(content);
+    items.push({
+      relativePath,
+      action: repair.action,
+      status: classification.status,
+      currentValue: extractQuotedFrontmatterValue(content, "vault_schema") || null,
+      sha256: calculateSha256(content),
+      bytes: Buffer.byteLength(content, "utf8"),
+      otherIssueCount,
+      riskCategories,
+      containsSecret,
+      requiresForce: otherIssueCount > 0 || riskCategories.length > 0 || containsSecret,
+      reason: null
+    });
+  }
+  const repairableItems = items.filter((item) => item.action !== "refused");
+  return {
+    kind,
+    mode: "dry_run",
+    scanErrorCount,
+    tooLargeCount,
+    repairCount: repairableItems.length,
+    forceRequiredCount: repairableItems.filter((item) => item.requiresForce).length,
+    refusedCount: items.length - repairableItems.length,
+    items
+  };
+}
+
+export function applyMemoryVaultRepair(configuration, { kind = "vault-schema", relativePaths = [], force = false, plan = null, writeFile = writeAtomicFile } = {}) {
+  const effectivePlan = plan && plan.kind === kind && Array.isArray(plan.items) ? plan : planMemoryVaultRepair(configuration, { kind });
+  const planForResult = effectivePlan;
+  if (planForResult.scanErrorCount > 0) return { ...planForResult, mode: "apply", applied: false, reason: "scan_error" };
+  const requestedPaths = relativePaths.length > 0
+    ? new Set(relativePaths.map((relativePath) => normalizeRepairRelativePath(relativePath)))
+    : new Set(planForResult.items.map((item) => item.relativePath));
+  const knownPaths = new Set(planForResult.items.map((item) => item.relativePath));
+  const unknownPaths = [...requestedPaths].filter((relativePath) => !knownPaths.has(relativePath));
+  if (unknownPaths.length > 0) return { ...planForResult, mode: "apply", applied: false, reason: "unknown_paths", unknownPaths };
+  const skipped = [];
+  const candidates = [];
+  for (const item of planForResult.items) {
+    if (!requestedPaths.has(item.relativePath)) continue;
+    if (item.action === "refused") {
+      skipped.push({ relativePath: item.relativePath, reason: item.reason });
+      continue;
+    }
+    if (item.requiresForce && !force) {
+      skipped.push({ relativePath: item.relativePath, reason: "force_required" });
+      continue;
+    }
+    const resolved = resolveMemoryPath(configuration, item.relativePath, true);
+    candidates.push({ item, ...resolved });
+  }
+  const outcome = withMemoryMutationLocks(configuration, candidates.map((candidate) => candidate.normalizedRelativePath), () => {
+    const prepared = [];
+    for (const candidate of candidates) {
+      requireSafeExistingFile(candidate.vaultRoot, candidate.candidatePath);
+      const content = fs.readFileSync(candidate.candidatePath, "utf8");
+      const oldSha256 = calculateSha256(content);
+      if (oldSha256 !== candidate.item.sha256) {
+        return { failed: { relativePath: candidate.item.relativePath, reason: "concurrent_change" } };
+      }
+      const repair = buildVaultSchemaRepair(content);
+      if (!repair || repair.refused) {
+        return { failed: { relativePath: candidate.item.relativePath, reason: repair?.refused ?? "frontmatter_missing" } };
+      }
+      if (Buffer.byteLength(repair.content, "utf8") > configuration.memory.maxWriteBytes) {
+        return { failed: { relativePath: candidate.item.relativePath, reason: "write_limit_exceeded" } };
+      }
+      prepared.push({ candidate, repair, oldSha256, originalContent: content });
+    }
+    const written = [];
+    for (const entry of prepared) {
+      try {
+        writeFile(entry.candidate.candidatePath, entry.repair.content);
+      } catch {
+        const rolledBack = [];
+        let rollbackFailed = false;
+        for (const completed of written) {
+          try {
+            writeFile(completed.candidate.candidatePath, completed.originalContent);
+            rolledBack.push(completed.candidate.item.relativePath);
+          } catch {
+            rollbackFailed = true;
+          }
+        }
+        return {
+          failed: {
+            relativePath: entry.candidate.item.relativePath,
+            reason: rollbackFailed ? "rollback_failed" : "write_failed",
+            rolledBack
+          }
+        };
+      }
+      written.push(entry);
+    }
+    const applied = [];
+    for (const entry of written) {
+      const newSha256 = calculateSha256(entry.repair.content);
+      let audit;
+      try {
+        audit = appendMemoryAuditEvent(configuration, {
+          recordedAt: new Date().toISOString(),
+          event: "UPDATE",
+          noteIdHash: calculateSha256(entry.candidate.item.relativePath),
+          oldSha256: entry.oldSha256,
+          newSha256
+        });
+      } catch {
+        audit = { written: false, reason: "audit_write_failed" };
+      }
+      applied.push({
+        relativePath: entry.candidate.item.relativePath,
+        action: entry.repair.action,
+        oldSha256: entry.oldSha256,
+        sha256: newSha256,
+        auditWritten: audit.written === true
+      });
+    }
+    return { written: applied };
+  });
+  if (outcome.failed) {
+    return {
+      ...planForResult,
+      mode: "apply",
+      applied: false,
+      reason: outcome.failed.reason,
+      stoppedAt: outcome.failed.relativePath,
+      rolledBack: outcome.failed.rolledBack || [],
+      appliedItems: [],
+      skipped
+    };
+  }
+  return {
+    kind,
+    mode: "apply",
+    scanErrorCount: 0,
+    tooLargeCount: planForResult.tooLargeCount,
+    applied: true,
+    appliedCount: outcome.written.length,
+    appliedItems: outcome.written,
+    skippedCount: skipped.length,
+    skipped,
+    refusedCount: planForResult.refusedCount
+  };
+}
+
 export function pruneMemoryAuditFiles(configuration, now = Date.now()) {
   const auditDirectory = path.join(configuration.statePaths.logs, "audit");
   const retentionDays = configuration.observability?.maxMetricRetentionDays;
