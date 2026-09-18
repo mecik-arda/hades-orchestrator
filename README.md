@@ -134,7 +134,7 @@ Backups are created under `~/.config/subagent-bridge/backups/`; use `npm run con
 
 ### Verified provider matrix
 
-Antigravity/Gemini Pro and Flash, Codex and DeepSeek V4 Pro/Flash are verified. Because the GLM subscription is inactive, GLM models, profiles and fallbacks are not invoked; Codex Luna is the fast performance/cost implementer, Terra the balanced editor and Sol the model for hard debugging and review. The independent OpenCode backend depends on configuration, Claude Code on auth, and Kimi/Qwen on catalog entries.
+Antigravity/Gemini Pro and Flash, Codex and DeepSeek V4 Pro/Flash are verified. Because the GLM subscription is inactive, GLM models, profiles and fallbacks are not invoked; Codex Luna is the fast performance/cost implementer, Terra the balanced editor and Sol the model for hard debugging and review. The independent OpenCode backend depends on configuration, Claude Code requires an active subscription and its native acceptance phase is closed here, and Kimi/Qwen depend on catalog entries.
 
 ### Antigravity contract
 
@@ -181,11 +181,11 @@ Gemini Pro and Codex were invoked with real file-backed results; timeout overrid
 
 ### Test baseline
 
-The current frozen regression baseline is `533/533 PASS`; timing-sensitive heavy verifications must run serially on the same machine.
+The current regression baseline is verified with `npm test`; timing-sensitive heavy verifications must run serially on the same machine.
 
 ### Known non-blocking items
 
-The Codex `%TMPDIR` isolation evaluation, the non-reproducible historical AGY nested `ENOENT`, auth-dependent native Claude acceptance and pending Phase 5 providers are not blockers.
+The Codex `%TMPDIR` isolation evaluation, the non-reproducible historical AGY nested `ENOENT`, the closed native Claude acceptance phase (no Claude Code subscription) and pending Phase 5 providers are not blockers.
 
 ### Verified baseline freeze
 
@@ -193,7 +193,7 @@ The shared core is re-opened only for a confirmed production bug, a new provider
 
 ## Model roles
 
-Codex defines scope and architecture, runs code and tests, and verifies results. DeepSeek provides structured results for analysis, second opinions, research and planning; edits are limited to selected files. Gemini Pro is for web research and file auditing, Gemini Flash for short research, and native Claude Code for second opinions subject to auth.
+Codex defines scope and architecture, runs code and tests, and verifies results. DeepSeek provides structured results for analysis, second opinions, research and planning; edits are limited to selected files. Gemini Pro is for web research and file auditing, Gemini Flash for short research, and second opinions use DeepSeek or Antigravity Claude Sonnet; native Claude Code stays disabled without a subscription.
 
 ## Security separation
 
@@ -207,7 +207,7 @@ Canonical skills live under `.agents/skills` and Claude-compatible copies under 
 
 ## Installation
 
-Requirements: Node.js 20.9+ (22/24 recommended), OpenCode CLI, Antigravity CLI, the official standalone Codex CLI and Git; Claude Code CLI plus auth for native Claude, and an API key for DeepSeek.
+Requirements: Node.js 20.9+ (22/24 recommended), OpenCode CLI, Antigravity CLI, the official standalone Codex CLI and Git; an API key for DeepSeek. The optional native Claude Code backend requires a Claude Code subscription and stays disabled without one.
 
 ```powershell
 npm ci
@@ -441,7 +441,7 @@ Backup `~/.config/subagent-bridge/backups/` altında oluşturulur; rollback içi
 
 ### Doğrulanmış sağlayıcı matrisi
 
-Antigravity/Gemini Pro ve Flash, Codex ve DeepSeek V4 Pro/Flash doğrulanmıştır. GLM aboneliği pasif olduğundan GLM model, profil ve fallback'leri çağrılmaz; Codex Luna hızlı fiyat/performans uygulayıcı, Terra dengeli edit, Sol zor hata ayıklama ve denetim modelidir. OpenCode bağımsız backend’i yapılandırmaya, Claude Code auth’a, Kimi/Qwen katalog girdisine bağlıdır.
+Antigravity/Gemini Pro ve Flash, Codex ve DeepSeek V4 Pro/Flash doğrulanmıştır. GLM aboneliği pasif olduğundan GLM model, profil ve fallback'leri çağrılmaz; Codex Luna hızlı fiyat/performans uygulayıcı, Terra dengeli edit, Sol zor hata ayıklama ve denetim modelidir. OpenCode bağımsız backend'i yapılandırmaya bağlıdır; Claude Code etkin abonelik gerektirir ve native Claude acceptance fazı bu kurulumda kapalıdır; Kimi/Qwen katalog girdisine bağlıdır.
 
 ### Antigravity sözleşmesi
 
@@ -488,11 +488,11 @@ Gemini Pro ve Codex gerçek file-backed sonuçla çağrıldı; timeout override,
 
 ### Test tabanı
 
-Güncel dondurulmuş regresyon tabanı `515/515 PASS`’tir; zamanlamaya duyarlı ağır doğrulamalar aynı makinede sıralı çalıştırılmalıdır.
+Güncel regresyon tabanı `npm test` ile doğrulanır; zamanlamaya duyarlı ağır doğrulamalar aynı makinede sıralı çalıştırılmalıdır.
 
 ### Bilinen engelleyici olmayan maddeler
 
-Codex `%TMPDIR` isolation değerlendirmesi, yeniden üretilemeyen tarihsel AGY nested `ENOENT`, auth’a bağlı native Claude acceptance ve bekleyen Faz 5 provider’ları engelleyici değildir.
+Codex `%TMPDIR` isolation değerlendirmesi, yeniden üretilemeyen tarihsel AGY nested `ENOENT`, kapalı native Claude acceptance fazı (Claude Code aboneliği yok) ve bekleyen Faz 5 provider'ları engelleyici değildir.
 
 ### Doğrulanmış taban dondurma
 
@@ -500,7 +500,7 @@ Shared core yalnız confirmed production bug, yeni provider, security vulnerabil
 
 ## Model rolleri
 
-Codex kapsamı ve mimariyi belirler, kodu ve testleri yürütür, sonuçları doğrular. DeepSeek analiz, ikinci görüş, araştırma ve planlama için yapılandırılmış sonuç verir; edit yalnız seçili dosyalardadır. Gemini Pro web araştırması ve dosya denetimi, Gemini Flash kısa araştırma, native Claude Code auth’a bağlı ikinci görüş içindir.
+Codex kapsamı ve mimariyi belirler, kodu ve testleri yürütür, sonuçları doğrular. DeepSeek analiz, ikinci görüş, araştırma ve planlama için yapılandırılmış sonuç verir; edit yalnız seçili dosyalardadır. Gemini Pro web araştırması ve dosya denetimi, Gemini Flash kısa araştırma içindir; ikinci görüş için DeepSeek veya Antigravity Claude Sonnet kullanılır, native Claude Code abonelik olmadan kapalı kalır.
 
 ## Güvenlik ayrımı
 
@@ -514,7 +514,7 @@ Kanonik skill’ler `.agents/skills`, Claude uyumlu kopyalar `.claude/skills` al
 
 ## Kurulum
 
-Gereksinimler: Node.js 20.9+ (22/24 önerilir), OpenCode CLI, Antigravity CLI, resmi standalone Codex CLI ve Git; native Claude için Claude Code CLI + auth, DeepSeek için API anahtarı.
+Gereksinimler: Node.js 20.9+ (22/24 önerilir), OpenCode CLI, Antigravity CLI, resmi standalone Codex CLI ve Git; DeepSeek için API anahtarı. İsteğe bağlı native Claude Code backend'i Claude Code aboneliği gerektirir ve abonelik yokken kapalı kalır.
 
 ```powershell
 npm ci
