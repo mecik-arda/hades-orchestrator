@@ -912,12 +912,11 @@ test("OPT-06l: settlement yapılan rezervasyon expire edilmez ve gerçek maliyet
   const configuration = {
     statePaths: { logs: root },
     observability: { maxMetricFileBytes: 65536 },
-    reliability: { dailyCostLimitUsd: 1, monthlyCostLimitUsd: 5, maxTotalDurationMs: 60 }
+    reliability: { dailyCostLimitUsd: 1, monthlyCostLimitUsd: 5, maxTotalDurationMs: 60000 }
   };
   await reserveCostBudget(configuration, "settled-process", 0.4);
   assert.deepEqual(await settleCostBudget(configuration, "settled-process", 0.05), { settled: true, chargedCostUsd: 0.05 });
-  await new Promise((resolve) => setTimeout(resolve, 120));
-  const snapshot = await getCostBudgetSnapshot(configuration);
+  const snapshot = await getCostBudgetSnapshot(configuration, new Date(Date.now() + 3600000));
   assert.equal(snapshot.dailySpentUsd, 0.05);
   assert.equal(snapshot.activeReservations, 0);
   const journal = fs.readFileSync(path.join(root, "metrics", "cost-budget-runs.jsonl"), "utf8");
