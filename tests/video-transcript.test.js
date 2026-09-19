@@ -188,3 +188,46 @@ test("VIDEO-08: toplama hataları kararlı sınıflara eşlenir", () => {
   assert.equal(classifyCollectionError(new Error("oembed request failed")), "metadata_unavailable");
   assert.equal(classifyCollectionError(new Error("bilinmeyen")), "collection_error");
 });
+
+test("VIDEO-09: otomatik altyazı dalı seçilir ve indirme bayrakları doğru geçirilir", async () => {
+  const buildRunYtDlp = (info) => {
+    const runnerCalls = [];
+    const runYtDlp = async (args) => {
+      runnerCalls.push(args);
+      if (args.includes("--dump-single-json")) {
+        return { stdout: JSON.stringify(info) };
+      }
+      const subtitleDirectory = args[args.indexOf("--paths") + 1];
+      fs.writeFileSync(path.join(subtitleDirectory, "884c8bDYyBM.tr.vtt"), sampleVtt, "utf8");
+      return { stdout: "" };
+    };
+    return { runnerCalls, runYtDlp };
+  };
+  const fetchOEmbed = async () => ({ title: "Ornek Video", author_name: "Kanal", html: "<iframe src=\"https://www.youtube.com/embed/884c8bDYyBM\"></iframe>" });
+
+  const automaticRunner = buildRunYtDlp({ id: "884c8bDYyBM", duration: 65, subtitles: {}, automatic_captions: { tr: [{}] } });
+  const automaticResult = await collectVideoTranscript({
+    url: "https://www.youtube.com/watch?v=884c8bDYyBM",
+    runYtDlp: automaticRunner.runYtDlp,
+    fetchOEmbed,
+    now: "2026-09-19T00:00:00.000Z"
+  });
+  assert.equal(automaticResult.envelope.captionKind, "automatic");
+  assert.equal(automaticResult.envelope.language, "tr");
+  const automaticSubtitleCall = automaticRunner.runnerCalls.find((args) => args.includes("--sub-langs") && args[args.indexOf("--sub-langs") + 1] === "tr");
+  assert.equal(automaticSubtitleCall.includes("--write-auto-subs"), true);
+  assert.equal(automaticSubtitleCall.includes("--write-subs"), false);
+
+  const manualRunner = buildRunYtDlp({ id: "884c8bDYyBM", duration: 65, subtitles: { en: [{}] }, automatic_captions: { tr: [{}] } });
+  const manualResult = await collectVideoTranscript({
+    url: "https://www.youtube.com/watch?v=884c8bDYyBM",
+    runYtDlp: manualRunner.runYtDlp,
+    fetchOEmbed,
+    now: "2026-09-19T00:00:00.000Z"
+  });
+  assert.equal(manualResult.envelope.captionKind, "manual");
+  assert.equal(manualResult.envelope.language, "en");
+  const manualSubtitleCall = manualRunner.runnerCalls.find((args) => args.includes("--sub-langs") && args[args.indexOf("--sub-langs") + 1] === "en");
+  assert.equal(manualSubtitleCall.includes("--write-subs"), true);
+  assert.equal(manualSubtitleCall.includes("--write-auto-subs"), false);
+});
