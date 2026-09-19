@@ -26,7 +26,7 @@ If asked to write or modify files, decline and explain that you are in read-only
 `;
 
 const WEB_EVIDENCE_OUTPUT_INSTRUCTION = `
-For every read-only response, return exactly a JSON object with result and webEvidence fields. Set webEvidence to null when read_url was not used. When read_url was used, webEvidence must contain only sourceUrl, retrievedAt, excerpts, confidence, and verificationStatus. Do not put URLs, headers, cookies, credentials, or tool, model, permission, fallback, or edit fields in result or excerpts.
+For every read-only response, return exactly a JSON object with a result field. When read_url was not used, set webEvidence to null or omit the field; the host normalizes absent evidence to null. When read_url was used, add a webEvidence object containing only sourceUrl, retrievedAt, excerpts, confidence, and verificationStatus, and excerpts must be non-empty. Do not put URLs, headers, cookies, credentials, or tool, model, permission, fallback, or edit fields in result or excerpts.
 `;
 
 const READ_ONLY_PERMISSION_RULES = {
@@ -44,21 +44,9 @@ const CARRIER_OUTPUT_SCHEMA = JSON.stringify({
   type: "object",
   properties: {
     result: { type: "string" },
-    webEvidence: {
-      type: "object",
-      nullable: true,
-      properties: {
-        sourceUrl: { type: "string" },
-        retrievedAt: { type: "string" },
-        excerpts: { type: "array", items: { type: "string" } },
-        confidence: { type: "string" },
-        verificationStatus: { type: "string" }
-      },
-      required: ["sourceUrl", "excerpts"]
-    }
+    webEvidence: {}
   },
-  required: ["result", "webEvidence"],
-  additionalProperties: false
+  required: ["result"]
 });
 
 function writeCarrierSchemaFile(writeFileSync = fs.writeFileSync) {

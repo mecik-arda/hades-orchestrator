@@ -254,7 +254,7 @@ function normalizeProviderResult(result, { requireCarrier = false, allowPlainRep
       const parsed = JSON.parse(resultText);
       const carrierValidation = providerWebEvidenceCarrierSchema.safeParse(parsed);
       if (!carrierValidation.success) throw new Error("web evidence result wrapper is invalid");
-      evidenceCandidate = carrierValidation.data.webEvidence;
+      evidenceCandidate = carrierValidation.data.webEvidence ?? null;
       resultText = carrierValidation.data.result;
     } catch (error) {
       const repairable = allowPlainRepair

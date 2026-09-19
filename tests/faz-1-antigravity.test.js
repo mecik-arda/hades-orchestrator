@@ -273,7 +273,7 @@ test("AG-AC-15b: JSON response alanı final sonucu döndürür ve boş yanıt re
   assert.equal(extractAntigravityResult('{"status":"SUCCESS","response":""}'), null);
 });
 
-test("AG-AC-15e: structured_output carrier tercih edilir ve boş kanıt null olur", () => {
+test("AG-AC-16a: structured_output carrier tercih edilir ve boş kanıt null olur", () => {
   assert.equal(
     extractAntigravityResult(JSON.stringify({ status: "SUCCESS", structured_output: { result: "READY", webEvidence: null } })),
     JSON.stringify({ result: "READY", webEvidence: null })
@@ -296,18 +296,17 @@ test("AG-AC-15e: structured_output carrier tercih edilir ve boş kanıt null olu
   );
 });
 
-test("AG-AC-15f: carrier şeması zorunlu alanları ve nullable kanıtı tanımlar", () => {
+test("AG-AC-16b: carrier şeması zorunlu alanları ve serbest kanıt alanını tanımlar", () => {
   const schema = JSON.parse(CARRIER_OUTPUT_SCHEMA);
   assert.equal(schema.type, "object");
-  assert.deepEqual(schema.required, ["result", "webEvidence"]);
-  assert.equal(schema.properties.webEvidence.nullable, true);
-  assert.deepEqual(schema.properties.webEvidence.required, ["sourceUrl", "excerpts"]);
-  assert.equal(schema.additionalProperties, false);
+  assert.deepEqual(schema.required, ["result"]);
+  assert.deepEqual(schema.properties.webEvidence, {});
+  assert.equal(schema.additionalProperties, undefined);
   assert.equal(normalizeCarrierStructuredOutput({ result: "x", webEvidence: {} }), JSON.stringify({ result: "x", webEvidence: null }));
   assert.equal(normalizeCarrierStructuredOutput({ webEvidence: null }), null);
 });
 
-test("AG-AC-15g: carrier şema dosyası yazma hatasında geçici dizin temizlenir", () => {
+test("AG-AC-16c: carrier şema dosyası yazma hatasında geçici dizin temizlenir", () => {
   const directoryCount = () => fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith("agy-carrier-schema-")).length;
   const before = directoryCount();
   assert.throws(() => writeCarrierSchemaFile(() => { throw new Error("yazma hatasi"); }), /yazma hatasi/);

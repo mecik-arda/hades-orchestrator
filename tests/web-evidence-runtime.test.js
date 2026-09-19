@@ -332,6 +332,19 @@ test("WP2-RUNTIME-14: null adaptor sonucu web evidence hatasi olarak siniflanir"
   assert.equal(result.error, "provider returned invalid web evidence");
 });
 
+test("WP2-RUNTIME-15: webEvidence alani olmayan carrier null olarak kabul edilir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-evidence-missing-field-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const adapter = createFakeAdapter(async (request) => createSuccessSubagentResult("antigravity", request.model, {
+    result: JSON.stringify({ result: "kanit yok, duz analiz" })
+  }));
+  const runtime = createBridgeRuntime({ configuration: createConfiguration(root), adapters: { antigravity: adapter }, sleep: async () => {} });
+  const result = await runtime.run(runRequest(root, { prompt: "Inspect files and summarize" }));
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.result, "kanit yok, duz analiz");
+  assert.equal(result.webEvidence, null);
+});
+
 test("WP2-RUNTIME-12: profil strict carrier politikasi fallback istegine tasinir", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-evidence-fallback-strict-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

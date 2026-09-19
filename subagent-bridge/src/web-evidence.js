@@ -34,7 +34,7 @@ const webEvidenceInputSchema = z.object({
 }).strict();
 export const providerWebEvidenceCarrierSchema = z.object({
   result: z.string().min(1),
-  webEvidence: webEvidenceInputSchema.nullable()
+  webEvidence: webEvidenceInputSchema.nullable().optional()
 }).strict();
 const excerptSchema = z.string().min(1).max(MAX_EXCERPT_CHARACTERS).refine(
   (value) => value.trim().length > 0 && value === value.normalize("NFC") && !activeMarkupPattern.test(value) && !markupPattern.test(value) && !hasDisallowedExcerptCharacter(value) && !hasSecretLikeExcerpt(value),

@@ -154,7 +154,7 @@ function createRuntimeRequest(input, target, trustedWorkspace, caller, abortSign
   };
 }
 
-const CARRIER_REPAIR_PROMPT = "Your previous response was rejected because it did not match the required JSON carrier. Return exactly one JSON object with result and webEvidence fields and nothing else. If read_url was not used, set webEvidence to null. Do not include URLs, headers, cookies, credentials, tool, model, permission, fallback or edit fields in result or excerpts.";
+const CARRIER_REPAIR_PROMPT = "Your previous response was rejected because it did not match the required JSON carrier. Return exactly one JSON object with a result field and nothing else. When read_url was not used, omit webEvidence or set it to an empty object {}; the host normalizes absent evidence to null. When read_url was used, include sourceUrl and a non-empty excerpts list. Do not include URLs, headers, cookies, credentials, tool, model, permission, fallback or edit fields in result or excerpts.";
 
 function resolveAntigravityWorkspace(input, trustedWorkspace, configuration) {
   if (!input.workspace) return trustedWorkspace;
