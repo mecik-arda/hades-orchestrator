@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -280,7 +281,7 @@ test("REC-07: audit zaten yazılmışsa replay mükerrer kayıt üretmez", (cont
   assert.equal(auditRecords(configuration).length, before);
 });
 
-test("REC-08: çözülemeyen niyet üzerine yeni niyet yazılmaz, mutasyon audit'i normal akar", (context) => {
+test("REC-08: çözülemeyen niyet üzerine yeni niyet yazılmaz ve mutasyon reddedilir", (context) => {
   const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-recovery-no-overwrite-"));
   context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
   const configuration = createConfiguration(vaultRootPath);
@@ -297,10 +298,14 @@ test("REC-08: çözülemeyen niyet üzerine yeni niyet yazılmaz, mutasyon audit
     newSha256: sha256("harici yeni icerik")
   };
   writeIntent(configuration, unresolvedIntent);
-  const expectedSha256 = sha256(fs.readFileSync(path.join(vaultRootPath, relativePath), "utf8"));
-  const stored = storePersistentMemory(configuration, createNoteInput({ content: "Ikinci surum icerigi.", expectedSha256 }));
-  assert.equal(stored.mutationCompleted, true);
-  assert.equal(stored.auditWritten, true);
+  const notePath = path.join(vaultRootPath, relativePath);
+  const contentBefore = fs.readFileSync(notePath, "utf8");
+  const expectedSha256 = sha256(contentBefore);
+  assert.throws(
+    () => storePersistentMemory(configuration, createNoteInput({ content: "Ikinci surum icerigi.", expectedSha256 })),
+    /çözülmemiş mutasyon günlüğü/
+  );
+  assert.equal(fs.readFileSync(notePath, "utf8"), contentBefore);
   const files = journalFiles(configuration);
   assert.equal(files.length, 1);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(journalDirectory(configuration), files[0]), "utf8")), unresolvedIntent);
@@ -383,4 +388,137 @@ test("REC-10: kaynak silinmiş yarım promote audit replay ile kapanır", (conte
   assert.equal(journalFiles(configuration).length, 0);
   assert.equal(auditRecords(configuration).filter((record) => record.event === "PROMOTE").length, 1);
   assert.equal(fs.existsSync(targetPath), true);
+});
+
+test("REC-11: mutasyon günlüğü yazılamazsa mağaza mutasyonu reddeder", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-recovery-journal-blocked-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  fs.mkdirSync(configuration.statePaths.state, { recursive: true });
+  fs.writeFileSync(journalDirectory(configuration), "engel", "utf8");
+  const notePath = path.join(vaultRootPath, "03_Resources", "Recovery.md");
+  assert.throws(
+    () => storePersistentMemory(configuration, createNoteInput()),
+    /hafıza mutasyon günlüğü yazılamadı/
+  );
+  assert.equal(fs.existsSync(notePath), false);
+});
+
+test("REC-12: audit yazılamazsa kurtarma niyeti korur ve sonra tamamlar", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-recovery-audit-blocked-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  storePersistentMemory(configuration, createNoteInput());
+  const relativePath = "03_Resources/Recovery.md";
+  const notePath = path.join(vaultRootPath, relativePath);
+  const noteContent = fs.readFileSync(notePath, "utf8");
+  const journalId = sha256(relativePath);
+  writeIntent(configuration, {
+    journalId,
+    kind: "store",
+    event: "UPDATE",
+    noteIdHash: journalId,
+    relativePath,
+    oldSha256: null,
+    newSha256: sha256(noteContent)
+  });
+  const auditDirectory = path.join(configuration.statePaths.logs, "audit");
+  fs.rmSync(auditDirectory, { recursive: true, force: true });
+  fs.writeFileSync(auditDirectory, "engel", "utf8");
+  const blocked = applyMemoryMutationRecovery(configuration);
+  assert.equal(blocked.applied, false);
+  assert.equal(blocked.unresolvedCount, 1);
+  assert.equal(journalFiles(configuration).length, 1);
+  fs.rmSync(auditDirectory, { force: true });
+  const recovered = applyMemoryMutationRecovery(configuration);
+  assert.equal(recovered.applied, true);
+  assert.equal(recovered.appliedItems[0].action, "replay_audit");
+  assert.equal(journalFiles(configuration).length, 0);
+  assert.equal(auditRecords(configuration).filter((record) => record.event === "UPDATE").length, 1);
+});
+
+test("REC-13: onarım günlüğü yazılamazsa onarım uygulanmaz", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-recovery-repair-blocked-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const relativePath = "03_Resources/Onarim.md";
+  const notePath = path.join(vaultRootPath, relativePath);
+  fs.mkdirSync(path.dirname(notePath), { recursive: true });
+  const noteContent = [
+    "---",
+    "title: \"Onarim Notu\"",
+    "created: \"2026-09-01T00:00:00.000Z\"",
+    "updated: \"2026-09-01T00:00:00.000Z\"",
+    "confidence: high",
+    "verification: verified",
+    "memory_type: semantic",
+    "stage: published",
+    "---",
+    "",
+    "Onarim testi icerigi.",
+    ""
+  ].join("\n");
+  fs.writeFileSync(notePath, noteContent, "utf8");
+  fs.mkdirSync(configuration.statePaths.state, { recursive: true });
+  fs.writeFileSync(journalDirectory(configuration), "engel", "utf8");
+  const result = applyMemoryVaultRepair(configuration, { kind: "vault-schema" });
+  assert.equal(result.applied, false);
+  assert.equal(result.reason, "journal_unavailable");
+  assert.equal(fs.readFileSync(notePath, "utf8"), noteContent);
+});
+
+test("REC-14: eşzamanlı kurtarma süreçleri niyeti bir kez kapatır", async (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-recovery-concurrent-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  storePersistentMemory(configuration, createNoteInput());
+  const relativePath = "03_Resources/Recovery.md";
+  const noteContent = fs.readFileSync(path.join(vaultRootPath, relativePath), "utf8");
+  const journalId = sha256(relativePath);
+  writeIntent(configuration, {
+    journalId,
+    kind: "store",
+    event: "UPDATE",
+    noteIdHash: journalId,
+    relativePath,
+    oldSha256: null,
+    newSha256: sha256(noteContent)
+  });
+  const moduleUrl = new URL("../subagent-bridge/src/memory.js", import.meta.url).href;
+  const source = `import { applyMemoryMutationRecovery } from ${JSON.stringify(moduleUrl)}; const configuration = ${JSON.stringify(configuration)}; const result = applyMemoryMutationRecovery(configuration); process.stdout.write(JSON.stringify({ applied: result.applied }));`;
+  const runRecovery = () => new Promise((resolve, reject) => {
+    const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", source], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code !== 0) return reject(new Error(`recovery process exited with ${code}: ${stderr.trim()}`));
+      try {
+        resolve(JSON.parse(stdout));
+      } catch {
+        reject(new Error(`recovery process returned invalid output: ${stdout}`));
+      }
+    });
+  });
+  const results = await Promise.all([runRecovery(), runRecovery(), runRecovery()]);
+  assert.equal(results.every((result) => result.applied === true), true);
+  assert.equal(journalFiles(configuration).length, 0);
+  assert.equal(auditRecords(configuration).filter((record) => record.event === "UPDATE").length, 1);
+});
+
+test("REC-15: bozuk journal tarama hatası olarak raporlanır ve dosya korunur", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-recovery-corrupt-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const relativePath = "03_Resources/Recovery.md";
+  const journalId = sha256(relativePath);
+  const directory = journalDirectory(configuration);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, `${journalId}.json`), "{bozuk", "utf8");
+  const recovery = applyMemoryMutationRecovery(configuration);
+  assert.equal(recovery.applied, false);
+  assert.equal(recovery.reason, "journal_scan_error");
+  assert.equal(journalFiles(configuration).length, 1);
 });

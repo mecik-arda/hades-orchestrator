@@ -569,8 +569,11 @@ export function listPendingDirectEditFeedback(configuration) {
   const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
   const { records } = metricRecords(metricsDirectory);
   const { editRuns, feedbackByExecution, dispositionByExecution } = directEditFeedbackState(records);
+  const retentionDays = configuration.observability?.maxMetricRetentionDays;
+  const cutoff = Number.isInteger(retentionDays) && retentionDays > 0 ? Date.now() - retentionDays * 86400000 : null;
   return editRuns
     .filter((record) => {
+      if (cutoff !== null && Date.parse(record.recordedAt) < cutoff) return false;
       if (feedbackByExecution.has(record.executionIdHash)) return false;
       const disposition = dispositionByExecution.get(record.executionIdHash);
       return !disposition || disposition.disposition === "eligible_real_user";

@@ -618,6 +618,38 @@ function removeMutationIntent(configuration, journalId) {
   fs.rmSync(path.join(directory, `${journalId}.json`), { force: true });
 }
 
+function requireMutationIntent(configuration, intent) {
+  let result;
+  try {
+    result = writeMutationIntent(configuration, intent);
+  } catch (error) {
+    throw new Error(`hafıza mutasyon günlüğü yazılamadı: ${error.code || error.message}`);
+  }
+  if (result.written === true) return;
+  if (result.reason === "journal_exists") {
+    throw new Error("Bu not için çözülmemiş mutasyon günlüğü var; önce memory:doctor ve memory:repair ile uzlaştır");
+  }
+  throw new Error("hafıza mutasyon günlüğü yazılamadı; mutasyon uygulanmadı");
+}
+
+function readMutationIntent(configuration, journalId) {
+  const directory = mutationJournalDirectory(configuration);
+  if (!directory) return { status: "read_failed" };
+  let raw;
+  try {
+    raw = fs.readFileSync(path.join(directory, `${journalId}.json`), "utf8");
+  } catch (error) {
+    return { status: error.code === "ENOENT" ? "missing" : "read_failed" };
+  }
+  try {
+    const intent = JSON.parse(raw);
+    if (!intent || typeof intent !== "object") return { status: "invalid" };
+    return { status: "ok", intent };
+  } catch {
+    return { status: "invalid" };
+  }
+}
+
 function listMutationIntents(configuration) {
   const directory = mutationJournalDirectory(configuration);
   if (!directory || !fs.existsSync(directory)) return { intents: [], error: false };
@@ -758,6 +790,16 @@ function classifyMutationIntent(configuration, intent) {
   return item;
 }
 
+function mutationIntentLockPaths(configuration, intent) {
+  if (intent.kind === "promote") {
+    const source = resolveMemoryPath(configuration, intent.sourceRelativePath, true);
+    const target = resolveMemoryPath(configuration, intent.targetRelativePath, true);
+    return [source.normalizedRelativePath, target.normalizedRelativePath];
+  }
+  const note = resolveMemoryPath(configuration, intent.relativePath, true);
+  return [note.normalizedRelativePath];
+}
+
 export function planMemoryMutationRecovery(configuration) {
   const { intents, error } = listMutationIntents(configuration);
   const items = [];
@@ -786,52 +828,56 @@ export function applyMemoryMutationRecovery(configuration, { applyPromoteComplet
   const applied = [];
   const unresolved = [];
   for (const intent of intents) {
-    let item;
+    let lockPaths;
     try {
-      item = classifyMutationIntent(configuration, intent);
+      lockPaths = mutationIntentLockPaths(configuration, intent);
     } catch {
       unresolved.push({ journalId: intent.journalId, kind: intent.kind, action: "unresolved", reason: "invalid_journal" });
       continue;
     }
-    if (item.action === "unresolved") {
-      unresolved.push(item);
-      continue;
-    }
     try {
-      if (item.action === "discard") {
-        removeMutationIntent(configuration, item.journalId);
-        applied.push({ journalId: item.journalId, action: "discard" });
-        continue;
-      }
-      if (item.action === "replay_audit") {
-        replayMutationAudit(configuration, intent);
-        removeMutationIntent(configuration, item.journalId);
-        applied.push({ journalId: item.journalId, action: "replay_audit" });
-        continue;
-      }
-      if (item.action === "complete_promote") {
-        if (!applyPromoteCompletion) {
-          unresolved.push({ ...item, action: "complete_promote", reason: "completion_not_authorized" });
-          continue;
+      const outcome = withMemoryMutationLocks(configuration, lockPaths, () => {
+        const journalRead = readMutationIntent(configuration, intent.journalId);
+        if (journalRead.status === "missing") return {};
+        if (journalRead.status !== "ok") {
+          return { unresolved: { journalId: intent.journalId, kind: intent.kind, action: "unresolved", reason: `journal_${journalRead.status}` } };
         }
-        const source = resolveMemoryPath(configuration, intent.sourceRelativePath, true);
-        const target = resolveMemoryPath(configuration, intent.targetRelativePath, true);
-        withMemoryMutationLocks(configuration, [source.normalizedRelativePath, target.normalizedRelativePath], () => {
-          const sourcePath = requireSafeExistingFile(source.vaultRoot, source.candidatePath);
-          const targetPath = requireSafeExistingFile(target.vaultRoot, target.candidatePath);
-          const sourceHash = calculateSha256(fs.readFileSync(sourcePath, "utf8"));
-          const targetHash = calculateSha256(fs.readFileSync(targetPath, "utf8"));
-          if (sourceHash !== intent.oldSha256 || targetHash !== intent.newSha256) {
-            throw new Error("Promote uzlaştırma doğrulaması başarısız");
-          }
-          fs.rmSync(sourcePath);
-          replayMutationAudit(configuration, intent);
-          removeMutationIntent(configuration, item.journalId);
-        });
-        applied.push({ journalId: item.journalId, action: "complete_promote", sourceRelativePath: item.sourceRelativePath, targetRelativePath: item.targetRelativePath });
-      }
+        const journal = journalRead.intent;
+        if (journal.journalId !== intent.journalId || journal.kind !== intent.kind) {
+          return { unresolved: { journalId: intent.journalId, kind: intent.kind, action: "unresolved", reason: "journal_regenerated" } };
+        }
+        const fresh = classifyMutationIntent(configuration, journal);
+        if (fresh.action === "unresolved") return { unresolved: fresh };
+        if (fresh.action === "discard") {
+          removeMutationIntent(configuration, fresh.journalId);
+          return { applied: { journalId: fresh.journalId, action: "discard" } };
+        }
+        if (fresh.action === "replay_audit") {
+          replayMutationAudit(configuration, journal);
+          removeMutationIntent(configuration, fresh.journalId);
+          return { applied: { journalId: fresh.journalId, action: "replay_audit" } };
+        }
+        if (!applyPromoteCompletion) {
+          return { unresolved: { ...fresh, action: "complete_promote", reason: "completion_not_authorized" } };
+        }
+        const source = resolveMemoryPath(configuration, journal.sourceRelativePath, true);
+        const target = resolveMemoryPath(configuration, journal.targetRelativePath, true);
+        const sourcePath = requireSafeExistingFile(source.vaultRoot, source.candidatePath);
+        const targetPath = requireSafeExistingFile(target.vaultRoot, target.candidatePath);
+        const sourceHash = calculateSha256(fs.readFileSync(sourcePath, "utf8"));
+        const targetHash = calculateSha256(fs.readFileSync(targetPath, "utf8"));
+        if (sourceHash !== journal.oldSha256 || targetHash !== journal.newSha256) {
+          throw new Error("Promote uzlaştırma doğrulaması başarısız");
+        }
+        fs.rmSync(sourcePath);
+        replayMutationAudit(configuration, journal);
+        removeMutationIntent(configuration, fresh.journalId);
+        return { applied: { journalId: fresh.journalId, action: "complete_promote", sourceRelativePath: fresh.sourceRelativePath, targetRelativePath: fresh.targetRelativePath } };
+      });
+      if (outcome.applied) applied.push(outcome.applied);
+      if (outcome.unresolved) unresolved.push(outcome.unresolved);
     } catch {
-      unresolved.push({ ...item, action: item.action, reason: "apply_failed" });
+      unresolved.push({ journalId: intent.journalId, kind: intent.kind, action: "apply_failed", reason: "apply_failed" });
     }
   }
   return {
@@ -1343,25 +1389,20 @@ export function storePersistentMemory(configuration, input) {
     }
     const journalId = calculateSha256(normalizedRelativePath.replace(/\\/g, "/"));
     const event = fileExists ? "UPDATE" : "ADD";
-    let intentWritten = false;
-    try {
-      intentWritten = writeMutationIntent(configuration, {
-        journalId,
-        kind: "store",
-        event,
-        noteIdHash: journalId,
-        relativePath: normalizedRelativePath.replace(/\\/g, "/"),
-        oldSha256,
-        newSha256,
-        auditMeta: {
-          memoryType: input.memoryType || null,
-          confidence: input.confidence,
-          verificationStatus: input.verificationStatus
-        }
-      }).written === true;
-    } catch {
-      intentWritten = false;
-    }
+    requireMutationIntent(configuration, {
+      journalId,
+      kind: "store",
+      event,
+      noteIdHash: journalId,
+      relativePath: normalizedRelativePath.replace(/\\/g, "/"),
+      oldSha256,
+      newSha256,
+      auditMeta: {
+        memoryType: input.memoryType || null,
+        confidence: input.confidence,
+        verificationStatus: input.verificationStatus
+      }
+    });
     writeAtomicFile(candidatePath, document);
     let audit;
     try {
@@ -1375,10 +1416,10 @@ export function storePersistentMemory(configuration, input) {
         confidence: input.confidence,
         verificationStatus: input.verificationStatus
       });
-      if (intentWritten) removeMutationIntent(configuration, journalId);
+      removeMutationIntent(configuration, journalId);
       audit = { written: true };
     } catch {
-      audit = { written: false, reason: intentWritten ? "audit_pending_recovery" : "audit_write_failed" };
+      audit = { written: false, reason: "audit_pending_recovery" };
     }
     return {
       relativePath: normalizedRelativePath.replace(/\\/g, "/"),
@@ -1449,22 +1490,17 @@ export function promotePersistentMemory(configuration, input) {
     const memoryType = extractQuotedFrontmatterValue(sourceContent, "memory_type");
     const confidence = extractQuotedFrontmatterValue(sourceContent, "confidence");
     const verificationStatus = extractQuotedFrontmatterValue(sourceContent, "verification");
-    let intentWritten = false;
-    try {
-      intentWritten = writeMutationIntent(configuration, {
-        journalId: noteIdHash,
-        kind: "promote",
-        event: "PROMOTE",
-        noteIdHash,
-        sourceRelativePath: source.normalizedRelativePath.replace(/\\/g, "/"),
-        targetRelativePath: target.normalizedRelativePath.replace(/\\/g, "/"),
-        oldSha256: sourceSha256,
-        newSha256: targetSha256,
-        auditMeta: { memoryType, confidence, verificationStatus }
-      }).written === true;
-    } catch {
-      intentWritten = false;
-    }
+    requireMutationIntent(configuration, {
+      journalId: noteIdHash,
+      kind: "promote",
+      event: "PROMOTE",
+      noteIdHash,
+      sourceRelativePath: source.normalizedRelativePath.replace(/\\/g, "/"),
+      targetRelativePath: target.normalizedRelativePath.replace(/\\/g, "/"),
+      oldSha256: sourceSha256,
+      newSha256: targetSha256,
+      auditMeta: { memoryType, confidence, verificationStatus }
+    });
     writeAtomicFileDurable(target.candidatePath, publishedContent);
     fs.rmSync(sourcePath);
     let audit;
@@ -1479,10 +1515,10 @@ export function promotePersistentMemory(configuration, input) {
         confidence,
         verificationStatus
       });
-      if (intentWritten) removeMutationIntent(configuration, noteIdHash);
+      removeMutationIntent(configuration, noteIdHash);
       audit = { written: true };
     } catch {
-      audit = { written: false, reason: intentWritten ? "audit_pending_recovery" : "audit_write_failed" };
+      audit = { written: false, reason: "audit_pending_recovery" };
     }
     return {
       promoted: true,
@@ -1580,11 +1616,16 @@ export function planMemoryVaultRepair(configuration, { kind = "vault-schema" } =
     });
   }
   const repairableItems = items.filter((item) => item.action !== "refused");
+  const probeFiles = collectMarkdownFiles({
+    ...configuration,
+    memory: { ...configuration.memory, maxIndexedFiles: configuration.memory.maxIndexedFiles + 1 }
+  }).files;
   return {
     kind,
     mode: "dry_run",
     scanErrorCount,
     tooLargeCount,
+    scanTruncated: probeFiles.length > files.length,
     repairCount: repairableItems.length,
     forceRequiredCount: repairableItems.filter((item) => item.requiresForce).length,
     refusedCount: items.length - repairableItems.length,
@@ -1592,11 +1633,13 @@ export function planMemoryVaultRepair(configuration, { kind = "vault-schema" } =
   };
 }
 
-export function applyMemoryVaultRepair(configuration, { kind = "vault-schema", relativePaths = [], force = false, plan = null, writeFile = writeAtomicFile } = {}) {
+export function applyMemoryVaultRepair(configuration, { kind = "vault-schema", relativePaths = [], force = false, plan = null, writeFile = writeAtomicFile, removeIntent = removeMutationIntent } = {}) {
   if (kind === "promote-reconcile") return applyMemoryMutationRecovery(configuration, { applyPromoteCompletion: true });
   const effectivePlan = plan && plan.kind === kind && Array.isArray(plan.items) ? plan : planMemoryVaultRepair(configuration, { kind });
   const planForResult = effectivePlan;
   if (planForResult.scanErrorCount > 0) return { ...planForResult, mode: "apply", applied: false, reason: "scan_error" };
+  if (planForResult.scanTruncated === true && relativePaths.length === 0) return { ...planForResult, mode: "apply", applied: false, reason: "scan_truncated" };
+  if (planForResult.tooLargeCount > 0 && relativePaths.length === 0) return { ...planForResult, mode: "apply", applied: false, reason: "too_large_files" };
   const requestedPaths = relativePaths.length > 0
     ? new Set(relativePaths.map((relativePath) => normalizeRepairRelativePath(relativePath)))
     : new Set(planForResult.items.map((item) => item.relativePath));
@@ -1637,12 +1680,13 @@ export function applyMemoryVaultRepair(configuration, { kind = "vault-schema", r
       prepared.push({ candidate, repair, oldSha256, originalContent: content });
     }
     const written = [];
+    const journalIds = [];
     for (const entry of prepared) {
       const normalizedPath = entry.candidate.item.relativePath.replace(/\\/g, "/");
       entry.newSha256 = calculateSha256(entry.repair.content);
       entry.noteIdHash = calculateSha256(normalizedPath);
       try {
-        entry.intentWritten = writeMutationIntent(configuration, {
+        requireMutationIntent(configuration, {
           journalId: entry.noteIdHash,
           kind: "repair",
           event: "UPDATE",
@@ -1650,32 +1694,58 @@ export function applyMemoryVaultRepair(configuration, { kind = "vault-schema", r
           relativePath: normalizedPath,
           oldSha256: entry.oldSha256,
           newSha256: entry.newSha256
-        }).written === true;
+        });
       } catch {
-        entry.intentWritten = false;
+        let cleanupPending = 0;
+        for (const journalId of journalIds) {
+          try {
+            removeIntent(configuration, journalId);
+          } catch {
+            cleanupPending += 1;
+          }
+        }
+        return {
+          failed: {
+            relativePath: entry.candidate.item.relativePath,
+            reason: "journal_unavailable",
+            ...(cleanupPending > 0 ? { cleanupPending } : {})
+          }
+        };
       }
+      journalIds.push(entry.noteIdHash);
     }
     for (const entry of prepared) {
       try {
         writeFile(entry.candidate.candidatePath, entry.repair.content);
       } catch {
-        if (entry.intentWritten) removeMutationIntent(configuration, entry.noteIdHash);
+        let cleanupPending = 0;
+        try {
+          removeIntent(configuration, entry.noteIdHash);
+        } catch {
+          cleanupPending += 1;
+        }
         const rolledBack = [];
         let rollbackFailed = false;
         for (const completed of written) {
           try {
             writeFile(completed.candidate.candidatePath, completed.originalContent);
-            if (completed.intentWritten) removeMutationIntent(configuration, completed.noteIdHash);
             rolledBack.push(completed.candidate.item.relativePath);
           } catch {
             rollbackFailed = true;
+            continue;
+          }
+          try {
+            removeIntent(configuration, completed.noteIdHash);
+          } catch {
+            cleanupPending += 1;
           }
         }
         return {
           failed: {
             relativePath: entry.candidate.item.relativePath,
             reason: rollbackFailed ? "rollback_failed" : "write_failed",
-            rolledBack
+            rolledBack,
+            ...(cleanupPending > 0 ? { cleanupPending } : {})
           }
         };
       }
@@ -1692,17 +1762,18 @@ export function applyMemoryVaultRepair(configuration, { kind = "vault-schema", r
           oldSha256: entry.oldSha256,
           newSha256: entry.newSha256
         });
-        if (entry.intentWritten) removeMutationIntent(configuration, entry.noteIdHash);
+        removeIntent(configuration, entry.noteIdHash);
         audit = { written: true };
       } catch {
-        audit = { written: false, reason: entry.intentWritten ? "audit_pending_recovery" : "audit_write_failed" };
+        audit = { written: false, reason: "audit_pending_recovery" };
       }
       applied.push({
         relativePath: entry.candidate.item.relativePath,
         action: entry.repair.action,
         oldSha256: entry.oldSha256,
         sha256: entry.newSha256,
-        auditWritten: audit.written === true
+        auditWritten: audit.written === true,
+        ...(audit.written === true ? {} : { audit })
       });
     }
     return { written: applied };
@@ -1715,6 +1786,7 @@ export function applyMemoryVaultRepair(configuration, { kind = "vault-schema", r
       reason: outcome.failed.reason,
       stoppedAt: outcome.failed.relativePath,
       rolledBack: outcome.failed.rolledBack || [],
+      ...(outcome.failed.cleanupPending > 0 ? { cleanupPending: outcome.failed.cleanupPending } : {}),
       appliedItems: [],
       skipped
     };
@@ -1724,6 +1796,7 @@ export function applyMemoryVaultRepair(configuration, { kind = "vault-schema", r
     mode: "apply",
     scanErrorCount: 0,
     tooLargeCount: planForResult.tooLargeCount,
+    scanTruncated: planForResult.scanTruncated === true,
     applied: true,
     appliedCount: outcome.written.length,
     appliedItems: outcome.written,

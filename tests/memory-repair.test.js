@@ -248,3 +248,115 @@ test("REPAIR-08: boş frontmatter onarılır ve satır sonu biçimi korunur", (c
   assert.equal(crlf.includes("vault_schema: 1\r\n"), true);
   assert.equal(crlf.includes("title: \"Crlf\"\r\n"), true);
 });
+
+test("REPAIR-09: indeks sınırı aşılırsa tam kasa onarımı reddedilir", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-repair-truncated-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const firstPath = writeNote(vaultRootPath, "03_Resources/Bir.md", validMetadataLines);
+  const secondPath = writeNote(vaultRootPath, "03_Resources/Iki.md", validMetadataLines);
+  configuration.memory.maxIndexedFiles = 1;
+  const before = hashTree(vaultRootPath);
+  const plan = planMemoryVaultRepair(configuration, { kind: "vault-schema" });
+  assert.equal(plan.scanTruncated, true);
+  const result = applyMemoryVaultRepair(configuration, { kind: "vault-schema" });
+  assert.equal(result.applied, false);
+  assert.equal(result.reason, "scan_truncated");
+  assert.equal(hashTree(vaultRootPath), before);
+  assert.equal(fs.readFileSync(firstPath, "utf8").includes("vault_schema"), false);
+  assert.equal(fs.readFileSync(secondPath, "utf8").includes("vault_schema"), false);
+});
+
+test("REPAIR-10: boyut sınırını aşan not varsa tam kasa onarımı reddedilir", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-repair-too-large-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  configuration.memory.maxWriteBytes = 1024;
+  const bigPath = path.join(vaultRootPath, "03_Resources", "Buyuk.md");
+  fs.mkdirSync(path.dirname(bigPath), { recursive: true });
+  const bigContent = ["---", ...validMetadataLines, "---", "", "x".repeat(4096), ""].join("\n");
+  fs.writeFileSync(bigPath, bigContent, "utf8");
+  const plan = planMemoryVaultRepair(configuration, { kind: "vault-schema" });
+  assert.equal(plan.tooLargeCount, 1);
+  const result = applyMemoryVaultRepair(configuration, { kind: "vault-schema" });
+  assert.equal(result.applied, false);
+  assert.equal(result.reason, "too_large_files");
+  assert.equal(fs.readFileSync(bigPath, "utf8"), bigContent);
+});
+
+test("REPAIR-11: indeks sınırına tam oturan kasa kesilmiş sayılmaz", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-repair-exact-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const firstPath = writeNote(vaultRootPath, "03_Resources/Bir.md", validMetadataLines);
+  const secondPath = writeNote(vaultRootPath, "03_Resources/Iki.md", validMetadataLines);
+  configuration.memory.maxIndexedFiles = 2;
+  const plan = planMemoryVaultRepair(configuration, { kind: "vault-schema" });
+  assert.equal(plan.scanTruncated, false);
+  const result = applyMemoryVaultRepair(configuration, { kind: "vault-schema" });
+  assert.equal(result.applied, true);
+  assert.equal(result.appliedCount, 2);
+  assert.equal(fs.readFileSync(firstPath, "utf8").includes("vault_schema: 1"), true);
+  assert.equal(fs.readFileSync(secondPath, "utf8").includes("vault_schema: 1"), true);
+});
+
+test("REPAIR-12: audit yazılamazsa sonuç nedenini taşır ve niyet korunur", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-repair-audit-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const notePath = writeNote(vaultRootPath, "03_Resources/Audit.md", validMetadataLines);
+  const auditDirectory = path.join(vaultRootPath, ".runtime", "logs", "audit");
+  fs.mkdirSync(path.dirname(auditDirectory), { recursive: true });
+  fs.writeFileSync(auditDirectory, "engel", "utf8");
+  const result = applyMemoryVaultRepair(configuration, { kind: "vault-schema" });
+  assert.equal(result.applied, true);
+  assert.equal(result.appliedItems[0].auditWritten, false);
+  assert.equal(result.appliedItems[0].audit.reason, "audit_pending_recovery");
+  assert.equal(fs.readFileSync(notePath, "utf8").includes("vault_schema: 1"), true);
+  const journalDirectory = path.join(vaultRootPath, ".runtime", "state", "memory-mutations");
+  assert.equal(fs.readdirSync(journalDirectory).filter((entry) => entry.endsWith(".json")).length, 1);
+});
+
+test("REPAIR-13: rollback başarısız olursa kurtarma niyeti korunur", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-repair-rollback-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  writeNote(vaultRootPath, "03_Resources/Bir.md", validMetadataLines);
+  writeNote(vaultRootPath, "03_Resources/Iki.md", validMetadataLines);
+  let attempts = 0;
+  const writeFile = (filePath, content) => {
+    attempts += 1;
+    if (attempts === 2) throw new Error("ikinci yazim hatasi");
+    if (attempts === 3) throw new Error("rollback hatasi");
+    fs.writeFileSync(filePath, content, "utf8");
+  };
+  const result = applyMemoryVaultRepair(configuration, { kind: "vault-schema", writeFile });
+  assert.equal(result.applied, false);
+  assert.equal(result.reason, "rollback_failed");
+  assert.deepEqual(result.rolledBack, []);
+  const journalDirectory = path.join(vaultRootPath, ".runtime", "state", "memory-mutations");
+  assert.equal(fs.readdirSync(journalDirectory).filter((entry) => entry.endsWith(".json")).length, 1);
+});
+
+test("REPAIR-14: cleanup başarısızlığı sonuçta görünür", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-repair-cleanup-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  writeNote(vaultRootPath, "03_Resources/Bir.md", validMetadataLines);
+  writeNote(vaultRootPath, "03_Resources/Iki.md", validMetadataLines);
+  let attempts = 0;
+  const writeFile = (filePath, content) => {
+    attempts += 1;
+    if (attempts === 2) throw new Error("ikinci yazim hatasi");
+    fs.writeFileSync(filePath, content, "utf8");
+  };
+  const removeIntent = () => {
+    throw new Error("temizlik hatasi");
+  };
+  const result = applyMemoryVaultRepair(configuration, { kind: "vault-schema", writeFile, removeIntent });
+  assert.equal(result.applied, false);
+  assert.equal(result.reason, "write_failed");
+  assert.equal(result.cleanupPending, 2);
+  const journalDirectory = path.join(vaultRootPath, ".runtime", "state", "memory-mutations");
+  assert.equal(fs.readdirSync(journalDirectory).filter((entry) => entry.endsWith(".json")).length, 2);
+});

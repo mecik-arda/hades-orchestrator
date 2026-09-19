@@ -168,3 +168,15 @@ test("DISP-05: uygun olmayan kayda ham sonuç etiketi karar paydasını etkileme
   assert.equal(summary.directEditBaseline.pendingFeedback, 0);
   assert.equal(summary.directEditBaseline.decisionReady, false);
 });
+
+test("DISP-06: retention dışı eski edit kayıtları bekleyen kuyruğa geri dönmez", (context) => {
+  const { configuration } = createState(context);
+  configuration.observability.maxMetricRetentionDays = 30;
+  const recentAt = new Date(Date.now() - 86400000).toISOString();
+  const oldAt = new Date(Date.now() - 60 * 86400000).toISOString();
+  const oldId = seedExecution(configuration, oldAt, "old-run");
+  const recentId = seedExecution(configuration, recentAt, "recent-run");
+  const pending = listPendingDirectEditFeedback(configuration);
+  assert.deepEqual(pending.map((entry) => entry.feedbackId), [recentId.slice(0, 12)]);
+  assert.equal(oldId.length, 64);
+});

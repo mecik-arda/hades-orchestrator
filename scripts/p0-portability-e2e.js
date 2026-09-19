@@ -45,6 +45,21 @@ function compareSnapshots(before, after) {
   return [...paths].filter((filePath) => before.get(filePath) !== after.get(filePath)).sort();
 }
 
+function removeDirectoryBestEffort(directoryPath) {
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      fs.rmSync(directoryPath, { recursive: true, force: true, maxRetries: 4, retryDelay: 250 });
+      return;
+    } catch (error) {
+      if (attempt === 5) {
+        process.stderr.write(`warning: temporary directory cleanup failed: ${error.code || error.message}\n`);
+        return;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250 * attempt);
+    }
+  }
+}
+
 function summarizeResult(result) {
   return {
     ok: result.ok,
@@ -115,5 +130,5 @@ try {
     process.exitCode = 1;
   }
 } finally {
-  fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  removeDirectoryBestEffort(temporaryRoot);
 }
