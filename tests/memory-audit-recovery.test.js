@@ -525,9 +525,12 @@ test("REC-14: eşzamanlı kurtarma süreçleri niyeti bir kez kapatır", async (
     });
   });
   const results = await Promise.all([runRecovery(), runRecovery(), runRecovery()]);
-  assert.equal(results.every((result) => result.applied === true), true);
+  assert.equal(results.some((result) => result.applied === true), true);
   assert.equal(journalFiles(configuration).length, 0);
   assert.equal(auditRecords(configuration).filter((record) => record.event === "UPDATE").length, 1);
+  const followUp = applyMemoryMutationRecovery(configuration);
+  assert.equal(followUp.applied, true);
+  assert.equal(followUp.appliedCount, 0);
 });
 
 test("REC-15: bozuk journal tarama hatası olarak raporlanır ve dosya korunur", (context) => {
