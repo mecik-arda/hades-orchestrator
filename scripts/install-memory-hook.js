@@ -47,14 +47,24 @@ function openCodePluginSource() {
   ].join("\n");
 }
 
+function isShellSafePath(value) {
+  const text = String(value);
+  return text.length > 0 && !/[\s"'%]/.test(text);
+}
+
 function codexCommand() {
   if (process.platform === "win32") {
-    return `${quoteWindows(process.execPath)} ${quoteWindows(clientScriptPath)} --client=codex`;
+    for (const candidate of [process.execPath, clientScriptPath]) {
+      if (!isShellSafePath(candidate)) throw new Error("unsafe_command_path");
+    }
+    return `${process.execPath} ${clientScriptPath} --client=codex`;
   }
   return `${quotePosix(process.execPath)} ${quotePosix(clientScriptPath)} --client=codex`;
 }
 
 function codexHookConfiguration() {
+  const command = codexCommand();
+  const commandWindows = process.platform === "win32" ? command : `${quoteWindows(process.execPath)} ${quoteWindows(clientScriptPath)} --client=codex`;
   return {
     hooks: {
       UserPromptSubmit: [
@@ -62,8 +72,8 @@ function codexHookConfiguration() {
           hooks: [
             {
               type: "command",
-              command: codexCommand(),
-              commandWindows: `${quoteWindows(process.execPath)} ${quoteWindows(clientScriptPath)} --client=codex`,
+              command,
+              commandWindows,
               additionalContextLimit: 1200,
               statusMessage: "Second brain memory (read-only)"
             }
@@ -128,6 +138,7 @@ if (client === "claude") {
   let source;
   try {
     source = `${JSON.stringify(codexHookConfiguration(), null, 2)}\n`;
+    result.commandQuoted = process.platform !== "win32";
   } catch {
     result.reason = "unsafe_command_path";
     process.exitCode = 1;
