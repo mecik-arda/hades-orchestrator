@@ -251,6 +251,7 @@ npm run memory:review         Persistent memory lifecycle review
 npm run memory:doctor         Read-only Vault health, version and audit diagnosis
 npm run memory:repair         Explicit Vault repair (dry-run by default, --apply to write)
 npm run state:migrate         Explicit runtime state migration (dry-run by default)
+npm run video:collect         Collect a public YouTube transcript as an untrusted, hashed envelope (--url=, optional --out=)
 npm run hook:install          Generate the opt-in read-only memory hook (--client=opencode|codex|claude)
 npm run memory:evaluate       Retrieval quality evaluation
 npm run config:backup         Personal policy backup
@@ -267,6 +268,8 @@ The Obsidian-compatible local Vault under `memory` is outside Git tracking. `che
 `npm run memory:doctor` reports frontmatter, soft-expiry, quarantine, hash-integrity, schema-version and audit-race findings read-only; it never deletes, moves, merges or repairs a note. The Vault and runtime state carry explicit schema versions; incompatible state fails closed at startup and requires `npm run state:migrate`.
 
 The optional hook enriches a client session with at most five read-only Vault excerpts (1200 characters). It never writes or publishes, excludes drafts, expired and quarantined notes, and stays silent when memory is unavailable. Consumption profiles (`normal`, `economic`, `manual`) only change automation parameters; secret scanning, path/symlink protection, SHA-256 locking, schema validation, quarantine and write permissions are invariant. Install per client with `npm run hook:install -- --client=opencode` (add `--apply`), `--client=codex` (`~/.codex/hooks.json`, requires `/hooks` trust review) or `--client=claude` (prints the `settings.json` snippet; merge manually). The OpenCode plugin additionally requires `SUBAGENT_SECOND_BRAIN_HOOK=1`.
+
+`npm run video:collect -- --url=<watch-url> [--out=<file>]` downloads only subtitles and oEmbed metadata for a public YouTube video through local `yt-dlp`, verifies the video identity, enforces 2 MB subtitle and 400k character transcript limits and prints a hashed `untrusted_video_transcript` envelope. Antigravity read-only calls additionally enforce the JSON carrier with `--json-schema` and allow one bounded carrier repair attempt when validation fails.
 
 ## Reliability and metrics
 
@@ -559,6 +562,7 @@ npm run memory:review         Kalıcı hafıza yaşam döngüsü denetimi
 npm run memory:doctor         Salt-okunur Vault sağlık, sürüm ve audit teşhisi
 npm run memory:repair         Açık Vault onarımı (varsayılan dry-run, yazmak için --apply)
 npm run state:migrate         Explicit runtime state migrasyonu (varsayılan dry-run)
+npm run video:collect         Herkese açık YouTube altyazısını güvenilmeyen, hashlı zarf olarak toplar (--url=, opsiyonel --out=)
 npm run hook:install          Opt-in salt-okunur hafıza hook'u üretir (--client=opencode|codex|claude)
 npm run memory:evaluate       Retrieval kalite değerlendirmesi
 npm run config:backup         Kişisel policy backup'ı
@@ -575,6 +579,8 @@ DeepSeek yalnız `implementer` + `edit` modunda seçili dosyalara promotion uygu
 `npm run memory:doctor` frontmatter, soft-expiry, karantina, hash bütünlüğü, şema sürümü ve audit yarış bulgularını salt-okunur raporlar; hiçbir notu silmez, taşımaz, birleştirmez veya onarmaz. Vault ve runtime state açık şema sürümleri taşır; uyumsuz state başlangıçta fail-closed olur ve `npm run state:migrate` gerektirir.
 
 İsteğe bağlı hook, istemci oturumuna en fazla beş salt-okunur Vault alıntısı (1200 karakter) ekler. Asla yazmaz veya yayınlamaz; taslak, süresi dolmuş ve karantina notlarını dışlar; hafıza erişilemezse sessiz kalır. Tüketim profilleri (`normal`, `economic`, `manual`) yalnız otomasyon parametrelerini değiştirir; secret taraması, path/symlink koruması, SHA-256 kilidi, şema doğrulaması, karantina ve yazma izinleri değişmez. İstemci bazında kurulum: `npm run hook:install -- --client=opencode` (`--apply` ekle), `--client=codex` (`~/.codex/hooks.json`, `/hooks` güven incelemesi gerekir) veya `--client=claude` (`settings.json` snippet'ini yazdırır; elle birleştir). OpenCode plugin'i ayrıca `SUBAGENT_SECOND_BRAIN_HOOK=1` gerektirir.
+
+`npm run video:collect -- --url=<watch-adresi> [--out=<dosya>]` herkese açık bir YouTube videosu için yalnız altyazı ve oEmbed künyesini yerel `yt-dlp` ile indirir, video kimliğini doğrular, 2 MB altyazı ve 400 bin karakter transcript sınırlarını uygular ve hashlı `untrusted_video_transcript` zarfını yazdırır. Antigravity salt-okunur çağrıları ayrıca JSON carrier'ı `--json-schema` ile zorlar ve doğrulama düştüğünde tek denemelik sınırlı carrier onarımına izin verir.
 
 ## Güvenilirlik ve metrikler
 
