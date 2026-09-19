@@ -43,7 +43,8 @@
     "config:rollback": "node scripts/manage-config.js rollback",
     "config:apply-routing": "node scripts/apply-provider-routing.js",
     "config:apply-agent-modes": "node scripts/apply-agent-modes.js",
-    "config:rollback-agent-modes": "node scripts/apply-agent-modes.js rollback"
+    "config:rollback-agent-modes": "node scripts/apply-agent-modes.js rollback",
+    "video:collect": "node scripts/collect-video-transcript.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.3",

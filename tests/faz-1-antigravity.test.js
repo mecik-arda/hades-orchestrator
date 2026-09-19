@@ -19,7 +19,7 @@ import {
   subagentExecutionRequestSchema, subagentResultSchema,
   createFailureSubagentResult, createSuccessSubagentResult
 } from "../subagent-bridge/src/schemas/core-schemas.js";
-import { ANTIGRAVITY_MODEL_MAP, READ_ONLY_INSTRUCTION, READ_ONLY_PERMISSION_RULES, hasSafeReadOnlyPermissionBaseline, hasNoConfiguredMcpServers, resolveModel, resolveAntigravityCommand, buildAntigravityArgs, classifyAntigravityError, extractAntigravityResult, createAntigravityAdapter, createSettingsLock } from "../subagent-bridge/src/adapters/antigravity-adapter.js";
+import { ANTIGRAVITY_MODEL_MAP, READ_ONLY_INSTRUCTION, READ_ONLY_PERMISSION_RULES, CARRIER_OUTPUT_SCHEMA, hasSafeReadOnlyPermissionBaseline, hasNoConfiguredMcpServers, resolveModel, resolveAntigravityCommand, buildAntigravityArgs, classifyAntigravityError, extractAntigravityResult, normalizeCarrierStructuredOutput, writeCarrierSchemaFile, createAntigravityAdapter, createSettingsLock } from "../subagent-bridge/src/adapters/antigravity-adapter.js";
 import { acquireReadLock, releaseReadLock, acquireWriteLock, releaseWriteLock, releaseAllLocks } from "./support/workspace-lock.js";
 
 test("AG-AC-01: AntigravityAdapter AgentAdapter kontratını uygular", () => {
@@ -271,6 +271,50 @@ test("AG-AC-15b: JSON response alanı final sonucu döndürür ve boş yanıt re
     "architecture complete"
   );
   assert.equal(extractAntigravityResult('{"status":"SUCCESS","response":""}'), null);
+});
+
+test("AG-AC-15e: structured_output carrier tercih edilir ve boş kanıt null olur", () => {
+  assert.equal(
+    extractAntigravityResult(JSON.stringify({ status: "SUCCESS", structured_output: { result: "READY", webEvidence: null } })),
+    JSON.stringify({ result: "READY", webEvidence: null })
+  );
+  assert.equal(
+    extractAntigravityResult(JSON.stringify({ status: "SUCCESS", structured_output: { result: "READY", webEvidence: {} } })),
+    JSON.stringify({ result: "READY", webEvidence: null })
+  );
+  assert.deepEqual(
+    JSON.parse(extractAntigravityResult(JSON.stringify({ status: "SUCCESS", structured_output: { result: "ok", webEvidence: { sourceUrl: "https://example.com", excerpts: ["parca"] } } }))),
+    { result: "ok", webEvidence: { sourceUrl: "https://example.com", excerpts: ["parca"] } }
+  );
+  assert.equal(
+    extractAntigravityResult(JSON.stringify({ status: "SUCCESS", structured_output: { result: "", webEvidence: null } })),
+    null
+  );
+  assert.equal(
+    extractAntigravityResult('{"status":"SUCCESS","response":"duz metin"}'),
+    "duz metin"
+  );
+});
+
+test("AG-AC-15f: carrier şeması zorunlu alanları ve nullable kanıtı tanımlar", () => {
+  const schema = JSON.parse(CARRIER_OUTPUT_SCHEMA);
+  assert.equal(schema.type, "object");
+  assert.deepEqual(schema.required, ["result", "webEvidence"]);
+  assert.equal(schema.properties.webEvidence.nullable, true);
+  assert.deepEqual(schema.properties.webEvidence.required, ["sourceUrl", "excerpts"]);
+  assert.equal(schema.additionalProperties, false);
+  assert.equal(normalizeCarrierStructuredOutput({ result: "x", webEvidence: {} }), JSON.stringify({ result: "x", webEvidence: null }));
+  assert.equal(normalizeCarrierStructuredOutput({ webEvidence: null }), null);
+});
+
+test("AG-AC-15g: carrier şema dosyası yazma hatasında geçici dizin temizlenir", () => {
+  const directoryCount = () => fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith("agy-carrier-schema-")).length;
+  const before = directoryCount();
+  assert.throws(() => writeCarrierSchemaFile(() => { throw new Error("yazma hatasi"); }), /yazma hatasi/);
+  assert.equal(directoryCount(), before);
+  const handle = writeCarrierSchemaFile();
+  assert.equal(fs.existsSync(handle.schemaPath), true);
+  fs.rmSync(handle.directory, { recursive: true, force: true });
 });
 
 test("AG-AC-15c: read-only permission policy yalnız inceleme komutlarını allow eder", () => {

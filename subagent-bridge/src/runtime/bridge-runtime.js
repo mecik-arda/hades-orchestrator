@@ -54,7 +54,9 @@ const runtimeRunRequestSchema = z.object({
   metricBackend: z.enum(["glm", "kimi", "qwen"]).optional(),
   resultValidator: z.function().optional(),
   schemaRepairPrompt: z.string().min(1).max(70000).optional(),
-  maxSchemaRepairAttempts: z.number().int().min(0).optional()
+  maxSchemaRepairAttempts: z.number().int().min(0).optional(),
+  webEvidenceRepairPrompt: z.string().min(1).max(70000).optional(),
+  maxWebEvidenceRepairAttempts: z.number().int().min(0).max(2).optional()
 }).strict();
 
 function createProductionAdapters(configuration) {
@@ -538,6 +540,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     let reservedCostUsd = 0;
     let schemaRepairAttempts = 0;
     let schemaValidationIssues = [];
+    let webEvidenceRepairAttempts = 0;
     const attemptRecords = [];
     let cacheKey = null;
     const abortListener = () => {
@@ -597,7 +600,16 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               `This is schema repair attempt ${schemaRepairAttempts + 1}.`,
               ...(repairDetails.length > 0 ? ["Validation issues:", ...repairDetails] : ["The previous response was not parseable as the required JSON object."])
             ].join("\n")
-            : request.prompt;
+            : lastResult?.reason === "web_evidence_invalid" && input.webEvidenceRepairPrompt
+              ? [
+                input.webEvidenceRepairPrompt,
+                `This is carrier repair attempt ${webEvidenceRepairAttempts + 1}.`,
+                "Return exactly one JSON object with result and webEvidence fields and nothing else.",
+                "Answer the original task inside the result field. The original task follows.",
+                "--- ORIGINAL TASK ---",
+                request.prompt
+              ].join("\n")
+              : request.prompt;
           let result = await adapter.execute({ ...requestValidation.data, prompt, timeoutMs: Math.min(timeoutMs, remainingMs) });
           try {
             result = normalizeProviderResult(result, {
@@ -616,7 +628,10 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               retries: attemptNumber - 1,
               adapterAttempts: attemptNumber,
               reason: "web_evidence_invalid",
-              metrics: { diagnostics: { failureStage: "result_parse", providerCode: null, settingsLockWaitMs: null, providerExecutionMs: null, stdoutBytes: null, stderrBytes: null } }
+              metrics: {
+                totalCostUsd: result?.metrics?.totalCostUsd ?? null,
+                diagnostics: { failureStage: "result_parse", providerCode: null, settingsLockWaitMs: null, providerExecutionMs: null, stdoutBytes: null, stderrBytes: null }
+              }
             });
           }
           const resultValidation = validateSubagentResult(result);
@@ -641,7 +656,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
                 adapterAttempts: attemptNumber,
                 reason: validation.errorClass,
                 metrics: {
-                  totalCostUsd: result.metrics?.totalCostUsd ?? null,
+                totalCostUsd: result?.metrics?.totalCostUsd ?? null,
                   diagnostics: { ...(adapterDiagnostics || {}), failureStage: "result_parse" }
                 }
               });
@@ -695,6 +710,26 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
              }
              return lastResult;
            }
+          if (failureClass === "web_evidence_invalid" && input.webEvidenceRepairPrompt && input.maxWebEvidenceRepairAttempts !== undefined) {
+            const repairCurrentCost = totalCostUsd + reservedCostUsd;
+            const repairBudgetExhausted = (budget.maxRetryCostUsd !== undefined && repairCurrentCost >= budget.maxRetryCostUsd)
+              || (budget.maxRetryCostUsd !== undefined && budget.maxRetryCostReserveUsd !== undefined && repairCurrentCost + budget.maxRetryCostReserveUsd > budget.maxRetryCostUsd);
+            if (webEvidenceRepairAttempts >= input.maxWebEvidenceRepairAttempts) {
+              attemptRecord.retryDecision = "stop";
+              attemptRecord.retryStopReason = "web_evidence_repair_exhausted";
+              return lastResult;
+            }
+            if (attemptNumber >= budget.maxAttempts || repairBudgetExhausted) {
+              attemptRecord.retryDecision = "stop";
+              attemptRecord.retryStopReason = "web_evidence_repair_budget_exhausted";
+              return lastResult;
+            }
+            webEvidenceRepairAttempts += 1;
+            attemptRecord.retryDecision = "retry";
+            attemptRecord.retryStopReason = null;
+            await wait(0);
+            continue;
+          }
           if (["schema_invalid", "output_parse_invalid"].includes(failureClass) && input.maxSchemaRepairAttempts !== undefined) {
             if (schemaRepairAttempts >= input.maxSchemaRepairAttempts) {
               attemptRecord.retryDecision = "stop";

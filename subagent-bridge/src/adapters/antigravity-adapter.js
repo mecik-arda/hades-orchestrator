@@ -40,6 +40,64 @@ const READ_ONLY_PERMISSION_RULES = {
   ]
 };
 
+const CARRIER_OUTPUT_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    result: { type: "string" },
+    webEvidence: {
+      type: "object",
+      nullable: true,
+      properties: {
+        sourceUrl: { type: "string" },
+        retrievedAt: { type: "string" },
+        excerpts: { type: "array", items: { type: "string" } },
+        confidence: { type: "string" },
+        verificationStatus: { type: "string" }
+      },
+      required: ["sourceUrl", "excerpts"]
+    }
+  },
+  required: ["result", "webEvidence"],
+  additionalProperties: false
+});
+
+function writeCarrierSchemaFile(writeFileSync = fs.writeFileSync) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "agy-carrier-schema-"));
+  try {
+    const schemaPath = path.join(directory, "carrier-schema.json");
+    writeFileSync(schemaPath, CARRIER_OUTPUT_SCHEMA, "utf8");
+    return { schemaPath, directory };
+  } catch (error) {
+    try {
+      fs.rmSync(directory, { recursive: true, force: true });
+    } catch {
+    }
+    throw error;
+  }
+}
+
+function removeCarrierSchemaFile(handle) {
+  if (!handle) return;
+  try {
+    fs.rmSync(handle.directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  } catch {
+  }
+}
+
+function normalizeCarrierEvidence(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return Object.keys(value).length === 0 ? null : value;
+  }
+  return value;
+}
+
+function normalizeCarrierStructuredOutput(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (typeof value.result !== "string" || value.result.trim().length === 0) return null;
+  return JSON.stringify({ result: value.result, webEvidence: normalizeCarrierEvidence(value.webEvidence) });
+}
+
 const activeExecutionHandles = new Map();
 
 const AGY_SETTINGS_DIR = path.join(os.homedir(), ".gemini", "antigravity-cli");
@@ -396,6 +454,9 @@ function extractAntigravityResult(stdout) {
 
   try {
     const parsed = JSON.parse(trimmed);
+    if (parsed && Object.hasOwn(parsed, "structured_output")) {
+      return normalizeCarrierStructuredOutput(parsed.structured_output);
+    }
     if (typeof parsed?.response === "string") {
       return parsed.response.trim() || null;
     }
@@ -626,6 +687,7 @@ export function createAntigravityAdapter(configuration) {
 
       const isReadOnly = request.mode === "read_only";
       let readOnlyEnforcement = null;
+      let carrierSchemaHandle = null;
       let releaseSettingsLock = null;
       let releaseSettingsFileLock = null;
       let settingsLockWaitMs = null;
@@ -660,8 +722,11 @@ export function createAntigravityAdapter(configuration) {
           settingsLockWaitMs = Date.now() - settingsLockStartedAt;
           readOnlyStage = "settings_enforcement";
           recoverStaleSettings(true);
+          carrierSchemaHandle = writeCarrierSchemaFile();
           readOnlyEnforcement = enableReadOnlyEnforcement();
           if (!readOnlyEnforcement) {
+            removeCarrierSchemaFile(carrierSchemaHandle);
+            carrierSchemaHandle = null;
             releaseSettingsFileLock();
             releaseSettingsFileLock = null;
             releaseSettingsLock();
@@ -711,6 +776,10 @@ export function createAntigravityAdapter(configuration) {
 
         if (sandbox) {
           args.push("--sandbox");
+        }
+
+        if (isReadOnly && carrierSchemaHandle) {
+          args.push("--json-schema", carrierSchemaHandle.schemaPath);
         }
 
         args.push("--mode", isReadOnly ? "plan" : "accept-edits");
@@ -830,6 +899,7 @@ export function createAntigravityAdapter(configuration) {
         if (readOnlyEnforcement) {
           disableReadOnlyEnforcement(readOnlyEnforcement);
         }
+        removeCarrierSchemaFile(carrierSchemaHandle);
         if (releaseSettingsFileLock) {
           releaseSettingsFileLock();
         }
@@ -856,4 +926,4 @@ function resolveAntigravityCommand(configuration) {
   };
 }
 
-export { ANTIGRAVITY_MODEL_MAP, READ_ONLY_INSTRUCTION, READ_ONLY_PERMISSION_RULES, hasSafeReadOnlyPermissionBaseline, hasNoConfiguredMcpServers, resolveModel, resolveAntigravityCommand, buildAntigravityArgs, classifyAntigravityError, extractAntigravityResult };
+export { ANTIGRAVITY_MODEL_MAP, READ_ONLY_INSTRUCTION, READ_ONLY_PERMISSION_RULES, CARRIER_OUTPUT_SCHEMA, hasSafeReadOnlyPermissionBaseline, hasNoConfiguredMcpServers, resolveModel, resolveAntigravityCommand, buildAntigravityArgs, classifyAntigravityError, extractAntigravityResult, normalizeCarrierStructuredOutput, writeCarrierSchemaFile };

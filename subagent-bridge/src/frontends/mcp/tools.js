@@ -154,6 +154,8 @@ function createRuntimeRequest(input, target, trustedWorkspace, caller, abortSign
   };
 }
 
+const CARRIER_REPAIR_PROMPT = "Your previous response was rejected because it did not match the required JSON carrier. Return exactly one JSON object with result and webEvidence fields and nothing else. If read_url was not used, set webEvidence to null. Do not include URLs, headers, cookies, credentials, tool, model, permission, fallback or edit fields in result or excerpts.";
+
 function resolveAntigravityWorkspace(input, trustedWorkspace, configuration) {
   if (!input.workspace) return trustedWorkspace;
   if (input.mode !== "read_only") {
@@ -176,7 +178,9 @@ export function createMcpToolHandlers({ runtime, trustedWorkspace, caller = "ope
     async runAntigravity(input, context = {}) {
       const parsed = parse(publicToolSchemas.runAntigravity, input);
       const workspace = resolveAntigravityWorkspace(parsed, trustedWorkspace, configuration);
-      const options = parsed.mode === "read_only" ? { webEvidenceRequired: true } : {};
+      const options = parsed.mode === "read_only"
+        ? { webEvidenceRequired: true, webEvidenceRepairPrompt: CARRIER_REPAIR_PROMPT, maxWebEvidenceRepairAttempts: 1 }
+        : {};
       return toMcpResult(await runtime.run(createRuntimeRequest(parsed, parsed.model, workspace, caller, context.signal, options)));
     },
     async runClaudeCode(input, context = {}) {

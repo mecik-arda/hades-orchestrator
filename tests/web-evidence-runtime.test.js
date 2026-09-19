@@ -244,6 +244,94 @@ test("WP2-RUNTIME-11: webIntentHeuristics acikken web niyetli duz metin onarilma
   assert.equal(repaired.metrics.webEvidenceRepair, true);
 });
 
+test("WP2-RUNTIME-13: webEvidenceRepairPrompt ile tek denemelik carrier onarimi yapilir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-evidence-carrier-repair-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const prompts = [];
+  let calls = 0;
+  const adapter = createFakeAdapter(async (request) => {
+    calls += 1;
+    prompts.push(request.prompt);
+    if (calls === 1) return createSuccessSubagentResult("antigravity", request.model, { result: "FIRST_REPLY_SENTINEL without carrier" });
+    return createSuccessSubagentResult("antigravity", request.model, { result: JSON.stringify({ result: "repaired summary", webEvidence: null }) });
+  });
+  const configuration = createConfiguration(root);
+  configuration.reliability.maxAttempts = 2;
+  configuration.antigravity.maxRetries = 1;
+  const runtime = createBridgeRuntime({ configuration, adapters: { antigravity: adapter }, sleep: async () => {} });
+  const repaired = await runtime.run(runRequest(root, { prompt: "ORIGINAL_TASK_SENTINEL inspect files and summarize", webEvidenceRepairPrompt: "Return the carrier JSON.", maxWebEvidenceRepairAttempts: 1 }));
+  assert.equal(repaired.ok, true, JSON.stringify(repaired));
+  assert.equal(repaired.result, "repaired summary");
+  assert.equal(repaired.webEvidence, null);
+  assert.equal(calls, 2);
+  assert.match(prompts[1], /carrier repair/i);
+  assert.match(prompts[1], /ORIGINAL_TASK_SENTINEL/);
+  assert.equal(prompts[1].includes("FIRST_REPLY_SENTINEL"), false);
+  assert.equal(repaired.metrics.attempts.length, 2);
+  assert.equal(repaired.metrics.attempts[0].retryDecision, "retry");
+
+  let exhaustedCalls = 0;
+  const alwaysPlain = createFakeAdapter(async (request) => {
+    exhaustedCalls += 1;
+    return createSuccessSubagentResult("antigravity", request.model, { result: `plain reply ${exhaustedCalls}` });
+  });
+  const exhaustedConfiguration = createConfiguration(root);
+  exhaustedConfiguration.reliability.maxAttempts = 2;
+  exhaustedConfiguration.antigravity.maxRetries = 1;
+  const exhaustedRuntime = createBridgeRuntime({ configuration: exhaustedConfiguration, adapters: { antigravity: alwaysPlain }, sleep: async () => {} });
+  const rejected = await exhaustedRuntime.run(runRequest(root, { prompt: "Inspect files and summarize", webEvidenceRepairPrompt: "Return the carrier JSON.", maxWebEvidenceRepairAttempts: 1 }));
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.reason, "web_evidence_invalid");
+  assert.equal(exhaustedCalls, 2);
+  assert.equal(rejected.metrics.attempts[1].retryStopReason, "web_evidence_repair_exhausted");
+
+  let budgetCalls = 0;
+  const budgetAdapter = createFakeAdapter(async (request) => {
+    budgetCalls += 1;
+    return createSuccessSubagentResult("antigravity", request.model, { result: "plain without carrier" });
+  });
+  const budgetConfiguration = createConfiguration(root);
+  budgetConfiguration.reliability.maxAttempts = 2;
+  budgetConfiguration.reliability.maxRetryCostUsd = 0;
+  budgetConfiguration.antigravity.maxRetries = 1;
+  const budgetRuntime = createBridgeRuntime({ configuration: budgetConfiguration, adapters: { antigravity: budgetAdapter }, sleep: async () => {} });
+  const budgetRejected = await budgetRuntime.run(runRequest(root, { prompt: "Inspect files and summarize", webEvidenceRepairPrompt: "Return the carrier JSON.", maxWebEvidenceRepairAttempts: 1 }));
+  assert.equal(budgetRejected.ok, false);
+  assert.equal(budgetCalls, 1);
+  assert.equal(budgetRejected.metrics.attempts[0].retryStopReason, "web_evidence_repair_budget_exhausted");
+
+  let knownCostCalls = 0;
+  const knownCostAdapter = createFakeAdapter(async (request) => {
+    knownCostCalls += 1;
+    return createSuccessSubagentResult("antigravity", request.model, {
+      result: "plain without carrier",
+      metrics: { totalCostUsd: 0.95 }
+    });
+  });
+  const knownCostConfiguration = createConfiguration(root);
+  knownCostConfiguration.reliability.maxAttempts = 2;
+  knownCostConfiguration.reliability.maxRetryCostUsd = 1;
+  knownCostConfiguration.reliability.maxRetryCostReserveUsd = 0.1;
+  knownCostConfiguration.antigravity.maxRetries = 1;
+  const knownCostRuntime = createBridgeRuntime({ configuration: knownCostConfiguration, adapters: { antigravity: knownCostAdapter }, sleep: async () => {} });
+  const knownCostRejected = await knownCostRuntime.run(runRequest(root, { prompt: "Inspect files and summarize", webEvidenceRepairPrompt: "Return the carrier JSON.", maxWebEvidenceRepairAttempts: 1 }));
+  assert.equal(knownCostRejected.ok, false);
+  assert.equal(knownCostCalls, 1);
+  assert.equal(knownCostRejected.metrics.attempts[0].totalCostUsd, 0.95);
+  assert.equal(knownCostRejected.metrics.attempts[0].retryStopReason, "web_evidence_repair_budget_exhausted");
+});
+
+test("WP2-RUNTIME-14: null adaptor sonucu web evidence hatasi olarak siniflanir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-evidence-null-result-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const adapter = createFakeAdapter(async () => null);
+  const runtime = createBridgeRuntime({ configuration: createConfiguration(root), adapters: { antigravity: adapter }, sleep: async () => {} });
+  const result = await runtime.run(runRequest(root, { prompt: "Inspect files" }));
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "web_evidence_invalid");
+  assert.equal(result.error, "provider returned invalid web evidence");
+});
+
 test("WP2-RUNTIME-12: profil strict carrier politikasi fallback istegine tasinir", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-evidence-fallback-strict-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
