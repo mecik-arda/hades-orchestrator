@@ -132,6 +132,22 @@ test("HOOK-05: apply mevcut hedefte fail-closed olur, --force ile yazar", (conte
   assert.equal(written.includes("promote_memory"), false);
 });
 
+test("HOOK-07: codex hook komutu Windows'ta cmd uyumlu cift tirnakla uretilir", { skip: process.platform !== "win32" }, () => {
+  const installerPath = path.resolve("scripts/install-memory-hook.js");
+  const output = childProcess.execFileSync(process.execPath, [installerPath, "--client=codex"], { encoding: "utf8" });
+  const sourceIndex = output.indexOf('{\n  "hooks"');
+  assert.ok(sourceIndex > 0);
+  const configuration = JSON.parse(output.slice(sourceIndex));
+  const handler = configuration.hooks.UserPromptSubmit[0].hooks[0];
+  assert.equal(handler.type, "command");
+  assert.equal(handler.command, handler.commandWindows);
+  assert.equal(handler.command.includes("'"), false);
+  assert.ok(handler.command.includes(`"${process.execPath}"`));
+  assert.ok(handler.command.includes("memory-hook-client.js"));
+  assert.equal(handler.additionalContextLimit, 1200);
+  assert.equal(handler.statusMessage, "Second brain memory (read-only)");
+});
+
 test("HOOK-06: plugin chat.message + system.transform ile {sessionID} bazlı bağlam enjekte eder", async () => {
   const { createSecondBrainMemoryPlugin, queryFromParts } = await import("../subagent-bridge/src/services/memory-hook-plugin.js");
   assert.equal(queryFromParts([{ type: "text", text: "  ikinci   beyin  " }, { type: "text", text: "sorusu" }]), "ikinci beyin sorusu");

@@ -47,6 +47,13 @@ function openCodePluginSource() {
   ].join("\n");
 }
 
+function codexCommand() {
+  if (process.platform === "win32") {
+    return `${quoteWindows(process.execPath)} ${quoteWindows(clientScriptPath)} --client=codex`;
+  }
+  return `${quotePosix(process.execPath)} ${quotePosix(clientScriptPath)} --client=codex`;
+}
+
 function codexHookConfiguration() {
   return {
     hooks: {
@@ -55,7 +62,7 @@ function codexHookConfiguration() {
           hooks: [
             {
               type: "command",
-              command: `${quotePosix(process.execPath)} ${quotePosix(clientScriptPath)} --client=codex`,
+              command: codexCommand(),
               commandWindows: `${quoteWindows(process.execPath)} ${quoteWindows(clientScriptPath)} --client=codex`,
               additionalContextLimit: 1200,
               statusMessage: "Second brain memory (read-only)"
