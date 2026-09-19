@@ -66,6 +66,28 @@ function writeIntent(configuration, intent) {
   fs.writeFileSync(path.join(directory, `${intent.journalId}.json`), JSON.stringify(intent), "utf8");
 }
 
+function withPatchedJournalRead(journalPath, transform, callback) {
+  const originalReadFileSync = fs.readFileSync;
+  const targetPath = path.resolve(journalPath);
+  const readCounts = new Map();
+  fs.readFileSync = function patchedReadFileSync(filePath, ...rest) {
+    if (typeof filePath === "string" && path.resolve(filePath) === targetPath) {
+      const count = (readCounts.get(targetPath) || 0) + 1;
+      readCounts.set(targetPath, count);
+      if (count === 2) return transform();
+    }
+    return originalReadFileSync.call(fs, filePath, ...rest);
+  };
+  let result;
+  try {
+    result = callback();
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
+  assert.equal(readCounts.get(targetPath) || 0, 2);
+  return result;
+}
+
 function createNoteInput(overrides = {}) {
   return {
     relativePath: "03_Resources/Recovery.md",
@@ -521,4 +543,204 @@ test("REC-15: bozuk journal tarama hatası olarak raporlanır ve dosya korunur",
   assert.equal(recovery.applied, false);
   assert.equal(recovery.reason, "journal_scan_error");
   assert.equal(journalFiles(configuration).length, 1);
+  const plan = planMemoryMutationRecovery(configuration);
+  assert.equal(plan.error, true);
+  assert.equal(plan.journalCount, 0);
+});
+
+test("REC-16: journal okunamazsa read_failed olarak raporlanır ve dosya korunur", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-recovery-read-failed-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const relativePath = "03_Resources/Recovery.md";
+  const journalId = sha256(relativePath);
+  const intent = {
+    journalId,
+    kind: "store",
+    event: "UPDATE",
+    noteIdHash: journalId,
+    relativePath,
+    oldSha256: sha256("eski icerik"),
+    newSha256: sha256("yeni icerik")
+  };
+  writeIntent(configuration, intent);
+  const journalPath = path.join(journalDirectory(configuration), `${journalId}.json`);
+  const recovery = withPatchedJournalRead(journalPath, () => {
+    const error = new Error("journal okunamadi");
+    error.code = "EACCES";
+    throw error;
+  }, () => applyMemoryMutationRecovery(configuration));
+  assert.equal(recovery.applied, false);
+  assert.equal(recovery.unresolvedCount, 1);
+  assert.equal(recovery.unresolved[0].reason, "journal_read_failed");
+  assert.equal(recovery.appliedCount, 0);
+  assert.equal(recovery.appliedItems.length, 0);
+  assert.equal(fs.readFileSync(journalPath, "utf8"), JSON.stringify(intent));
+  assert.equal(journalFiles(configuration).length, 1);
+});
+
+test("REC-17: bozuk journal içeriği invalid olarak raporlanır ve dosya korunur", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-recovery-invalid-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const relativePath = "03_Resources/Recovery.md";
+  const journalId = sha256(relativePath);
+  const intent = {
+    journalId,
+    kind: "store",
+    event: "UPDATE",
+    noteIdHash: journalId,
+    relativePath,
+    oldSha256: sha256("eski icerik"),
+    newSha256: sha256("yeni icerik")
+  };
+  writeIntent(configuration, intent);
+  const journalPath = path.join(journalDirectory(configuration), `${journalId}.json`);
+  const recovery = withPatchedJournalRead(journalPath, () => "{bozuk", () => applyMemoryMutationRecovery(configuration));
+  assert.equal(recovery.applied, false);
+  assert.equal(recovery.unresolvedCount, 1);
+  assert.equal(recovery.unresolved[0].reason, "journal_invalid");
+  assert.equal(recovery.appliedCount, 0);
+  assert.equal(recovery.appliedItems.length, 0);
+  assert.equal(fs.readFileSync(journalPath, "utf8"), JSON.stringify(intent));
+  assert.equal(journalFiles(configuration).length, 1);
+});
+
+test("REC-18: değişen journal nesli regenerated olarak raporlanır ve dosya korunur", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-recovery-regenerated-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const relativePath = "03_Resources/Recovery.md";
+  const journalId = sha256(relativePath);
+  const intent = {
+    journalId,
+    kind: "store",
+    event: "UPDATE",
+    noteIdHash: journalId,
+    relativePath,
+    oldSha256: sha256("eski icerik"),
+    newSha256: sha256("yeni icerik")
+  };
+  writeIntent(configuration, intent);
+  const journalPath = path.join(journalDirectory(configuration), `${journalId}.json`);
+  const regeneratedJournalId = sha256("baska journal");
+  const recovery = withPatchedJournalRead(journalPath, () => JSON.stringify({
+    journalId: regeneratedJournalId,
+    kind: "store",
+    event: "UPDATE",
+    noteIdHash: regeneratedJournalId,
+    relativePath,
+    oldSha256: sha256("eski icerik"),
+    newSha256: sha256("yeni icerik")
+  }), () => applyMemoryMutationRecovery(configuration));
+  assert.equal(recovery.applied, false);
+  assert.equal(recovery.unresolvedCount, 1);
+  assert.equal(recovery.unresolved[0].reason, "journal_regenerated");
+  assert.equal(recovery.appliedCount, 0);
+  assert.equal(recovery.appliedItems.length, 0);
+  assert.equal(fs.readFileSync(journalPath, "utf8"), JSON.stringify(intent));
+  assert.equal(journalFiles(configuration).length, 1);
+});
+
+test("REC-19: dosya adıyla eşleşmeyen artık niyet fail-closed taranır ve dosya korunur", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-recovery-orphan-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const relativePath = "03_Resources/Recovery.md";
+  const journalId = sha256(relativePath);
+  const directory = journalDirectory(configuration);
+  fs.mkdirSync(directory, { recursive: true });
+  const orphanPath = path.join(directory, "orphan.json");
+  fs.writeFileSync(orphanPath, JSON.stringify({
+    journalId,
+    kind: "store",
+    event: "UPDATE",
+    noteIdHash: journalId,
+    relativePath,
+    oldSha256: sha256("eski icerik"),
+    newSha256: sha256("yeni icerik")
+  }), "utf8");
+  const plan = planMemoryMutationRecovery(configuration);
+  assert.equal(plan.error, true);
+  assert.equal(plan.journalCount, 0);
+  const recovery = applyMemoryMutationRecovery(configuration);
+  assert.equal(recovery.applied, false);
+  assert.equal(recovery.reason, "journal_scan_error");
+  assert.equal(recovery.appliedCount, 0);
+  assert.equal(recovery.unresolvedCount, 0);
+  assert.equal(fs.existsSync(orphanPath), true);
+  assert.equal(journalFiles(configuration).length, 1);
+  assert.deepEqual(plan.items, []);
+  assert.equal(recovery.appliedItems.length, 0);
+  assert.equal(recovery.unresolved.length, 0);
+});
+
+test("REC-20: ikinci okumada silinen journal eksik olarak taranır ve dosya diskte kalmaz", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-recovery-vanish-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const relativePath = "03_Resources/Recovery.md";
+  const journalId = sha256(relativePath);
+  const intent = {
+    journalId,
+    kind: "store",
+    event: "UPDATE",
+    noteIdHash: journalId,
+    relativePath,
+    oldSha256: sha256("eski icerik"),
+    newSha256: sha256("yeni icerik")
+  };
+  writeIntent(configuration, intent);
+  const journalPath = path.join(journalDirectory(configuration), `${journalId}.json`);
+  const recovery = withPatchedJournalRead(journalPath, () => {
+    fs.rmSync(journalPath);
+    const error = new Error("journal artik yok");
+    error.code = "ENOENT";
+    throw error;
+  }, () => applyMemoryMutationRecovery(configuration));
+  assert.equal(recovery.applied, true);
+  assert.equal(recovery.appliedCount, 0);
+  assert.equal(recovery.unresolvedCount, 0);
+  assert.equal(fs.existsSync(journalPath), false);
+  assert.equal(journalFiles(configuration).length, 0);
+});
+
+test("REC-21: karma journal dizininde tarama hatası tüm mutasyonları fail-closed durdurur", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-recovery-mixed-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const relativePath = "03_Resources/Recovery.md";
+  const journalId = sha256(relativePath);
+  writeIntent(configuration, {
+    journalId,
+    kind: "store",
+    event: "UPDATE",
+    noteIdHash: journalId,
+    relativePath,
+    oldSha256: sha256("eski icerik"),
+    newSha256: sha256("yeni icerik")
+  });
+  const orphanJournalId = sha256("baska not");
+  const directory = journalDirectory(configuration);
+  fs.writeFileSync(path.join(directory, "orphan.json"), JSON.stringify({
+    journalId: orphanJournalId,
+    kind: "store",
+    event: "UPDATE",
+    noteIdHash: orphanJournalId,
+    relativePath,
+    oldSha256: sha256("eski icerik"),
+    newSha256: sha256("yeni icerik")
+  }), "utf8");
+  const plan = planMemoryMutationRecovery(configuration);
+  assert.equal(plan.error, true);
+  assert.equal(plan.journalCount, 1);
+  assert.equal(plan.items.length, 1);
+  assert.equal(plan.items[0].reason, "note_missing");
+  const recovery = applyMemoryMutationRecovery(configuration);
+  assert.equal(recovery.applied, false);
+  assert.equal(recovery.reason, "journal_scan_error");
+  assert.equal(recovery.appliedCount, 0);
+  assert.equal(recovery.unresolvedCount, 0);
+  assert.equal(journalFiles(configuration).length, 2);
+  assert.equal(auditRecords(configuration).length, 0);
 });

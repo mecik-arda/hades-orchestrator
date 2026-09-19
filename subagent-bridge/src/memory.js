@@ -672,6 +672,10 @@ function listMutationIntents(configuration) {
         error = true;
         continue;
       }
+      if (entry !== `${intent.journalId}.json`) {
+        error = true;
+        continue;
+      }
       intents.push(intent);
     } catch {
       error = true;
@@ -824,7 +828,7 @@ export function planMemoryMutationRecovery(configuration) {
 
 export function applyMemoryMutationRecovery(configuration, { applyPromoteCompletion = true } = {}) {
   const { intents, error } = listMutationIntents(configuration);
-  if (error) return { mode: "apply", journalCount: intents.length, applied: false, reason: "journal_scan_error", appliedCount: 0, appliedItems: [], unresolved: [] };
+  if (error) return { mode: "apply", journalCount: intents.length, applied: false, reason: "journal_scan_error", appliedCount: 0, appliedItems: [], unresolvedCount: 0, unresolved: [] };
   const applied = [];
   const unresolved = [];
   for (const intent of intents) {
