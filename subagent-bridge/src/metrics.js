@@ -12,6 +12,7 @@ import {
   retryDecisionValues,
   retryStopReasonValues
 } from "./schemas/core-schemas.js";
+import { normalizeMemoryHookSessionId } from "./services/memory-hook-identity.js";
 
 function hashValue(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -24,6 +25,10 @@ function normalizeCost(value) {
 export const directEditFeedbackOutcomes = ["accepted", "minor_fix", "reverted", "security_concern"];
 export const directEditDispositions = ["eligible_real_user", "ineligible_instrumentation", "ineligible_synthetic", "ineligible_duplicate", "indeterminate_legacy"];
 export const routingFeedbackOutcomes = ["useful", "partial", "not_useful"];
+export const routingDispositions = ["eligible_real_user", "ineligible_instrumentation", "ineligible_synthetic", "ineligible_duplicate", "indeterminate_legacy"];
+export const memoryHookFeedbackOutcomes = ["useful", "partial", "not_useful"];
+export const memoryHookFeedbackClients = ["generic", "opencode", "codex", "claude"];
+export const memoryHookDispositions = ["eligible_real_user", "ineligible_instrumentation", "ineligible_synthetic", "ineligible_duplicate", "indeterminate_legacy"];
 
 const tokenPattern = /^[a-z][a-z0-9_-]{0,63}$/;
 const modelTokenPattern = /^[a-z][a-z0-9._/-]{0,119}$/;
@@ -488,15 +493,61 @@ function sanitizeFeedbackMetric(metric, recordType) {
   };
 }
 
-function sanitizeDispositionMetric(metric) {
-  if (!directEditDispositions.includes(metric.disposition)) throw new Error("invalid direct edit disposition");
+function sanitizeDispositionMetric(metric, recordType = "direct_edit_disposition", dispositions = directEditDispositions) {
+  if (!dispositions.includes(metric.disposition)) throw new Error("invalid disposition");
   const executionIdHash = sanitizeHash(metric.executionIdHash);
   if (!executionIdHash) throw new Error("invalid feedback execution id hash");
   return {
-    recordType: "direct_edit_disposition",
+    recordType,
     recordedAt: sanitizeRecordedAt(metric.recordedAt),
     backend: sanitizeBackend(metric.backend),
     executionIdHash,
+    disposition: metric.disposition,
+    reason: typeof metric.reason === "string" && tokenPattern.test(metric.reason) ? metric.reason : "unspecified"
+  };
+}
+
+function sanitizeMemoryHookFeedbackMetric(metric) {
+  if (!memoryHookFeedbackOutcomes.includes(metric.outcome)) throw new Error("invalid memory hook feedback outcome");
+  if (!memoryHookFeedbackClients.includes(metric.client)) throw new Error("invalid memory hook feedback client");
+  const sessionIdHash = sanitizeHash(metric.sessionIdHash);
+  if (!sessionIdHash) throw new Error("invalid memory hook session id hash");
+  return {
+    recordType: "memory_hook_feedback",
+    recordedAt: sanitizeRecordedAt(metric.recordedAt),
+    backend: "memory-hook",
+    sessionIdHash,
+    client: metric.client,
+    outcome: metric.outcome,
+    durationMs: null
+  };
+}
+
+function sanitizeMemoryHookSessionMetric(metric) {
+  if (!memoryHookFeedbackClients.includes(metric.client)) throw new Error("invalid memory hook client");
+  const sessionIdHash = sanitizeHash(metric.sessionIdHash);
+  if (!sessionIdHash) throw new Error("invalid memory hook session id hash");
+  return {
+    recordType: "memory_hook_session",
+    recordedAt: sanitizeRecordedAt(metric.recordedAt),
+    backend: "memory-hook",
+    sessionIdHash,
+    client: metric.client,
+    durationMs: sanitizeDurationMs(metric.durationMs)
+  };
+}
+
+function sanitizeMemoryHookDispositionMetric(metric) {
+  if (!memoryHookDispositions.includes(metric.disposition)) throw new Error("invalid memory hook disposition");
+  if (!memoryHookFeedbackClients.includes(metric.client)) throw new Error("invalid memory hook client");
+  const sessionIdHash = sanitizeHash(metric.sessionIdHash);
+  if (!sessionIdHash) throw new Error("invalid memory hook session id hash");
+  return {
+    recordType: "memory_hook_disposition",
+    recordedAt: sanitizeRecordedAt(metric.recordedAt),
+    backend: "memory-hook",
+    sessionIdHash,
+    client: metric.client,
     disposition: metric.disposition,
     reason: typeof metric.reason === "string" && tokenPattern.test(metric.reason) ? metric.reason : "unspecified"
   };
@@ -508,7 +559,11 @@ function sanitizeRecordTypeMetric(metric) {
   if (metric.recordType === "model_fit_evaluation") return sanitizeModelFitEvaluationMetric(metric);
   if (metric.recordType === "direct_edit_feedback") return sanitizeFeedbackMetric(metric, "direct_edit_feedback");
   if (metric.recordType === "direct_edit_disposition") return sanitizeDispositionMetric(metric);
+  if (metric.recordType === "routing_disposition") return sanitizeDispositionMetric(metric, "routing_disposition", routingDispositions);
   if (metric.recordType === "routing_feedback") return sanitizeFeedbackMetric(metric, "routing_feedback");
+  if (metric.recordType === "memory_hook_session") return sanitizeMemoryHookSessionMetric(metric);
+  if (metric.recordType === "memory_hook_disposition") return sanitizeMemoryHookDispositionMetric(metric);
+  if (metric.recordType === "memory_hook_feedback") return sanitizeMemoryHookFeedbackMetric(metric);
   return {
     recordType: typeof metric.recordType === "string" && tokenPattern.test(metric.recordType) ? metric.recordType : "unknown_record",
     recordedAt: sanitizeRecordedAt(metric.recordedAt),
@@ -558,11 +613,14 @@ function directEditFeedbackState(records) {
 }
 
 function routingFeedbackState(records) {
-  const profileRuns = records.filter((record) => !record.recordType && record.profile && record.executionIdHash);
+  const profileRuns = records.filter((record) => !record.recordType && record.profile && record.executionIdHash && record.mode === "read_only" && record.outcomeStatus === "completed");
   const feedbackByExecution = new Map(records
     .filter((record) => record.recordType === "routing_feedback" && record.executionIdHash)
     .map((record) => [record.executionIdHash, record]));
-  return { profileRuns, feedbackByExecution };
+  const dispositionByExecution = new Map(records
+    .filter((record) => record.recordType === "routing_disposition" && record.executionIdHash)
+    .map((record) => [record.executionIdHash, record]));
+  return { profileRuns, feedbackByExecution, dispositionByExecution };
 }
 
 export function listPendingDirectEditFeedback(configuration) {
@@ -696,8 +754,9 @@ export async function recordDirectEditFeedback(configuration, feedbackId, outcom
 export function listPendingRoutingFeedback(configuration) {
   const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
   const { records } = metricRecords(metricsDirectory);
-  const { profileRuns, feedbackByExecution } = routingFeedbackState(records);
+  const { profileRuns, feedbackByExecution, dispositionByExecution } = routingFeedbackState(records);
   return profileRuns
+    .filter((record) => dispositionByExecution.get(record.executionIdHash)?.disposition === "eligible_real_user")
     .filter((record) => !feedbackByExecution.has(record.executionIdHash))
     .sort((left, right) => Date.parse(right.recordedAt) - Date.parse(left.recordedAt))
     .map((record) => ({
@@ -712,6 +771,53 @@ export function listPendingRoutingFeedback(configuration) {
     }));
 }
 
+export function listRoutingCandidates(configuration) {
+  const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
+  const { records } = metricRecords(metricsDirectory);
+  const { profileRuns, feedbackByExecution, dispositionByExecution } = routingFeedbackState(records);
+  return profileRuns
+    .filter((record) => !dispositionByExecution.has(record.executionIdHash))
+    .filter((record) => !feedbackByExecution.has(record.executionIdHash))
+    .sort((left, right) => Date.parse(right.recordedAt) - Date.parse(left.recordedAt))
+    .map((record) => ({
+      feedbackId: record.executionIdHash.slice(0, 12),
+      profile: record.profile,
+      backend: record.backend || "unknown",
+      modelHash: record.modelHash,
+      recordedAt: record.recordedAt,
+      outcomeStatus: record.outcomeStatus,
+      durationMs: Number.isFinite(record.usage?.durationMs) ? record.usage.durationMs : null,
+      totalCostUsd: Number.isFinite(record.usage?.totalCostUsd) ? record.usage.totalCostUsd : null
+    }));
+}
+
+export async function recordRoutingDisposition(configuration, feedbackId, disposition, reason = "unspecified") {
+  if (!routingDispositions.includes(disposition)) throw new Error("unsupported routing disposition");
+  if (typeof feedbackId !== "string" || !/^[a-f0-9]{8,64}$/i.test(feedbackId)) throw new Error("invalid feedback ID");
+  if (typeof reason !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(reason)) throw new Error("invalid disposition reason");
+  const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
+  fs.mkdirSync(metricsDirectory, { recursive: true });
+  return withMetricLock(path.join(metricsDirectory, "routing-feedback.lock"), async () => {
+    const { records } = metricRecords(metricsDirectory);
+    const { profileRuns, feedbackByExecution, dispositionByExecution } = routingFeedbackState(records);
+    const matches = profileRuns.filter((record) => record.executionIdHash.startsWith(feedbackId.toLowerCase()));
+    if (matches.length === 0) throw new Error("routing feedback ID not found");
+    if (matches.length > 1) throw new Error("routing feedback ID is ambiguous");
+    const executionIdHash = matches[0].executionIdHash;
+    if (feedbackByExecution.has(executionIdHash)) throw new Error("routing feedback already recorded");
+    if (dispositionByExecution.has(executionIdHash)) throw new Error("routing disposition already recorded");
+    await appendRedactedRunMetric(configuration, {
+      recordType: "routing_disposition",
+      recordedAt: new Date().toISOString(),
+      backend: "routing-evaluation",
+      executionIdHash,
+      disposition,
+      reason
+    });
+    return { recorded: true, feedbackId: executionIdHash.slice(0, 12), disposition, reason };
+  });
+}
+
 export async function recordRoutingFeedback(configuration, feedbackId, outcome) {
   if (!routingFeedbackOutcomes.includes(outcome)) throw new Error("unsupported routing feedback outcome");
   if (!/^[a-f0-9]{8,64}$/i.test(feedbackId)) throw new Error("invalid feedback ID");
@@ -719,12 +825,13 @@ export async function recordRoutingFeedback(configuration, feedbackId, outcome) 
   fs.mkdirSync(metricsDirectory, { recursive: true });
   return withMetricLock(path.join(metricsDirectory, "routing-feedback.lock"), async () => {
     const { records } = metricRecords(metricsDirectory);
-    const { profileRuns, feedbackByExecution } = routingFeedbackState(records);
+    const { profileRuns, feedbackByExecution, dispositionByExecution } = routingFeedbackState(records);
     const matches = profileRuns.filter((record) => record.executionIdHash.startsWith(feedbackId.toLowerCase()));
     if (matches.length === 0) throw new Error("routing feedback ID not found");
     if (matches.length > 1) throw new Error("routing feedback ID is ambiguous");
     const executionIdHash = matches[0].executionIdHash;
     if (feedbackByExecution.has(executionIdHash)) throw new Error("routing feedback already recorded");
+    if (dispositionByExecution.get(executionIdHash)?.disposition !== "eligible_real_user") throw new Error("routing record is not eligible for outcome labeling");
     const metric = {
       recordType: "routing_feedback",
       recordedAt: new Date().toISOString(),
@@ -735,6 +842,119 @@ export async function recordRoutingFeedback(configuration, feedbackId, outcome) 
     await appendRedactedRunMetric(configuration, metric);
     return { recorded: true, feedbackId: executionIdHash.slice(0, 12), outcome };
   });
+}
+
+export async function recordMemoryHookSession(configuration, { client = "generic", sessionId, durationMs = null } = {}) {
+  if (!memoryHookFeedbackClients.includes(client)) throw new Error("unsupported memory hook client");
+  const normalizedSessionId = normalizeMemoryHookSessionId(sessionId);
+  if (!normalizedSessionId) throw new Error("invalid memory hook session ID");
+  if (durationMs !== null && (!Number.isFinite(durationMs) || durationMs < 0)) throw new Error("invalid memory hook duration");
+  const sessionIdHash = hashValue(normalizedSessionId);
+  const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
+  fs.mkdirSync(metricsDirectory, { recursive: true });
+  return withMetricLock(path.join(metricsDirectory, "memory-hook-feedback.lock"), async () => {
+    const { records } = metricRecords(metricsDirectory);
+    const existing = records.find((record) => record.recordType === "memory_hook_session" && record.sessionIdHash === sessionIdHash && record.client === client);
+    if (existing) return { recorded: false, sessionIdHash: sessionIdHash.slice(0, 12), client, durationMs: existing.durationMs };
+    await appendRedactedRunMetric(configuration, {
+      recordType: "memory_hook_session",
+      recordedAt: new Date().toISOString(),
+      backend: "memory-hook",
+      sessionIdHash,
+      client,
+      durationMs
+    });
+    return { recorded: true, sessionIdHash: sessionIdHash.slice(0, 12), client, durationMs };
+  });
+}
+
+export async function recordMemoryHookDisposition(configuration, { client = "generic", disposition, reason = "unspecified", sessionId } = {}) {
+  if (!memoryHookDispositions.includes(disposition)) throw new Error("unsupported memory hook disposition");
+  if (!memoryHookFeedbackClients.includes(client)) throw new Error("unsupported memory hook feedback client");
+  if (typeof reason !== "string" || !tokenPattern.test(reason)) throw new Error("invalid disposition reason");
+  const normalizedSessionId = normalizeMemoryHookSessionId(sessionId);
+  if (!normalizedSessionId) throw new Error("invalid memory hook session ID");
+  const sessionIdHash = hashValue(normalizedSessionId);
+  const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
+  fs.mkdirSync(metricsDirectory, { recursive: true });
+  return withMetricLock(path.join(metricsDirectory, "memory-hook-feedback.lock"), async () => {
+    const { records } = metricRecords(metricsDirectory);
+    const session = records.find((record) => record.recordType === "memory_hook_session" && record.sessionIdHash === sessionIdHash && record.client === client);
+    if (!session) throw new Error("memory hook session not found");
+    const existing = records.find((record) => record.recordType === "memory_hook_disposition" && record.sessionIdHash === sessionIdHash && record.client === client);
+    if (existing) throw new Error("memory hook disposition already recorded");
+    await appendRedactedRunMetric(configuration, {
+      recordType: "memory_hook_disposition",
+      recordedAt: new Date().toISOString(),
+      backend: "memory-hook",
+      sessionIdHash,
+      client,
+      disposition,
+      reason
+    });
+    return { recorded: true, feedbackId: sessionIdHash.slice(0, 12), client, disposition, reason };
+  });
+}
+
+export async function recordMemoryHookFeedback(configuration, { client = "generic", outcome, sessionId } = {}) {
+  if (!memoryHookFeedbackOutcomes.includes(outcome)) throw new Error("unsupported memory hook feedback outcome");
+  if (!memoryHookFeedbackClients.includes(client)) throw new Error("unsupported memory hook feedback client");
+  const normalizedSessionId = normalizeMemoryHookSessionId(sessionId);
+  if (!normalizedSessionId) throw new Error("invalid memory hook session ID");
+  const sessionIdHash = hashValue(normalizedSessionId);
+  const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
+  fs.mkdirSync(metricsDirectory, { recursive: true });
+  return withMetricLock(path.join(metricsDirectory, "memory-hook-feedback.lock"), async () => {
+    const { records } = metricRecords(metricsDirectory);
+    const session = records.find((record) => record.recordType === "memory_hook_session" && record.sessionIdHash === sessionIdHash && record.client === client);
+    if (!session) throw new Error("memory hook session not found");
+    const disposition = records.find((record) => record.recordType === "memory_hook_disposition" && record.sessionIdHash === sessionIdHash && record.client === client);
+    if (disposition?.disposition !== "eligible_real_user") throw new Error("memory hook session is not eligible for outcome labeling");
+    const existing = records.find((record) => record.recordType === "memory_hook_feedback" && record.sessionIdHash === sessionIdHash && record.client === client);
+    if (existing) throw new Error("memory hook feedback already recorded");
+    await appendRedactedRunMetric(configuration, {
+      recordType: "memory_hook_feedback",
+      recordedAt: new Date().toISOString(),
+      backend: "memory-hook",
+      sessionIdHash,
+      client,
+      outcome
+    });
+    return { recorded: true, feedbackId: sessionIdHash.slice(0, 12), client, outcome, durationMs: session.durationMs };
+  });
+}
+
+export function summarizeMemoryHookFeedback(records, { now = Date.now() } = {}) {
+  const sessionKey = (record) => `${record.client}:${record.sessionIdHash}`;
+  const sessions = new Map(records
+    .filter((record) => record.recordType === "memory_hook_session" && record.sessionIdHash)
+    .map((record) => [sessionKey(record), record]));
+  const eligibleSessions = new Set(records
+    .filter((record) => record.recordType === "memory_hook_disposition" && record.disposition === "eligible_real_user")
+    .map(sessionKey));
+  const feedback = records
+    .filter((record) => record.recordType === "memory_hook_feedback" && sessions.has(sessionKey(record)))
+    .filter((record) => eligibleSessions.has(sessionKey(record)))
+    .filter((record, index, all) => all.findIndex((candidate) => sessionKey(candidate) === sessionKey(record)) === index);
+  const outcomes = Object.fromEntries(memoryHookFeedbackOutcomes.map((outcome) => [outcome, 0]));
+  for (const record of feedback) {
+    if (record.outcome in outcomes) outcomes[record.outcome] += 1;
+  }
+  const durations = feedback.map((record) => sessions.get(sessionKey(record))?.durationMs).filter(Number.isFinite).sort((left, right) => left - right);
+  const labeledSessions = feedback.length;
+  const usefulOrPartial = outcomes.useful + outcomes.partial;
+  const pilotStartAt = feedback.map((record) => Date.parse(sessions.get(sessionKey(record))?.recordedAt)).filter(Number.isFinite).sort((left, right) => left - right)[0] ?? null;
+  const pilotWindowElapsed = pilotStartAt !== null && now - pilotStartAt >= 14 * 86400000;
+  return {
+    labeledSessions,
+    outcomes,
+    usefulOrPartialRate: labeledSessions > 0 ? Number((usefulOrPartial / labeledSessions).toFixed(4)) : null,
+    averageDurationMs: durations.length > 0 ? Math.round(durations.reduce((total, value) => total + value, 0) / durations.length) : null,
+    p95DurationMs: durations.length > 0 ? durations[Math.min(durations.length - 1, Math.ceil(durations.length * 0.95) - 1)] : null,
+    pilotStartAt: pilotStartAt === null ? null : new Date(pilotStartAt).toISOString(),
+    pilotWindowElapsed,
+    decisionReady: labeledSessions >= 15 || pilotWindowElapsed
+  };
 }
 
 function isExpiredReservation(record, now = Date.now()) {

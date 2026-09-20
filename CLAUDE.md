@@ -27,3 +27,9 @@ Bu projede ana orkestratör, OpenCode oturumunda aktif kullanılan modeldir. Cla
 - Kalıcı hafıza araçlarını çağırma ve hafızaya doğrudan yazma.
 - Ana orkestratör tarafından prompt içinde verilen seçilmiş bağlamı yalnızca mevcut görev için kullan.
 - Hafıza notu taslağı üretirsen bunu öneri olarak işaretle; kalıcılaştırma ve doğrulama kararını ana orkestratöre bırak.
+
+## M2 Hook Geri Bildirimi
+
+- Hook sonucu yalnızca gerçek bağlam enjeksiyonu yapılmış tek bir session için geçerlidir; proje veya görev tamamlanmasını hook sonucu olarak yorumlama.
+- Gerçek session ID ve `memory_hook_session` kaydı yoksa `hook:feedback` çalıştırma; retroaktif ID, süre, uygunluk veya sentetik session üretme.
+- Geçerli akış `hook:classify -- eligible_real_user` ve ardından `hook:feedback -- <outcome> --session-id=<session-id>` biçimindedir.

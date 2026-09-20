@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { RULE_ATTESTATION_MIME_TYPE, RULE_ATTESTATION_NAME, RULE_ATTESTATION_URI, ruleAttestationSchema } from "../subagent-bridge/src/frontends/mcp/rule-attestation.js";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDirectory, "..");
@@ -18,6 +19,9 @@ const client = new Client({ name: "hades-orchestrator-smoke-test", version: "2.1
 
 await client.connect(transport);
 const tools = await client.listTools();
+const resources = await client.listResources();
+const ruleAttestationRead = await client.readResource({ uri: RULE_ATTESTATION_URI });
+const ruleAttestation = ruleAttestationSchema.safeParse(JSON.parse(ruleAttestationRead.contents[0].text));
 const health = await client.callTool({ name: "check_deepseek_subagent", arguments: {} });
 const glmHealth = await client.callTool({ name: "check_glm_subagent", arguments: {} });
 const kimiHealth = await client.callTool({ name: "check_kimi_subagent", arguments: {} });
@@ -39,6 +43,13 @@ await client.close();
 
 console.log(JSON.stringify({
   tools: tools.tools.map((tool) => tool.name),
+  resources: resources.resources.map((resource) => ({ name: resource.name, uri: resource.uri, mimeType: resource.mimeType })),
+  ruleAttestation: ruleAttestation.success ? {
+    status: ruleAttestation.data.status,
+    sourceClass: ruleAttestation.data.sourceClass,
+    comparison: ruleAttestation.data.comparison,
+    manifestSha256: ruleAttestation.data.manifestSha256
+  } : { status: "invalid" },
   health: health.structuredContent,
   glmHealth: glmHealth.structuredContent,
   kimiHealth: kimiHealth.structuredContent,
@@ -81,11 +92,18 @@ const expectedToolNames = [
 ];
 const expectedToolsAvailable = expectedToolNames.every((toolName) => toolNames.has(toolName));
 const orchestratorApprovalToolAbsent = !toolNames.has("approve_prepared_edit");
+const expectedResourcesAvailable = resources.resources.length === 1
+  && resources.resources[0].name === RULE_ATTESTATION_NAME
+  && resources.resources[0].uri === RULE_ATTESTATION_URI
+  && resources.resources[0].mimeType === RULE_ATTESTATION_MIME_TYPE;
+const ruleAttestationValid = ruleAttestation.success
+  && ruleAttestation.data.evidence.startup_context.status === "unavailable"
+  && ruleAttestation.data.evidence.mcp_resource.status === "verified";
 const memoryProbeValid = Boolean(selectedMemoryPath && memoryRead?.structuredContent?.sha256 && memoryReview.structuredContent?.counts);
 const bridgeAdapters = Object.values(bridgeHealth.structuredContent?.adapters || {});
 const bridgeHealthValid = Boolean(bridgeHealth.structuredContent?.services?.coreSchemas && bridgeAdapters.length > 0 && bridgeHealth.structuredContent?.circuits && bridgeHealth.structuredContent?.costBudget && bridgeAdapters.every((adapter) => adapter.modePolicy?.defaultMode && Array.isArray(adapter.modePolicy?.allowedModes) && Array.isArray(adapter.configuredModels)));
 const antigravityHealthValid = Boolean(antigravityHealth.structuredContent?.modePolicy?.defaultMode && Array.isArray(antigravityHealth.structuredContent?.configuredModels));
 const workspaceLockHealthValid = Number.isInteger(workspaceLockHealth.structuredContent?.localActive) && Array.isArray(workspaceLockHealth.structuredContent?.externalDiskLocks);
-if (!expectedToolsAvailable || !orchestratorApprovalToolAbsent || !health.structuredContent?.available || !glmHealth.structuredContent?.available || !antigravityHealthValid || !bridgeHealthValid || !workspaceLockHealthValid || !memoryHealth.structuredContent?.readable || !memoryHealth.structuredContent?.writable || !memoryProbeValid) {
+if (!expectedToolsAvailable || !orchestratorApprovalToolAbsent || !expectedResourcesAvailable || !ruleAttestationValid || !health.structuredContent?.available || !glmHealth.structuredContent?.available || !antigravityHealthValid || !bridgeHealthValid || !workspaceLockHealthValid || !memoryHealth.structuredContent?.readable || !memoryHealth.structuredContent?.writable || !memoryProbeValid) {
   process.exitCode = 1;
 }

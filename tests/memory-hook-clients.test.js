@@ -4,9 +4,11 @@ import childProcess from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Writable } from "node:stream";
 import {
   formatMemoryHookClientOutput,
   parsePromptFromHookInput,
+  parseSessionIdFromHookInput,
   runMemoryHookClient
 } from "../subagent-bridge/src/services/memory-hook-client.js";
 
@@ -28,11 +30,19 @@ function fakeOutput() {
   };
 }
 
+function nextTurn() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 test("CLIENT-01: hook girdisinden istem promptu güvenle çıkarılır", () => {
   assert.equal(parsePromptFromHookInput(JSON.stringify({ prompt: "  ikinci   beyin  " })), "ikinci beyin");
   assert.equal(parsePromptFromHookInput(JSON.stringify({ prompt: "x".repeat(600) })).length, 512);
   assert.equal(parsePromptFromHookInput("{bozuk"), "");
   assert.equal(parsePromptFromHookInput(JSON.stringify({ session_id: "s1" })), "");
+  assert.equal(parseSessionIdFromHookInput(JSON.stringify({ session_id: "s1" })), "s1");
+  assert.equal(parseSessionIdFromHookInput(JSON.stringify({ sessionID: "s2" })), "s2");
+  assert.equal(parseSessionIdFromHookInput(JSON.stringify({ session_id: " s3 " })), "s3");
+  assert.equal(parseSessionIdFromHookInput(JSON.stringify({ session_id: "x".repeat(513) })), "");
   assert.equal(parsePromptFromHookInput(""), "");
 });
 
@@ -48,18 +58,25 @@ test("CLIENT-02: istemci çıktısı belgelenen sözleşmeye uyar", () => {
 
 test("CLIENT-03: CLI köprüsü enjeksiyonu yapar, hatada sessiz kalır", async () => {
   const queries = [];
+  const injections = [];
   const output = fakeOutput();
   const delivered = await runMemoryHookClient({
     client: "claude",
-    input: fakeInput(JSON.stringify({ prompt: "  ikinci   beyin  " })),
+    input: fakeInput(JSON.stringify({ prompt: "  ikinci   beyin  ", session_id: "s1" })),
     output,
     hook: async ({ query }) => {
       queries.push(query);
       return "BAĞLAM";
-    }
+    },
+    onContextInjected: (value) => injections.push(value)
   });
   assert.equal(delivered.delivered, true);
+  assert.equal(injections.length, 0);
+  await nextTurn();
   assert.deepEqual(queries, ["ikinci beyin"]);
+  assert.equal(injections.length, 1);
+  assert.equal(injections[0].sessionId, "s1");
+  assert.equal(Number.isInteger(injections[0].durationMs), true);
   assert.deepEqual(JSON.parse(output.chunks.join("")), {
     hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "BAĞLAM" }
   });
@@ -83,6 +100,73 @@ test("CLIENT-03: CLI köprüsü enjeksiyonu yapar, hatada sessiz kalır", async 
   });
   assert.equal(empty.delivered, false);
   assert.equal(emptyOutput.chunks.length, 0);
+  let callbackAfterWriteFailure = false;
+  const failedWrite = await runMemoryHookClient({
+    client: "codex",
+    input: fakeInput(JSON.stringify({ prompt: "soru", session_id: "write-failure" })),
+    output: { write() { throw new Error("output unavailable"); } },
+    hook: async () => "BAĞLAM",
+    onContextInjected: () => { callbackAfterWriteFailure = true; }
+  });
+  assert.equal(failedWrite.delivered, false);
+  assert.equal(callbackAfterWriteFailure, false);
+  let asyncCallbackAfterWriteFailure = false;
+  const asynchronousFailedOutput = new Writable({
+    write(chunk, encoding, callback) {
+      setImmediate(() => callback(new Error("async output unavailable")));
+    }
+  });
+  const asynchronousFailure = await runMemoryHookClient({
+    client: "codex",
+    input: fakeInput(JSON.stringify({ prompt: "soru", session_id: "async-failure" })),
+    output: asynchronousFailedOutput,
+    hook: async () => "BAĞLAM",
+    onContextInjected: () => { asyncCallbackAfterWriteFailure = true; }
+  });
+  assert.equal(asynchronousFailure.delivered, false);
+  assert.equal(asyncCallbackAfterWriteFailure, false);
+  asynchronousFailedOutput.destroy();
+  const order = [];
+  const successfulAsyncOutput = new Writable({
+    write(chunk, encoding, callback) {
+      order.push(String(chunk));
+      setImmediate(() => {
+        order.push("written");
+        callback();
+      });
+    }
+  });
+  const asyncDelivered = await runMemoryHookClient({
+    client: "codex",
+    input: fakeInput(JSON.stringify({ prompt: "soru", session_id: "async-success" })),
+    output: successfulAsyncOutput,
+    hook: async () => "BAĞLAM",
+    onContextInjected: () => { order.push("session"); }
+  });
+  await nextTurn();
+  assert.equal(asyncDelivered.delivered, true);
+  assert.deepEqual(order, ["{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"BAĞLAM\"}}", "written", "session"]);
+  successfulAsyncOutput.destroy();
+  const promiseOrder = [];
+  const promiseOutput = {
+    write() {
+      promiseOrder.push("writing");
+      return new Promise((resolve) => setImmediate(() => {
+        promiseOrder.push("written");
+        resolve();
+      }));
+    }
+  };
+  const promiseDelivered = await runMemoryHookClient({
+    client: "codex",
+    input: fakeInput(JSON.stringify({ prompt: "soru", session_id: "promise-success" })),
+    output: promiseOutput,
+    hook: async () => "BAĞLAM",
+    onContextInjected: () => { promiseOrder.push("session"); }
+  });
+  await nextTurn();
+  assert.equal(promiseDelivered.delivered, true);
+  assert.deepEqual(promiseOrder, ["writing", "written", "session"]);
 });
 
 test("CLIENT-04: bozuk girdide CLI süreci sıfır kodla ve çıktısız biter", () => {

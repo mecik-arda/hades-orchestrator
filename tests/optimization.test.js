@@ -13,7 +13,7 @@ import { createWorkspaceCoordinator, withGuard } from "../subagent-bridge/src/se
 import { resolveRuntimeRoute } from "../subagent-bridge/src/runtime/router.js";
 import { createMcpToolHandlers } from "../subagent-bridge/src/frontends/mcp/tools.js";
 import { readMetricsDirectory, summarizeMetrics } from "../scripts/report-metrics.js";
-import { appendRedactedRunMetric, getCostBudgetSnapshot, listPendingDirectEditFeedback, listPendingRoutingFeedback, pruneMetricFiles, recordDirectEditFeedback, recordRoutingFeedback, reserveCostBudget, settleCostBudget, withMetricLock } from "../subagent-bridge/src/metrics.js";
+import { appendRedactedRunMetric, getCostBudgetSnapshot, listPendingDirectEditFeedback, listPendingRoutingFeedback, listRoutingCandidates, pruneMetricFiles, recordDirectEditFeedback, recordRoutingDisposition, recordRoutingFeedback, reserveCostBudget, settleCostBudget, withMetricLock } from "../subagent-bridge/src/metrics.js";
 
 test("OPT-01: processler arası coordinator paralel okumayı korur ve yazmayı sıraya alır", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-coordinator-"));
@@ -599,10 +599,48 @@ test("OPT-05b: routing değerlendirmesi profile kalite süre ve maliyetini özet
     usage: { durationMs: 400, totalCostUsd: 0.03 },
     attempts: [{}]
   });
+  assert.equal(listPendingRoutingFeedback(configuration).length, 0);
+  assert.equal(listRoutingCandidates(configuration)[0].feedbackId, executionIdHash.slice(0, 12));
+  await recordRoutingDisposition(configuration, executionIdHash.slice(0, 12), "eligible_real_user", "user_confirmed");
   assert.equal(listPendingRoutingFeedback(configuration)[0].profile, "review");
   await recordRoutingFeedback(configuration, executionIdHash.slice(0, 12), "useful");
   assert.deepEqual(listPendingRoutingFeedback(configuration), []);
+  const legacyId = crypto.createHash("sha256").update("legacy-profile-execution").digest("hex");
+  await appendRedactedRunMetric(configuration, {
+    recordedAt: "2026-08-11T00:01:00.000Z",
+    backend: "codex",
+    executionIdHash: legacyId,
+    mode: "read_only",
+    profile: "review",
+    outcomeStatus: "completed",
+    usage: { durationMs: 450, totalCostUsd: 0.02 },
+    attempts: [{}]
+  });
+  await appendRedactedRunMetric(configuration, {
+    recordType: "routing_feedback",
+    recordedAt: "2026-08-11T00:01:30.000Z",
+    backend: "routing-evaluation",
+    executionIdHash: legacyId,
+    outcome: "partial"
+  });
+  assert.equal(listRoutingCandidates(configuration).some((entry) => entry.feedbackId === legacyId.slice(0, 12)), false);
+  const ineligibleId = crypto.createHash("sha256").update("synthetic-profile-execution").digest("hex");
+  await appendRedactedRunMetric(configuration, {
+    recordedAt: "2026-08-11T00:02:00.000Z",
+    backend: "codex",
+    executionIdHash: ineligibleId,
+    mode: "read_only",
+    profile: "review",
+    outcomeStatus: "completed",
+    usage: { durationMs: 500, totalCostUsd: 0.04 },
+    attempts: [{}]
+  });
+  await recordRoutingDisposition(configuration, ineligibleId.slice(0, 12), "ineligible_synthetic", "fixture_run");
+  assert.equal(listRoutingCandidates(configuration).some((entry) => entry.feedbackId === ineligibleId.slice(0, 12)), false);
+  assert.equal(listPendingRoutingFeedback(configuration).some((entry) => entry.feedbackId === ineligibleId.slice(0, 12)), false);
   const summary = summarizeMetrics(readMetricsDirectory(path.join(root, "metrics")));
+  assert.equal(summary.routingEvaluation.legacyLabeledRuns, 1);
+  assert.equal(summary.routingEvaluation.byProfile.review.runs, 1);
   assert.deepEqual(summary.routingEvaluation.byProfile.review, {
     runs: 1,
     labeledRuns: 1,
@@ -656,7 +694,8 @@ test("V2-DECISION-02: profil ve routing karar hazırlığı 15 etikette açılı
     const records = [];
     for (let index = 0; index < 15; index += 1) {
       const executionIdHash = `route-${index}`;
-      records.push({ backend: "codex", profile: "review", executionIdHash, outcomeStatus: "completed", usage: {} });
+      records.push({ backend: "codex", profile: "review", mode: "read_only", executionIdHash, outcomeStatus: "completed", usage: {} });
+      records.push({ recordType: "routing_disposition", executionIdHash, disposition: "eligible_real_user", reason: "user_confirmed" });
       if (index < labeled) records.push({ recordType: "routing_feedback", executionIdHash, outcome: "useful" });
     }
     return records;

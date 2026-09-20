@@ -22,8 +22,18 @@ function recordDiagnostic(error) {
 
 try {
   const { memoryHookClientNames, runMemoryHookClient } = await import("../subagent-bridge/src/services/memory-hook-client.js");
+  const { loadConfiguration } = await import("../subagent-bridge/src/config.js");
+  const { recordMemoryHookSession } = await import("../subagent-bridge/src/metrics.js");
   const client = memoryHookClientNames.includes(requestedClient) ? requestedClient : "generic";
-  await runMemoryHookClient({ client });
+  await runMemoryHookClient({
+    client,
+    onContextInjected: async ({ sessionId, durationMs }) => {
+      try {
+        await recordMemoryHookSession(loadConfiguration(), { client, sessionId, durationMs });
+      } catch {
+      }
+    }
+  });
 } catch (error) {
   recordDiagnostic(error);
 }

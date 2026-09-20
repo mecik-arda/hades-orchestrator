@@ -13,3 +13,10 @@
 - Görevi tamamlamadan önce uygun testleri ve doğrulamaları çalıştır.
 - Test edilemeyen bir davranışı doğrulanmış gibi raporlama.
 - Geri alınamaz işlem, üretim erişimi, secret aktarımı, toplu silme, dış sisteme mesaj veya ödeme için insan onayı iste.
+
+## M2 Hook Geri Bildirimi
+
+- Hook geri bildirimi proje veya görev başarısını değil, gerçek bağlam enjeksiyonu yapılan tek bir session'ın `useful`, `partial` veya `not_useful` sonucunu ölçer.
+- Başka session etiketlenebilir; ancak gerçek `memory_hook_session` kaydı, doğru istemci ve gerçek session ID zorunludur.
+- Önce `hook:classify` ile `eligible_real_user`, sonra `hook:feedback` ile sonuç kaydedilir; `--session-id` olmadan komut çalıştırılmaz.
+- Session kaydı yoksa retroaktif ID, süre, uygunluk veya sentetik session üretilmez; gözlem M2 sayacına alınmaz.

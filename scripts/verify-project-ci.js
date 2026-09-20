@@ -26,10 +26,14 @@ const requiredFiles = [
   "scripts/pilot-deepseek-edit.js",
   "scripts/manage-project-logs.js",
   "scripts/report-recent-runs.js",
+  "scripts/classify-routing-feedback.js",
+  "scripts/record-memory-hook-feedback.js",
+  "scripts/classify-memory-hook.js",
   "subagent-bridge/src/project-runs.js",
   "subagent-bridge/src/recent-runs.js",
   "subagent-bridge/src/glm.js",
   "subagent-bridge/src/services/disposable-workspace.js",
+  "subagent-bridge/src/services/memory-hook-identity.js",
   "subagent-bridge/src/server.js"
 ];
 

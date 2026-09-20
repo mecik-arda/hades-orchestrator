@@ -141,7 +141,7 @@ function hasHighEntropyToken(content) {
   });
 }
 
-function hasSecretLikeContent(content) {
+export function hasSecretLikeContent(content) {
   return secretPatterns.some((pattern) => pattern.test(content)) || hasHighEntropyToken(content);
 }
 

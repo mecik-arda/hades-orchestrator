@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfiguration } from "../subagent-bridge/src/config.js";
-import { getCostBudgetSnapshot, pruneMetricFiles } from "../subagent-bridge/src/metrics.js";
+import { getCostBudgetSnapshot, pruneMetricFiles, summarizeMemoryHookFeedback } from "../subagent-bridge/src/metrics.js";
 import { summarizeSlo } from "../subagent-bridge/src/services/slo-service.js";
 
 function readMetricFile(metricsPath) {
@@ -29,6 +29,11 @@ export function summarizeMetrics(records, sloPolicy) {
   const routingFeedback = new Map(records
     .filter((record) => record.recordType === "routing_feedback" && record.executionIdHash)
     .map((record) => [record.executionIdHash, record.outcome]));
+  const routingDisposition = new Map(records
+    .filter((record) => record.recordType === "routing_disposition" && record.executionIdHash)
+    .map((record) => [record.executionIdHash, record.disposition]));
+  const legacyRoutingFeedback = records.filter((record) => record.recordType === "routing_feedback" && record.executionIdHash && !routingDisposition.has(record.executionIdHash)).length;
+  const memoryHookRecords = records.filter((record) => ["memory_hook_session", "memory_hook_disposition", "memory_hook_feedback"].includes(record.recordType));
   records = records.filter((record) => !record.recordType);
   const editRecords = records.filter((record) => record.mode === "edit" && record.outcomeStatus === "completed" && record.executionIdHash);
   const summarizeDirectEditRuns = (runs) => {
@@ -77,7 +82,7 @@ export function summarizeMetrics(records, sloPolicy) {
     byProfile: Object.fromEntries(Object.entries(directEditByProfile).map(([profile, runs]) => [profile, summarizeDirectEditRuns(runs)]))
   };
   const routingByProfile = {};
-  for (const record of records.filter((entry) => entry.profile && entry.executionIdHash)) {
+  for (const record of records.filter((entry) => entry.profile && entry.executionIdHash && entry.mode === "read_only" && entry.outcomeStatus === "completed" && routingDisposition.get(entry.executionIdHash) === "eligible_real_user")) {
     const aggregate = routingByProfile[record.profile] ||= { runs: 0, labeledRuns: 0, useful: 0, partial: 0, notUseful: 0, totalDurationMs: 0, totalCostUsd: 0 };
     aggregate.runs += 1;
     aggregate.totalDurationMs += record.usage?.durationMs || 0;
@@ -177,6 +182,8 @@ export function summarizeMetrics(records, sloPolicy) {
     candidate.thresholdsPassed += record.thresholdsPassed === true ? 1 : 0;
     candidate.lastRepetitionCount = record.repetitionCount;
   }
+  const routingEvaluation = { byProfile: routingByProfile };
+  if (legacyRoutingFeedback > 0) routingEvaluation.legacyLabeledRuns = legacyRoutingFeedback;
   return {
     runCount: summary.runCount,
     averageDurationMs: summary.runCount > 0 ? Math.round(summary.totalDurationMs / summary.runCount) : 0,
@@ -197,9 +204,8 @@ export function summarizeMetrics(records, sloPolicy) {
       byTaskClass: modelFitByTaskClass
     },
     directEditBaseline,
-    routingEvaluation: {
-      byProfile: routingByProfile
-    },
+    routingEvaluation,
+    memoryHookPilot: summarizeMemoryHookFeedback(memoryHookRecords),
     slo
   };
 }

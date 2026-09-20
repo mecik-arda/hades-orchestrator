@@ -5,6 +5,7 @@ import { ANTIGRAVITY_MODEL_MAP } from "../../adapters/antigravity-adapter.js";
 import { analyzePersistentMemoryWrite, checkPersistentMemory, promotePersistentMemory, readPersistentMemory, reviewPersistentMemory, searchPersistentMemory, storePersistentMemory } from "../../memory.js";
 import { capabilityProbeSchema, capabilityStatusValues } from "../../schemas/core-schemas.js";
 import { createMcpToolHandlers, publicToolSchemas, antigravityProbeSchema } from "./tools.js";
+import { createRuleAttestation, RULE_ATTESTATION_MIME_TYPE, RULE_ATTESTATION_NAME, RULE_ATTESTATION_URI } from "./rule-attestation.js";
 
 const readOnlyAnnotations = {
   readOnlyHint: true,
@@ -105,6 +106,18 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
     instructions: "Frontend-neutral subagent bridge runtime için MCP frontend'i. Trusted workspace sunucu başlangıç context'i tarafından sağlanır."
   });
   const handlers = createMcpToolHandlers({ runtime, trustedWorkspace, caller: "openCode", configuration });
+
+  server.registerResource(RULE_ATTESTATION_NAME, RULE_ATTESTATION_URI, {
+    title: "Workspace kural attestation manifesti",
+    description: "Kanonik workspace kural dosyalarının ham-byte SHA-256 manifestini redacted doğrulama gözlemi olarak döndürür; startup context veya model uyumu kanıtlamaz.",
+    mimeType: RULE_ATTESTATION_MIME_TYPE
+  }, async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: RULE_ATTESTATION_MIME_TYPE,
+      text: JSON.stringify(createRuleAttestation(trustedWorkspace))
+    }]
+  }));
 
   server.registerTool("check_persistent_memory", {
     title: "Kalıcı hafıza bağlantısını kontrol et",

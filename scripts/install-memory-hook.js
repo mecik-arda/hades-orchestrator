@@ -7,6 +7,8 @@ const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDirectory, "..");
 const bridgeHookPath = path.join(projectRoot, "subagent-bridge", "src", "services", "memory-hook-plugin.js");
 const bridgeProviderPath = path.join(projectRoot, "subagent-bridge", "src", "services", "memory-hook.js");
+const bridgeConfigPath = path.join(projectRoot, "subagent-bridge", "src", "config.js");
+const bridgeMetricsPath = path.join(projectRoot, "subagent-bridge", "src", "metrics.js");
 const clientScriptPath = path.join(projectRoot, "scripts", "memory-hook-client.js");
 
 const args = process.argv.slice(2);
@@ -38,10 +40,14 @@ function openCodePluginSource() {
   return [
     `import { createMemoryHook } from ${JSON.stringify(pathToFileURL(bridgeProviderPath).href)};`,
     `import { createSecondBrainMemoryPlugin } from ${JSON.stringify(pathToFileURL(bridgeHookPath).href)};`,
+    `import { loadConfiguration } from ${JSON.stringify(pathToFileURL(bridgeConfigPath).href)};`,
+    `import { recordMemoryHookSession } from ${JSON.stringify(pathToFileURL(bridgeMetricsPath).href)};`,
     "",
     "export const SecondBrainMemoryPlugin = async () => {",
     '  if (process.env.SUBAGENT_SECOND_BRAIN_HOOK !== "1") return {};',
-    "  return createSecondBrainMemoryPlugin({ runHook: createMemoryHook() });",
+    "  return createSecondBrainMemoryPlugin({ runHook: createMemoryHook(), onContextInjected: async ({ sessionId, durationMs }) => {",
+    "    try { await recordMemoryHookSession(loadConfiguration(), { client: \"opencode\", sessionId, durationMs }); } catch {}",
+    "  } });",
     "};",
     ""
   ].join("\n");

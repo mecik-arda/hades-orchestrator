@@ -18,6 +18,7 @@ Hades Orchestrator is a provider-neutral orchestration system in which the OpenC
 - [Verified baseline](#verified-baseline)
 - [Quick start](#quick-start)
 - [Architecture](#architecture)
+- [MCP rule attestation](#mcp-rule-attestation)
 - [Personal configuration](#personal-configuration)
 - [Canonical routing](#canonical-routing)
 - [Task profiles](#task-profiles)
@@ -83,6 +84,20 @@ PACKAGE LOCATION != ACTIVE WORKSPACE
 ```
 
 The active workspace is not derived from the package location, configuration or runtime CWD; `SUBAGENT_BRIDGE_TRUSTED_WORKSPACE` is canonicalized.
+
+### MCP rule attestation
+
+The bridge exposes one read-only resource for a redacted workspace-rule manifest:
+
+- URI: `hades://rules/attestation/v1`
+- Name: `rule-attestation-v1`
+- MIME type: `application/json`
+- Files: `AGENTS.md`, `CLAUDE.md`, `config/agent-rules.md`
+- Hash contract: SHA-256 of the unchanged raw UTF-8 file bytes
+
+The manifest uses a strict schema, fixed entry order, RFC 8785 canonicalization, fixed file and total-size limits, descriptor reads, link checks, UTF-8 validation, secret scanning and TOCTOU checks. No tool fallback exists. Unsupported resource clients remain `unsupported` rather than invoking a tool.
+
+The result is an untrusted observation with `sourceClass: "mcp_resource"`. `workspace_file` and `mcp_resource` can report a matching snapshot; `startup_context` is `unavailable` until a trusted host loader hook exists. The resource does not prove that the host injected the rules into startup context, that a model followed them, or that the returned resource is a signed attestation. The contract and implementation are recorded in [the MCP rule attestation plan](docs/plans/MCP_KURAL_DOGRULAMA_PLANI_2026-09-20.md). `npm run smoke` validates resource listing, reading and the strict manifest.
 
 ### Personal configuration
 
@@ -247,6 +262,9 @@ npm run runs:mirror -- ...    Project-local mirror lifecycle
 npm run edit:feedback         Record a direct-edit user outcome
 npm run edit:classify         Append-only direct-edit eligibility disposition (list|dispose|classify-legacy)
 npm run routing:feedback      Record a task-profile user outcome
+npm run routing:classify      Classify a read-only routing run before feedback
+npm run hook:feedback          Record a redacted memory-hook session outcome
+npm run hook:classify          Classify a memory-hook session before feedback
 npm run memory:review         Persistent memory lifecycle review
 npm run memory:doctor         Read-only Vault health, version and audit diagnosis
 npm run memory:repair         Explicit Vault repair (dry-run by default, --apply to write)
@@ -329,6 +347,7 @@ Hades Orchestrator, OpenCode host ve ana orkestratörün yerel MCP üzerinden ba
 - [Doğrulanmış taban](#doğrulanmış-taban)
 - [Hızlı başlangıç](#hızlı-başlangıç)
 - [Mimari](#mimari)
+- [MCP kural attestation](#mcp-kural-attestation)
 - [Kişisel yapılandırma](#kişisel-yapılandırma)
 - [Kanonik yönlendirme](#kanonik-yönlendirme)
 - [Görev profilleri](#görev-profilleri)
@@ -394,6 +413,20 @@ PACKAGE LOCATION != ACTIVE WORKSPACE
 ```
 
 Aktif workspace package konumundan, config’ten veya runtime CWD’den türetilmez; `SUBAGENT_BRIDGE_TRUSTED_WORKSPACE` canonicalize edilir.
+
+### MCP kural attestation
+
+Bridge, workspace kural dosyaları için redacted ve salt-okunur tek bir resource sunar:
+
+- URI: `hades://rules/attestation/v1`
+- Ad: `rule-attestation-v1`
+- MIME türü: `application/json`
+- Dosyalar: `AGENTS.md`, `CLAUDE.md`, `config/agent-rules.md`
+- Hash sözleşmesi: değiştirilmemiş ham UTF-8 dosya byte'larının SHA-256 özeti
+
+Manifest strict şema, sabit entry sırası, RFC 8785 canonicalization, dosya ve toplam boyut sınırları, descriptor okuması, link kontrolleri, UTF-8 doğrulaması, secret taraması ve TOCTOU kontrolleri uygular. Tool fallback yoktur. Resource desteklemeyen client `unsupported` kalır ve tool çağrılmaz.
+
+Sonuç `sourceClass: "mcp_resource"` ile güvenilmeyen bir gözlemdir. `workspace_file` ve `mcp_resource` eşleşen snapshot bildirebilir; trusted host loader hook'u bulunana kadar `startup_context` `unavailable` kalır. Resource, host'un kuralları startup context'e enjekte ettiğini, modelin kurallara uyduğunu veya sonucun imzalı attestation olduğunu kanıtlamaz. Sözleşme ve uygulama [MCP kural attestation planında](docs/plans/MCP_KURAL_DOGRULAMA_PLANI_2026-09-20.md) kayıtlıdır. `npm run smoke` resource listeleme, okuma ve strict manifest doğrulamasını çalıştırır.
 
 ### Kişisel yapılandırma
 
@@ -558,6 +591,9 @@ npm run runs:mirror -- ...    Proje-local mirror yaşam döngüsü
 npm run edit:feedback         Direct-edit kullanıcı sonucu kaydı
 npm run edit:classify         Append-only direct-edit uygunluk sınıflandırması (list|dispose|classify-legacy)
 npm run routing:feedback      Task-profile kullanıcı sonucu kaydı
+npm run routing:classify      Read-only routing kaydını geri bildirimden önce sınıflandırır
+npm run hook:feedback         Redacted hafıza hook oturum sonucu kaydı
+npm run hook:classify         Hafıza hook oturumunu geri bildirim öncesi sınıflandırma
 npm run memory:review         Kalıcı hafıza yaşam döngüsü denetimi
 npm run memory:doctor         Salt-okunur Vault sağlık, sürüm ve audit teşhisi
 npm run memory:repair         Açık Vault onarımı (varsayılan dry-run, yazmak için --apply)
