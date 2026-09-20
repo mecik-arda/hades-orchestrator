@@ -4,7 +4,7 @@ import { z } from "zod";
 import { ANTIGRAVITY_MODEL_MAP } from "../../adapters/antigravity-adapter.js";
 import { analyzePersistentMemoryWrite, checkPersistentMemory, promotePersistentMemory, readPersistentMemory, reviewPersistentMemory, searchPersistentMemory, storePersistentMemory } from "../../memory.js";
 import { capabilityProbeSchema, capabilityStatusValues } from "../../schemas/core-schemas.js";
-import { createMcpToolHandlers, publicToolSchemas, antigravityProbeSchema } from "./tools.js";
+import { createMcpToolHandlers, publicToolSchemas, antigravityProbeSchema, storeMemorySchema } from "./tools.js";
 import { createRuleAttestation, RULE_ATTESTATION_MIME_TYPE, RULE_ATTESTATION_NAME, RULE_ATTESTATION_URI } from "./rule-attestation.js";
 
 const readOnlyAnnotations = {
@@ -184,27 +184,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
   server.registerTool("store_persistent_memory", {
     title: "Kalıcı hafıza notunu sakla",
     description: "Ana orkestratörün değerlendirdiği, kaynaklandırılmış, doğrulama metadata'sı bulunan ve secret içermeyen bir Markdown notunu izinli Vault klasörüne yazar.",
-    inputSchema: {
-      relativePath: z.string().min(3).max(500),
-      title: z.string().min(1).max(200),
-      content: z.string().min(1).max(60000),
-      tags: z.array(z.string().min(1).max(60)).max(20).default([]),
-      sources: z.array(z.object({
-        title: z.string().min(1).max(300),
-        url: z.string().url().refine((value) => value.startsWith("https://"), "Kaynak URL HTTPS olmalı"),
-        accessedAt: z.string().datetime()
-      })).max(30).default([]),
-      confidence: z.enum(["low", "medium", "high"]),
-      verificationStatus: z.enum(["user-provided", "verified", "provisional"]),
-      memoryType: z.enum(["semantic", "episodic", "procedural", "preference", "decision"]).optional(),
-      stage: z.enum(["draft", "published"]).optional(),
-      reviewAfter: z.string().datetime().optional(),
-      validUntil: z.string().datetime().optional(),
-      taskId: z.string().min(1).max(120),
-      acknowledgeMemoryConflicts: z.boolean().default(false),
-      acknowledgeExpiredMemory: z.boolean().default(false),
-      expectedSha256: z.string().regex(/^[a-f0-9]{64}$/).optional()
-    },
+    inputSchema: storeMemorySchema.shape,
     annotations: {
       readOnlyHint: false,
       destructiveHint: true,

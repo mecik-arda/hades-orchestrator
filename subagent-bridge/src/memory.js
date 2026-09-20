@@ -20,6 +20,11 @@ const secretPatterns = [
   /\b(?:api[_-]?key|token|password|secret|client_secret|private_key)\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{12,}/i,
   /\b(?:mongodb(?:\+srv)?|postgres(?:ql)?|mysql):\/\/[^\s"']+/i
 ];
+const emailPattern = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+const turkishPhonePattern = /(?<!\d)(?:\+?90[\s.-]?)?0?5\d{2}[\s.-]?\d{3}[\s.-]?\d{2}[\s.-]?\d{2}(?!\d)/;
+const turkishNationalIdPattern = /(?<!\d)[1-9]\d{10}(?!\d)/g;
+const turkishIbanPattern = /\bTR\d{24}\b/gi;
+const paymentCardPattern = /(?<!\d)(?:[0-9][ -]?){12,18}[0-9](?!\d)/g;
 const injectionRules = [
   { category: "instruction_override", pattern: /\b(?:ignore|disregard|forget|override)\b[\s\S]{0,120}\b(?:previous|prior|system|developer|instructions?|rules?)\b/i },
   { category: "instruction_override", pattern: /\b(?:onceki|önceki|sistem|gelistirici|geliştirici)\b[\s\S]{0,120}\b(?:talimat|talimatlari|talimatları|kural|kurallari|kuralları)\b[\s\S]{0,120}\b(?:yoksay|unut|gecersiz|geçersiz)\b/i },
@@ -149,6 +154,72 @@ function detectInjectionCategories(content) {
   return [...new Set(injectionRules.filter((rule) => rule.pattern.test(content)).map((rule) => rule.category))];
 }
 
+function hasValidTurkishNationalId(value) {
+  if (value.length !== 11 || value.startsWith("0")) return false;
+  const digits = [...value].map(Number);
+  const oddSum = digits[0] + digits[2] + digits[4] + digits[6] + digits[8];
+  const evenSum = digits[1] + digits[3] + digits[5] + digits[7];
+  if ((oddSum * 7 - evenSum) % 10 !== digits[9]) return false;
+  const total = digits.slice(0, 10).reduce((sum, digit) => sum + digit, 0);
+  return total % 10 === digits[10];
+}
+
+function hasValidTurkishIban(value) {
+  const normalized = value.replace(/\s+/g, "").toUpperCase();
+  if (!/^TR\d{24}$/.test(normalized)) return false;
+  const rearranged = normalized.slice(4) + normalized.slice(0, 4);
+  const numeric = rearranged.replace(/[A-Z]/g, (letter) => String(letter.charCodeAt(0) - 55));
+  let remainder = 0;
+  for (const digit of numeric) remainder = (remainder * 10 + Number(digit)) % 97;
+  return remainder === 1;
+}
+
+function hasValidPaymentCardNumber(value) {
+  const digits = value.replace(/[ -]/g, "");
+  if (!/^\d{13,19}$/.test(digits)) return false;
+  let sum = 0;
+  let doubleDigit = false;
+  for (let index = digits.length - 1; index >= 0; index -= 1) {
+    let digit = Number(digits[index]);
+    if (doubleDigit) {
+      digit *= 2;
+      if (digit > 9) digit -= 9;
+    }
+    sum += digit;
+    doubleDigit = !doubleDigit;
+  }
+  return sum % 10 === 0;
+}
+
+function detectPiiCategories(content) {
+  const categories = new Set();
+  if (emailPattern.test(content)) categories.add("email");
+  if (turkishPhonePattern.test(content)) categories.add("phone");
+  for (const match of content.matchAll(turkishNationalIdPattern)) {
+    if (hasValidTurkishNationalId(match[0])) {
+      categories.add("national_id");
+      break;
+    }
+  }
+  for (const match of content.matchAll(turkishIbanPattern)) {
+    if (hasValidTurkishIban(match[0])) {
+      categories.add("iban");
+      break;
+    }
+  }
+  for (const match of content.matchAll(paymentCardPattern)) {
+    if (hasValidPaymentCardNumber(match[0])) {
+      categories.add("payment_card");
+      break;
+    }
+  }
+  return [...categories];
+}
+
+function combinedMemoryContent(input) {
+  return [input.title, input.content, input.taskId, ...input.tags, ...input.sources.flatMap((source) => [source.title, source.url])].join("\n");
+}
+
 function escapeXmlText(content) {
   return content.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -261,7 +332,7 @@ function collectMarkdownFiles(configuration) {
       }
     }
   }
-  return { vaultRoot, files };
+  return { vaultRoot, files, truncated: files.length >= configuration.memory.maxIndexedFiles };
 }
 
 function readLimitedText(filePath, maximumBytes) {
@@ -337,15 +408,24 @@ function requireSafeMemoryContent(input) {
       throw new Error("Hafıza kaynağı hassas sorgu parametresi içeriyor");
     }
   }
-  const combinedContent = [input.title, input.content, input.taskId, ...input.tags, ...input.sources.flatMap((source) => [source.title, source.url])].join("\n");
+  const combinedContent = combinedMemoryContent(input);
   if (hasSecretLikeContent(combinedContent)) {
     throw new Error("Hafıza notu secret benzeri içerik barındırıyor");
+  }
+  const piiCategories = detectPiiCategories(combinedContent);
+  if (piiCategories.length > 0) {
+    throw new Error(`Hafıza notu kişisel kimlik bilgisi içeriyor: ${piiCategories.join(", ")}`);
   }
 }
 
 function requireSafeProposedMemoryContent(input) {
-  if (hasSecretLikeContent([input.title, input.content].join("\n"))) {
+  const combinedContent = [input.title, input.content].join("\n");
+  if (hasSecretLikeContent(combinedContent)) {
     throw new Error("Hafıza notu secret benzeri içerik barındırıyor");
+  }
+  const piiCategories = detectPiiCategories(combinedContent);
+  if (piiCategories.length > 0) {
+    throw new Error(`Hafıza notu kişisel kimlik bilgisi içeriyor: ${piiCategories.join(", ")}`);
   }
 }
 
@@ -1320,14 +1400,19 @@ export function reviewPersistentMemory(configuration, options = {}) {
 
 export function analyzePersistentMemoryWrite(configuration, input) {
   requireSafeProposedMemoryContent(input);
-  const { vaultRoot, files } = collectMarkdownFiles(configuration);
+  const { vaultRoot, files, truncated } = collectMarkdownFiles(configuration);
   const targetPath = input.relativePath ? normalizeRelativePath(input.relativePath).replace(/\\/g, "/") : null;
   const maximumReadBytes = configuration.memory.reviewDefaults?.maxReadBytesPerFile ?? 32768;
   const proposedTitle = normalizeMemoryIdentity(input.title);
   const proposedBody = normalizeMemoryIdentity(input.content);
   const exactDuplicates = [];
   const potentialConflicts = [];
+  let readTruncatedCount = 0;
   for (const filePath of files) {
+    try {
+      if (fs.statSync(filePath).size > maximumReadBytes) readTruncatedCount += 1;
+    } catch {
+    }
     const record = extractMemoryReviewRecord(vaultRoot, filePath, maximumReadBytes);
     if (record.relativePath === targetPath) continue;
     if (proposedBody.length >= 40 && record.normalizedBody === proposedBody) {
@@ -1339,7 +1424,13 @@ export function analyzePersistentMemoryWrite(configuration, input) {
   return {
     safeToWrite: exactDuplicates.length === 0 && potentialConflicts.length === 0,
     exactDuplicates,
-    potentialConflicts
+    potentialConflicts,
+    coverage: {
+      indexedFiles: files.length,
+      maxIndexedFiles: configuration.memory.maxIndexedFiles,
+      truncated,
+      readTruncatedCount
+    }
   };
 }
 
@@ -1350,6 +1441,13 @@ export function storePersistentMemory(configuration, input) {
   } catch {
   }
   const { vaultRoot, candidatePath, normalizedRelativePath } = resolveMemoryPath(configuration, input.relativePath, true);
+  const injectionCategories = detectInjectionCategories(combinedMemoryContent(input));
+  if (injectionCategories.length > 0) {
+    recordMemorySecurityEvent(configuration, "QUARANTINE", normalizedRelativePath.replace(/\\/g, "/"), calculateSha256(input.content), injectionCategories.join(","));
+    if (input.acknowledgeInjectionRisk !== true) {
+      throw new Error("Hafıza notu prompt injection şüphesi içeriyor; acknowledgeInjectionRisk ile açık onay gerekli");
+    }
+  }
   return withMemoryMutationLock(configuration, normalizedRelativePath, () => {
     const fileExists = fs.existsSync(candidatePath);
     const writeAnalysis = analyzePersistentMemoryWrite(configuration, input);
@@ -1462,12 +1560,21 @@ export function promotePersistentMemory(configuration, input) {
       if (calculateSha256(reconstructedSource) !== input.expectedSourceSha256) {
         throw new Error("Mevcut hedef beklenen kaynak taslağıyla eşleşmiyor");
       }
+      const sourceRelativePath = source.normalizedRelativePath.replace(/\\/g, "/");
+      const targetRelativePath = target.normalizedRelativePath.replace(/\\/g, "/");
+      const targetSha256 = calculateSha256(targetContent);
+      const noteIdHash = calculateSha256(`${source.normalizedRelativePath}:${target.normalizedRelativePath}`);
+      const journalState = listMutationIntents(configuration);
+      const recoveryRequired = journalState.error === true || journalState.intents.some((intent) => intent.journalId === noteIdHash);
+      const auditWritten = memoryAuditHasEvent(configuration, { event: "PROMOTE", noteIdHash, newSha256: targetSha256 });
       return {
         promoted: true,
         idempotent: true,
-        sourceRelativePath: source.normalizedRelativePath.replace(/\\/g, "/"),
-        targetRelativePath: target.normalizedRelativePath.replace(/\\/g, "/"),
-        sha256: calculateSha256(targetContent)
+        sourceRelativePath,
+        targetRelativePath,
+        sha256: targetSha256,
+        auditWritten,
+        recoveryRequired
       };
     }
     if (!sourceExists && !targetExists) throw new Error("Kaynak ve hedef bulunamadı; olası veri kaybını incele");

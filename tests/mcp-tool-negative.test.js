@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { publicToolSchemas } from "../subagent-bridge/src/frontends/mcp/tools.js";
+import { publicToolSchemas, storeMemorySchema } from "../subagent-bridge/src/frontends/mcp/tools.js";
 
 const wrongTypePayloads = {
   runAntigravity: { prompt: 42, model: "gemini_pro", mode: "read_only" },
@@ -40,4 +40,18 @@ test("MCP-NEG-03: her public MCP şeması yanlış tipte alanı reddeder", () =>
     const result = schema.safeParse(payload);
     assert.equal(result.success, false, `${name} yanlış tipi kabul etti`);
   }
+});
+
+test("MCP-NEG-04: store hafıza şeması acknowledgeInjectionRisk tipini doğrular ve bilinmeyen alanı reddeder", () => {
+  const base = {
+    relativePath: "00_Inbox/Test.md",
+    title: "Başlık",
+    content: "İçerik",
+    confidence: "high",
+    verificationStatus: "user-provided",
+    taskId: "gorev-1"
+  };
+  assert.equal(storeMemorySchema.safeParse({ ...base, acknowledgeInjectionRisk: 42 }).success, false);
+  assert.equal(storeMemorySchema.safeParse({ ...base, acknowledgeInjectionRisk: true }).success, true);
+  assert.equal(storeMemorySchema.safeParse({ ...base, unexpected_field_for_test: true }).success, false);
 });

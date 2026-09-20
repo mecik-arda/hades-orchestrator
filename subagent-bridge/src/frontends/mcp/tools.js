@@ -20,6 +20,29 @@ export const antigravityProbeFields = {
 
 export const antigravityProbeSchema = z.object(antigravityProbeFields).strict();
 
+export const storeMemorySchema = z.object({
+  relativePath: z.string().min(3).max(500),
+  title: z.string().min(1).max(200),
+  content: z.string().min(1).max(60000),
+  tags: z.array(z.string().min(1).max(60)).max(20).default([]),
+  sources: z.array(z.object({
+    title: z.string().min(1).max(300),
+    url: z.string().url().refine((value) => value.startsWith("https://"), "Kaynak URL HTTPS olmalı"),
+    accessedAt: z.string().datetime()
+  })).max(30).default([]),
+  confidence: z.enum(["low", "medium", "high"]),
+  verificationStatus: z.enum(["user-provided", "verified", "provisional"]),
+  memoryType: z.enum(["semantic", "episodic", "procedural", "preference", "decision"]).optional(),
+  stage: z.enum(["draft", "published"]).optional(),
+  reviewAfter: z.string().datetime().optional(),
+  validUntil: z.string().datetime().optional(),
+  taskId: z.string().min(1).max(120),
+  acknowledgeMemoryConflicts: z.boolean().default(false),
+  acknowledgeExpiredMemory: z.boolean().default(false),
+  acknowledgeInjectionRisk: z.boolean().default(false),
+  expectedSha256: z.string().regex(/^[a-f0-9]{64}$/).optional()
+}).strict();
+
 export const publicToolSchemas = {
   runAntigravity: z.object({
     prompt: z.string().min(1).max(60000),

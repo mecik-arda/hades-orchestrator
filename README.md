@@ -218,7 +218,7 @@ Codex defines scope and architecture, runs code and tests, and verifies results.
 
 ## Skills
 
-Canonical skills live under `.agents/skills` and Claude-compatible copies under `.claude/skills`: `commit-at`, `guvenlik-ve-sertlestirme`, `kod-denetleyicisi`, `otomatik-dokumantasyon`, `veri-seti-analizcisi`, `proje-kesif-planlama`, `model-saglayici-ekleme`, `dogrulama-kapisi`, `mcp-sozlesme-denetimi`, `hafiza-vault-bakimi`, `maliyet-ve-butce-denetimi`, `bagimlilik-guvenligi`. Synchronize with `npm run skills:sync`. Global installs copy the same folders into `~/.config/opencode/skills`, `~/.codex/skills`, `~/.claude/skills` and `~/.agents/skills` so the skills are available outside the project; `npm run verify` checks the `.agents` ↔ `.claude` synchronization, while global copies are installed manually and are outside that gate. `proje-kesif-planlama` writes the plan document through `codexLunaEdit` on a single selected file and verifies the change set stays within that file.
+Canonical skills live under `.agents/skills` and Claude-compatible copies under `.claude/skills`: `commit-at`, `guvenlik-ve-sertlestirme`, `kod-denetleyicisi`, `otomatik-dokumantasyon`, `veri-seti-analizcisi`, `proje-kesif-planlama`, `model-saglayici-ekleme`, `dogrulama-kapisi`, `mcp-sozlesme-denetimi`, `hafiza-vault-bakimi`, `maliyet-ve-butce-denetimi`, `bagimlilik-guvenligi`. Synchronize with `npm run skills:sync`. Global installs copy the same folders into `~/.config/opencode/skills`, `~/.codex/skills`, `~/.claude/skills` and `~/.agents/skills` so the skills are available outside the project; `npm run verify` checks the `.agents` ↔ `.claude` synchronization, while global copies are installed manually and are outside that gate. `npm run skills:check-global` compares the four global copies against the canonical `.agents` source and reports equal, missing and different roots; `--strict` treats missing copies as failures. `proje-kesif-planlama` writes the plan document through `codexLunaEdit` on a single selected file and verifies the change set stays within that file.
 
 ## Installation
 
@@ -255,6 +255,7 @@ npm run p2b:e2e               Personal global integration acceptance
 npm test                      All Node.js regression tests
 npm run verify                Local executable, skill, config and Vault verification
 npm run verify:ci             Provider-auth-free CI verification
+npm run skills:check-global   Compare the four global skill copies with the canonical source (--strict fails on missing)
 npm run metrics               Aggregated redacted metric summary
 npm run metrics:prune         Retention-expired rotated metric cleanup
 npm run runs:recent           Show recent runs read-only
@@ -282,6 +283,8 @@ DeepSeek applies promotion to selected files only in `implementer` + `edit` mode
 ## Persistent memory
 
 The Obsidian-compatible local Vault under `memory` is outside Git tracking. `check_persistent_memory`, `search_persistent_memory`, `read_persistent_memory`, `review_persistent_memory`, `analyze_memory_write`, `store_persistent_memory` and `promote_memory` manage secure access, drafts and SHA-256 controlled publishing. DeepSeek cannot access the Vault and cannot write to memory.
+
+The write pipeline rejects secret-like, PII-shaped and prompt-injection content before writing; PII detection is checksum-validated for national ID, IBAN and payment cards. `store_persistent_memory` stores injection-marked content only with `acknowledgeInjectionRisk: true`, and the attempt is recorded as a redacted `QUARANTINE` audit event. `analyze_memory_write` returns a `coverage` block (indexed files, index cap, truncation), and idempotent `promote_memory` returns `auditWritten` and `recoveryRequired` evidence fields.
 
 `npm run memory:doctor` reports frontmatter, soft-expiry, quarantine, hash-integrity, schema-version and audit-race findings read-only; it never deletes, moves, merges or repairs a note. The Vault and runtime state carry explicit schema versions; incompatible state fails closed at startup and requires `npm run state:migrate`.
 
@@ -547,7 +550,7 @@ Codex kapsamı ve mimariyi belirler, kodu ve testleri yürütür, sonuçları do
 
 ## Skill’ler
 
-Kanonik skill’ler `.agents/skills`, Claude uyumlu kopyalar `.claude/skills` altındadır: `commit-at`, `guvenlik-ve-sertlestirme`, `kod-denetleyicisi`, `otomatik-dokumantasyon`, `veri-seti-analizcisi`, `proje-kesif-planlama`, `model-saglayici-ekleme`, `dogrulama-kapisi`, `mcp-sozlesme-denetimi`, `hafiza-vault-bakimi`, `maliyet-ve-butce-denetimi`, `bagimlilik-guvenligi`. Eşitleme: `npm run skills:sync`. Global kurulum aynı klasörleri `~/.config/opencode/skills`, `~/.codex/skills`, `~/.claude/skills` ve `~/.agents/skills` altına kopyalar; `npm run verify` `.agents` ↔ `.claude` eşlemesini doğrular, global kopyalar elle kurulur ve bu kapının dışındadır. `proje-kesif-planlama` plan belgesini `codexLunaEdit` ile seçili tek dosyaya yazar ve değişiklik kümesinin o dosyada kaldığını doğrular.
+Kanonik skill’ler `.agents/skills`, Claude uyumlu kopyalar `.claude/skills` altındadır: `commit-at`, `guvenlik-ve-sertlestirme`, `kod-denetleyicisi`, `otomatik-dokumantasyon`, `veri-seti-analizcisi`, `proje-kesif-planlama`, `model-saglayici-ekleme`, `dogrulama-kapisi`, `mcp-sozlesme-denetimi`, `hafiza-vault-bakimi`, `maliyet-ve-butce-denetimi`, `bagimlilik-guvenligi`. Eşitleme: `npm run skills:sync`. Global kurulum aynı klasörleri `~/.config/opencode/skills`, `~/.codex/skills`, `~/.claude/skills` ve `~/.agents/skills` altına kopyalar; `npm run verify` `.agents` ↔ `.claude` eşlemesini doğrular, global kopyalar elle kurulur ve bu kapının dışındadır. `npm run skills:check-global` dört global kopyayı kanonik `.agents` kaynağıyla karşılaştırır ve eşit, eksik ve farklı kökleri raporlar; `--strict` eksik kopyayı hata sayar. `proje-kesif-planlama` plan belgesini `codexLunaEdit` ile seçili tek dosyaya yazar ve değişiklik kümesinin o dosyada kaldığını doğrular.
 
 ## Kurulum
 
@@ -584,6 +587,7 @@ npm run p2b:e2e               Kişisel global entegrasyon kabulü
 npm test                      Tüm Node.js regresyon testleri
 npm run verify                Yerel executable, skill, config ve Vault doğrulaması
 npm run verify:ci             Provider auth gerektirmeyen CI doğrulaması
+npm run skills:check-global   Dört global skill kopyasını kanonik kaynakla karşılaştırır (--strict eksikte hata verir)
 npm run metrics               Toplu redacted metric özeti
 npm run metrics:prune         Retention dışı rotated metric temizliği
 npm run runs:recent           Son çalışmaları salt-okunur gösterir
@@ -611,6 +615,8 @@ DeepSeek yalnız `implementer` + `edit` modunda seçili dosyalara promotion uygu
 ## Kalıcı hafıza
 
 `memory` klasöründeki Obsidian uyumlu yerel Vault, Git takibinin dışındadır. `check_persistent_memory`, `search_persistent_memory`, `read_persistent_memory`, `review_persistent_memory`, `analyze_memory_write`, `store_persistent_memory` ve `promote_memory` güvenli erişim, taslak ve SHA-256 kontrollü yayını yönetir. DeepSeek Vault’a erişemez ve belleğe yazamaz.
+
+Yazma hattı secret benzeri, PII biçimli ve prompt injection içeren metni yazımdan önce reddeder; PII tespiti ulusal kimlik, IBAN ve ödeme kartı için checksum doğrulamalıdır. `store_persistent_memory` injection işaretli içeriği yalnız `acknowledgeInjectionRisk: true` ile saklar ve deneme redacted `QUARANTINE` audit olayı olarak kaydedilir. `analyze_memory_write` `coverage` bloğu (indekslenen dosya, indeks üst sınırı, kırpma), idempotent `promote_memory` ise `auditWritten` ve `recoveryRequired` kanıt alanları döndürür.
 
 `npm run memory:doctor` frontmatter, soft-expiry, karantina, hash bütünlüğü, şema sürümü ve audit yarış bulgularını salt-okunur raporlar; hiçbir notu silmez, taşımaz, birleştirmez veya onarmaz. Vault ve runtime state açık şema sürümleri taşır; uyumsuz state başlangıçta fail-closed olur ve `npm run state:migrate` gerektirir.
 
