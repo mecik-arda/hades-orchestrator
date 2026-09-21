@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createAdapter } from "../subagent-bridge/src/adapters/agent-adapter-base.js";
+import { extractAntigravityResult } from "../subagent-bridge/src/adapters/antigravity-adapter.js";
 import { createSuccessSubagentResult, createFailureSubagentResult } from "../subagent-bridge/src/schemas/core-schemas.js";
 import { createUntrustedWebEvidenceEnvelope } from "../subagent-bridge/src/web-evidence.js";
 import { createBridgeRuntime } from "../subagent-bridge/src/runtime/bridge-runtime.js";
@@ -221,6 +222,37 @@ test("WP2-RUNTIME-10: webEvidenceRequired profili duz metni reddeder, carrier ka
   assert.equal(repaired.ok, true);
   assert.equal(repaired.webEvidence, null);
   assert.equal(repaired.metrics.webEvidenceRepair, true);
+});
+
+test("WP2-RUNTIME-16: iç içe carrier kanıtı adapter sonrası strict şemadan geçer", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-evidence-nested-carrier-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const nestedInvalid = extractAntigravityResult(JSON.stringify({
+    status: "SUCCESS",
+    structured_output: {
+      result: JSON.stringify({ result: "nested report", webEvidence: { sourceUrl: "https://example.com/docs", excerpts: [] } }),
+      webEvidence: null
+    }
+  }));
+  const invalidAdapter = createFakeAdapter(async (request) => createSuccessSubagentResult("antigravity", request.model, { result: nestedInvalid }));
+  const invalidRuntime = createBridgeRuntime({ configuration: createConfiguration(root), adapters: { antigravity: invalidAdapter }, sleep: async () => {} });
+  const rejected = await invalidRuntime.run(runRequest(root));
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.reason, "web_evidence_invalid");
+
+  const nestedValid = extractAntigravityResult(JSON.stringify({
+    status: "SUCCESS",
+    structured_output: {
+      result: JSON.stringify({ result: "nested report", webEvidence: evidenceInput() }),
+      webEvidence: null
+    }
+  }));
+  const validAdapter = createFakeAdapter(async (request) => createSuccessSubagentResult("antigravity", request.model, { result: nestedValid }));
+  const validRuntime = createBridgeRuntime({ configuration: createConfiguration(root), adapters: { antigravity: validAdapter }, sleep: async () => {} });
+  const accepted = await validRuntime.run(runRequest(root));
+  assert.equal(accepted.ok, true, JSON.stringify(accepted));
+  assert.equal(accepted.result, "nested report");
+  assert.equal(accepted.webEvidence.evidenceSourceType, "untrusted_web");
 });
 
 test("WP2-RUNTIME-11: webIntentHeuristics acikken web niyetli duz metin onarilmaz", async (t) => {

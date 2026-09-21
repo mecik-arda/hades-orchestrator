@@ -869,6 +869,43 @@ test("W1: bekleyen mutation günlüğü idempotent promote sonucunu recovery ger
   assert.equal(repeated.recoveryRequired, true);
 });
 
+test("W1: geçerli bekleyen mutation niyeti idempotent promote sonucunu recovery gerektirir yapar", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-idempotent-pending-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const draft = storePersistentMemory(configuration, createMemoryInput({
+    relativePath: "00_Inbox/Bekleyen.md",
+    title: "Bekleyen notu",
+    content: "Geçerli bekleyen niyet kontrolü için yeterince uzun ve benzersiz taslak gövdesi.",
+    stage: "draft"
+  }));
+  const input = {
+    sourceRelativePath: draft.relativePath,
+    targetRelativePath: "03_Resources/Orkestrasyon/Bekleyen.md",
+    expectedSourceSha256: draft.sha256
+  };
+  promotePersistentMemory(configuration, input);
+  const journalDirectory = path.join(configuration.statePaths.state, "memory-mutations");
+  const noteIdHash = crypto.createHash("sha256")
+    .update(`${path.join("00_Inbox", "Bekleyen.md")}:${path.join("03_Resources", "Orkestrasyon", "Bekleyen.md")}`)
+    .digest("hex");
+  fs.mkdirSync(journalDirectory, { recursive: true });
+  fs.writeFileSync(path.join(journalDirectory, `${noteIdHash}.json`), JSON.stringify({
+    journalId: noteIdHash,
+    kind: "promote",
+    event: "PROMOTE",
+    noteIdHash,
+    sourceRelativePath: "00_Inbox/Bekleyen.md",
+    targetRelativePath: "03_Resources/Orkestrasyon/Bekleyen.md",
+    oldSha256: "1".repeat(64),
+    newSha256: "2".repeat(64)
+  }), "utf8");
+  const repeated = promotePersistentMemory(configuration, input);
+  assert.equal(repeated.idempotent, true);
+  assert.equal(repeated.recoveryRequired, true);
+  assert.equal(repeated.auditWritten, true);
+});
+
 test("W2: store ve analyze PII desenlerini checksum doğrulamasıyla reddeder", (context) => {
   const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-pii-"));
   context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
@@ -915,6 +952,77 @@ test("W2: store ve analyze PII desenlerini checksum doğrulamasıyla reddeder", 
     })),
     /kişisel kimlik bilgisi/
   );
+  assert.throws(
+    () => storePersistentMemory(configuration, createMemoryInput({
+      relativePath: "00_Inbox/kisi@example.com-notu.md",
+      stage: "draft",
+      content: "Yol üzerinden PII reddi için yeterince uzun ve benzersiz taslak gövdesi."
+    })),
+    /kişisel kimlik bilgisi/
+  );
+  assert.throws(
+    () => analyzePersistentMemoryWrite(configuration, {
+      relativePath: "00_Inbox/kisi@example.com-notu.md",
+      title: "İletişim notu",
+      content: "Yol üzerinden analyze PII reddi için yeterince uzun ve benzersiz taslak gövdesi."
+    }),
+    /kişisel kimlik bilgisi/
+  );
+});
+
+test("W2: relativePath üzerindeki kesin secret imzası reddedilir", (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-memory-path-secret-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = createConfiguration(vaultRootPath);
+  const secretPath = (prefix, character, count) => `00_Inbox/${prefix}${character.repeat(count)}-notu.md`;
+  assert.throws(
+    () => storePersistentMemory(configuration, createMemoryInput({
+      relativePath: secretPath("sk-", "a", 20),
+      stage: "draft",
+      content: "Yol üzerinden secret reddi için yeterince uzun ve benzersiz taslak gövdesi."
+    })),
+    /secret benzeri/
+  );
+  assert.throws(
+    () => analyzePersistentMemoryWrite(configuration, {
+      relativePath: secretPath("sk-", "a", 20),
+      title: "Anahtar notu",
+      content: "Yol üzerinden analyze secret reddi için yeterince uzun ve benzersiz taslak gövdesi."
+    }),
+    /secret benzeri/
+  );
+  assert.throws(
+    () => storePersistentMemory(configuration, createMemoryInput({
+      relativePath: secretPath("github_pat_", "a", 24),
+      stage: "draft",
+      content: "Yol üzerinden GitHub token reddi için yeterince uzun ve benzersiz taslak gövdesi."
+    })),
+    /secret benzeri/
+  );
+  assert.throws(
+    () => storePersistentMemory(configuration, createMemoryInput({
+      relativePath: secretPath("glpat-", "a", 16),
+      stage: "draft",
+      content: "Yol üzerinden GitLab token reddi için yeterince uzun ve benzersiz taslak gövdesi."
+    })),
+    /secret benzeri/
+  );
+  assert.throws(
+    () => storePersistentMemory(configuration, createMemoryInput({
+      relativePath: secretPath("ASIA", "B", 16),
+      stage: "draft",
+      content: "Yol üzerinden AWS geçici anahtar reddi için yeterince uzun ve benzersiz taslak gövdesi."
+    })),
+    /secret benzeri/
+  );
+  assert.throws(
+    () => storePersistentMemory(configuration, createMemoryInput({
+      relativePath: secretPath("npm_", "a", 30),
+      stage: "draft",
+      content: "Yol üzerinden npm token reddi için yeterince uzun ve benzersiz taslak gövdesi."
+    })),
+    /secret benzeri/
+  );
 });
 
 test("W2: checksum taşımayan benzer diziler PII sayılmaz", (context) => {
@@ -948,6 +1056,14 @@ test("W3: injection şüphesi onaysız store edilemez ve onaylı yazım redacted
   assert.ok(quarantine);
   assert.match(quarantine.riskCategory, /instruction_override/);
   assert.equal(auditText.includes("ignore previous"), false);
+  assert.throws(
+    () => storePersistentMemory(configuration, createMemoryInput({
+      relativePath: "00_Inbox/ignore-previous-instructions.md",
+      stage: "draft",
+      content: "Yol üzerinden injection reddi için yeterince uzun ve benzersiz taslak gövdesi."
+    })),
+    /prompt injection/
+  );
 });
 
 test("W4: analyze kapsam görünürlüğü indeks ve okuma sınırlarını raporlar", (context) => {

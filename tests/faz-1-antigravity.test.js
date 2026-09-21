@@ -306,6 +306,36 @@ test("AG-AC-16b: carrier şeması zorunlu alanları ve serbest kanıt alanını 
   assert.equal(normalizeCarrierStructuredOutput({ webEvidence: null }), null);
 });
 
+test("AG-AC-16d: iç içe carrier metni sınırlı derinlikte açılır", () => {
+  assert.equal(
+    normalizeCarrierStructuredOutput({ result: JSON.stringify({ result: "READY", webEvidence: null }), webEvidence: null }),
+    JSON.stringify({ result: "READY", webEvidence: null })
+  );
+  const innerEvidence = { sourceUrl: "https://example.com", excerpts: ["parca"] };
+  assert.equal(
+    normalizeCarrierStructuredOutput({ result: JSON.stringify({ result: "ok", webEvidence: innerEvidence }) }),
+    JSON.stringify({ result: "ok", webEvidence: innerEvidence })
+  );
+  assert.equal(
+    normalizeCarrierStructuredOutput({ result: JSON.stringify({ result: "ok", webEvidence: innerEvidence }), webEvidence: null }),
+    JSON.stringify({ result: "ok", webEvidence: innerEvidence })
+  );
+  const levelThree = JSON.stringify({ result: "deep" });
+  const levelTwo = JSON.stringify({ result: levelThree });
+  assert.equal(
+    normalizeCarrierStructuredOutput({ result: JSON.stringify({ result: levelTwo }) }),
+    JSON.stringify({ result: levelThree, webEvidence: null })
+  );
+  assert.equal(
+    normalizeCarrierStructuredOutput({ result: JSON.stringify({ result: "x", tool: "read_url" }) }),
+    JSON.stringify({ result: JSON.stringify({ result: "x", tool: "read_url" }), webEvidence: null })
+  );
+  assert.equal(
+    normalizeCarrierStructuredOutput({ result: "not json" }),
+    JSON.stringify({ result: "not json", webEvidence: null })
+  );
+});
+
 test("AG-AC-16c: carrier şema dosyası yazma hatasında geçici dizin temizlenir", () => {
   const directoryCount = () => fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith("agy-carrier-schema-")).length;
   const before = directoryCount();

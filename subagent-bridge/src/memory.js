@@ -14,6 +14,10 @@ const secretPatterns = [
   /\bsk-[A-Za-z0-9_-]{16,}\b/,
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/i,
   /\bAKIA[0-9A-Z]{16}\b/,
+  /\bASIA[0-9A-Z]{16}\b/,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
+  /\bglpat-[A-Za-z0-9_-]{16,}\b/,
+  /\bnpm_[A-Za-z0-9]{30,}\b/,
   /\bxox[baprs]-[A-Za-z0-9-]{12,}\b/i,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/,
   /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}\b/i,
@@ -147,7 +151,11 @@ function hasHighEntropyToken(content) {
 }
 
 export function hasSecretLikeContent(content) {
-  return secretPatterns.some((pattern) => pattern.test(content)) || hasHighEntropyToken(content);
+  return hasSecretPatternContent(content) || hasHighEntropyToken(content);
+}
+
+function hasSecretPatternContent(content) {
+  return secretPatterns.some((pattern) => pattern.test(content));
 }
 
 function detectInjectionCategories(content) {
@@ -216,8 +224,15 @@ function detectPiiCategories(content) {
   return [...categories];
 }
 
-function combinedMemoryContent(input) {
-  return [input.title, input.content, input.taskId, ...input.tags, ...input.sources.flatMap((source) => [source.title, source.url])].join("\n");
+function combinedMemoryContent(input, { includeRelativePath = false } = {}) {
+  return [
+    input.title,
+    input.content,
+    input.taskId,
+    ...(includeRelativePath && typeof input.relativePath === "string" ? [input.relativePath] : []),
+    ...(Array.isArray(input.tags) ? input.tags : []),
+    ...(Array.isArray(input.sources) ? input.sources.flatMap((source) => [source.title, source.url]) : [])
+  ].join("\n");
 }
 
 function escapeXmlText(content) {
@@ -409,21 +424,23 @@ function requireSafeMemoryContent(input) {
     }
   }
   const combinedContent = combinedMemoryContent(input);
-  if (hasSecretLikeContent(combinedContent)) {
+  const combinedWithPath = combinedMemoryContent(input, { includeRelativePath: true });
+  if (hasSecretLikeContent(combinedContent) || hasSecretPatternContent(combinedWithPath)) {
     throw new Error("Hafıza notu secret benzeri içerik barındırıyor");
   }
-  const piiCategories = detectPiiCategories(combinedContent);
+  const piiCategories = detectPiiCategories(combinedWithPath);
   if (piiCategories.length > 0) {
     throw new Error(`Hafıza notu kişisel kimlik bilgisi içeriyor: ${piiCategories.join(", ")}`);
   }
 }
 
 function requireSafeProposedMemoryContent(input) {
-  const combinedContent = [input.title, input.content].join("\n");
-  if (hasSecretLikeContent(combinedContent)) {
+  const combinedContent = combinedMemoryContent(input);
+  const combinedWithPath = combinedMemoryContent(input, { includeRelativePath: true });
+  if (hasSecretLikeContent(combinedContent) || hasSecretPatternContent(combinedWithPath)) {
     throw new Error("Hafıza notu secret benzeri içerik barındırıyor");
   }
-  const piiCategories = detectPiiCategories(combinedContent);
+  const piiCategories = detectPiiCategories(combinedWithPath);
   if (piiCategories.length > 0) {
     throw new Error(`Hafıza notu kişisel kimlik bilgisi içeriyor: ${piiCategories.join(", ")}`);
   }
@@ -1441,7 +1458,7 @@ export function storePersistentMemory(configuration, input) {
   } catch {
   }
   const { vaultRoot, candidatePath, normalizedRelativePath } = resolveMemoryPath(configuration, input.relativePath, true);
-  const injectionCategories = detectInjectionCategories(combinedMemoryContent(input));
+  const injectionCategories = detectInjectionCategories(combinedMemoryContent(input, { includeRelativePath: true }));
   if (injectionCategories.length > 0) {
     recordMemorySecurityEvent(configuration, "QUARANTINE", normalizedRelativePath.replace(/\\/g, "/"), calculateSha256(input.content), injectionCategories.join(","));
     if (input.acknowledgeInjectionRisk !== true) {

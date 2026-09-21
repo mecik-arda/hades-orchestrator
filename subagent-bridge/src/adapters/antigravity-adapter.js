@@ -80,10 +80,32 @@ function normalizeCarrierEvidence(value) {
   return value;
 }
 
+function parseNestedCarrierText(text) {
+  if (typeof text !== "string" || !text.includes("{")) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  if (Object.keys(parsed).some((key) => key !== "result" && key !== "webEvidence")) return null;
+  if (typeof parsed.result !== "string" || parsed.result.trim().length === 0) return null;
+  return parsed;
+}
+
 function normalizeCarrierStructuredOutput(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   if (typeof value.result !== "string" || value.result.trim().length === 0) return null;
-  return JSON.stringify({ result: value.result, webEvidence: normalizeCarrierEvidence(value.webEvidence) });
+  let resultText = value.result;
+  let evidenceValue = value.webEvidence;
+  for (let depth = 0; depth < 2; depth += 1) {
+    const nested = parseNestedCarrierText(resultText);
+    if (!nested) break;
+    resultText = nested.result;
+    if (evidenceValue === undefined || evidenceValue === null) evidenceValue = nested.webEvidence;
+  }
+  return JSON.stringify({ result: resultText, webEvidence: normalizeCarrierEvidence(evidenceValue) });
 }
 
 const activeExecutionHandles = new Map();
