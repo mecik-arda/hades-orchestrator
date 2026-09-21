@@ -5,6 +5,8 @@
 - Kapsam: Obsidian Vault tabanli kalici hafizanin, buyuk ve cok adimli calismalarda context toplama, karar verme ve devir teslim sureclerini iyilestirmesi
 - Kaynaklar: https://github.com/avenoxai/avenoxbeyin, https://github.com/umutyalcin-pen/second-brainbro, https://www.youtube.com/watch?v=4vWlWHDol-g, https://www.linkedin.com/posts/umutyalcinsec_yapayzeka-siberg%C3%BCvenlik-obsidian-activity-7494480266766479360-V2rI
 
+> Durum notu (2026-09-21): Aşama 1 tamamlandı (`docs/reports/kalici-hafiza-piyasa-arastirma-2026-08-21.md` referans raporu ve SHA-256 kontrollü Vault özeti yayımlandı). Aşama 2-5 açıktır; gerçek çok oturumlu iş doğduğunda ele alınır. Üstteki "uygulanmadı" ifadesi planın ilk yazım anına aittir.
+
 ## Yurutme Ozeti
 
 - Arastirilan second-brain projeleri, duz Markdown dosyalari ile oturumlar arasi sureklilik sagliyor; upstream proje bu dosyalari Claude Code hook'lariyla oturum basinda context'e ekliyor.

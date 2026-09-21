@@ -1,6 +1,6 @@
 # Katkı rehberi
 
-Katkılar açıktır. Başlamadan önce mimari dokümanları ve güvenlik modelini okuyun: `docs/architecture` ve `SECURITY.md`.
+Katkılar açıktır. Başlamadan önce güvenlik modelini (`SECURITY.md`) ve ilgili mimari/denetim dokümanlarını okuyun: public dağıtımda `docs/architecture`, kaynak repoda `docs/plans/yapilanlar` ve `docs/reports/`.
 
 ## Geliştirme ortamı
 
