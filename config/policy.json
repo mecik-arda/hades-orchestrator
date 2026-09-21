@@ -135,8 +135,8 @@
                         "maxRetryCostUsd":  1,
                         "maxRetryCostReserveUsd":  0.1,
                         "maxUnknownAttemptCostUsd":  0.1,
-                        "monthlyCostLimitUsd":  50,
-                        "costBudgetEnforced":  true,
+                        "monthlyCostLimitUsd":  100,
+                        "costBudgetEnforced":  false,
                         "warningThresholdPercent":  80
                     },
     "observability":  {

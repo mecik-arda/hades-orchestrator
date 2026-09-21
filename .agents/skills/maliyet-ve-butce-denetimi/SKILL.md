@@ -15,14 +15,15 @@ Orkestrasyon köprüsünün maliyet, güvenilirlik ve hizmet seviyesi telemetris
 
 ## Komutlar
 
-- `npm run budget` güncel bütçe, harcama ve rezerv durumunu gösterir.
+- `npm run budget` güncel bütçe, gözlenen/tahmini maliyet, kapsama ve rezerv durumunu gösterir.
 - `npm run metrics` sağlayıcı, percentile ve cache özetini verir.
 - `npm run runs:recent` son koşuların yapısal görünümünü verir.
 
 ## Denetim maddeleri
 
 - Günlük ve aylık limitler; toplam harcama, kalan tutar ve aktif rezervler tutarlı mı.
-- `costBudgetEnforced` değeri ile hard-cap uygulaması örtüşüyor mu.
+- `costBudgetEnforced` ile admission davranışı örtüşüyor mu; varsayılan bilgilendirme modunda hard-cap uygulanmaz, aşım yalnız raporlanır.
+- Gözlenen ve tahmini maliyet ayrı mı; kapsama oranı ve bilinmeyen çalıştırma sayısı raporlanıyor mu.
 - Retry maliyet rezervi ve bilinmeyen maliyet sınırı uygulanıyor mu; rezerv açık settlement ile uzlaşıyor mu.
 - Circuit breaker sağlayıcı ve gerekiyorsa model bazında doğru açılıyor mu; half-open tek probe davranışı korunuyor mu.
 - SLO penceresinde availability ve gecikme p95 eşikleri; `minimumRuns` altında `insufficient_data` dönüyor mu.
@@ -30,7 +31,8 @@ Orkestrasyon köprüsünün maliyet, güvenilirlik ve hizmet seviyesi telemetris
 
 ## Aşım davranışı
 
-- Limit aşımında fail-closed davran; yeni isteği bütçe dışına taşırma.
+- Enforcement açıkken limit aşımında fail-closed davran; yeni isteği bütçe dışına taşırma.
+- Bilgilendirme modunda aşımı raporla; yeni ücretli çalışma için açık kullanıcı onayı iste ve kaydı `docs/reports/UCRETLI_CALISMA_ONAY_KAYDI.md` içine işle.
 - Circuit açıkken fallback yapma veya yalnız policy'de tanımlı hedeflere yönlendir.
 - Bozuk metrik satırlarını harcama olarak sayma; `droppedMetricRecords` ile raporla.
 
@@ -38,7 +40,7 @@ Orkestrasyon köprüsünün maliyet, güvenilirlik ve hizmet seviyesi telemetris
 
 - Metrik ve bütçe çıktısında görev kimliği, workspace yolu, prompt veya secret bulunmaz; yalnız redakte alanlar raporlanır.
 - Rakamları yorumla, karar öner; geri alınamaz işlem yapma.
-- Doğrulanamayan maliyet `not_observable` olarak işaretlenir.
+- Doğrulanamayan maliyet `not_observable` olarak işaretlenir; kapsama oranı olmadan toplam harcama karar dayanağı sayılmaz.
 
 ## Bitirme koşulu
 

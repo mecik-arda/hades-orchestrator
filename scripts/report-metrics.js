@@ -83,10 +83,15 @@ export function summarizeMetrics(records, sloPolicy) {
   };
   const routingByProfile = {};
   for (const record of records.filter((entry) => entry.profile && entry.executionIdHash && entry.mode === "read_only" && entry.outcomeStatus === "completed" && routingDisposition.get(entry.executionIdHash) === "eligible_real_user")) {
-    const aggregate = routingByProfile[record.profile] ||= { runs: 0, labeledRuns: 0, useful: 0, partial: 0, notUseful: 0, totalDurationMs: 0, totalCostUsd: 0 };
+    const aggregate = routingByProfile[record.profile] ||= { runs: 0, labeledRuns: 0, useful: 0, partial: 0, notUseful: 0, totalDurationMs: 0, totalCostUsd: 0, knownCostRuns: 0, unknownCostRuns: 0 };
     aggregate.runs += 1;
     aggregate.totalDurationMs += record.usage?.durationMs || 0;
-    aggregate.totalCostUsd += record.usage?.totalCostUsd || 0;
+    if (Number.isFinite(record.usage?.totalCostUsd)) {
+      aggregate.totalCostUsd += record.usage.totalCostUsd;
+      aggregate.knownCostRuns += 1;
+    } else {
+      aggregate.unknownCostRuns += 1;
+    }
     const outcome = routingFeedback.get(record.executionIdHash);
     if (outcome === "useful") aggregate.useful += 1;
     if (outcome === "partial") aggregate.partial += 1;
@@ -98,6 +103,15 @@ export function summarizeMetrics(records, sloPolicy) {
     aggregate.usefulRate = aggregate.labeledRuns > 0 ? Number((aggregate.useful / aggregate.labeledRuns).toFixed(4)) : null;
     aggregate.averageDurationMs = aggregate.runs > 0 ? Math.round(aggregate.totalDurationMs / aggregate.runs) : 0;
     aggregate.totalCostUsd = Number(aggregate.totalCostUsd.toFixed(6));
+    aggregate.costMeasurement = {
+      measurementStatus: (aggregate.knownCostRuns + aggregate.unknownCostRuns) === 0 ? "no_data" : (aggregate.unknownCostRuns > 0 ? "not_observable" : "observed"),
+      observedCostUsd: aggregate.totalCostUsd,
+      knownCostRuns: aggregate.knownCostRuns,
+      unknownCostRuns: aggregate.unknownCostRuns,
+      costCoverageRatio: (aggregate.knownCostRuns + aggregate.unknownCostRuns) === 0 ? 1 : Number((aggregate.knownCostRuns / (aggregate.knownCostRuns + aggregate.unknownCostRuns)).toFixed(4))
+    };
+    delete aggregate.knownCostRuns;
+    delete aggregate.unknownCostRuns;
     aggregate.decisionReady = aggregate.labeledRuns >= 15;
     delete aggregate.totalDurationMs;
   }
@@ -120,7 +134,12 @@ export function summarizeMetrics(records, sloPolicy) {
   const summary = records.reduce((aggregate, record) => {
     aggregate.runCount += 1;
     aggregate.totalDurationMs += record.usage?.durationMs || 0;
-    aggregate.totalCostUsd += record.usage?.totalCostUsd || 0;
+    if (Number.isFinite(record.usage?.totalCostUsd)) {
+      aggregate.totalCostUsd += record.usage.totalCostUsd;
+      aggregate.knownCostRuns += 1;
+    } else {
+      aggregate.unknownCostRuns += 1;
+    }
     aggregate.totalAttempts += record.attempts?.length ?? 1;
     aggregate.outcomes[record.outcomeStatus] = (aggregate.outcomes[record.outcomeStatus] || 0) + 1;
     if (record.failureClass) {
@@ -131,6 +150,8 @@ export function summarizeMetrics(records, sloPolicy) {
   runCount: 0,
   totalDurationMs: 0,
   totalCostUsd: 0,
+  knownCostRuns: 0,
+  unknownCostRuns: 0,
   totalAttempts: 0,
   outcomes: {},
   failureClasses: {}
@@ -190,6 +211,13 @@ export function summarizeMetrics(records, sloPolicy) {
     p50DurationMs: percentile(0.5),
     p95DurationMs: percentile(0.95),
     totalCostUsd: Number(summary.totalCostUsd.toFixed(6)),
+    costMeasurement: {
+      measurementStatus: (summary.knownCostRuns + summary.unknownCostRuns) === 0 ? "no_data" : (summary.unknownCostRuns > 0 ? "not_observable" : "observed"),
+      observedCostUsd: Number(summary.totalCostUsd.toFixed(6)),
+      knownCostRuns: summary.knownCostRuns,
+      unknownCostRuns: summary.unknownCostRuns,
+      costCoverageRatio: (summary.knownCostRuns + summary.unknownCostRuns) === 0 ? 1 : Number((summary.knownCostRuns / (summary.knownCostRuns + summary.unknownCostRuns)).toFixed(4))
+    },
     averageAttempts: summary.runCount > 0 ? Number((summary.totalAttempts / summary.runCount).toFixed(2)) : 0,
     outcomes: summary.outcomes,
     failureClasses: summary.failureClasses,

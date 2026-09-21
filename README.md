@@ -101,7 +101,7 @@ The result is an untrusted observation with `sourceClass: "mcp_resource"`. `work
 
 ### Personal configuration
 
-It passes `configVersion: 2` schema validation; unknown or missing fields are rejected. Providers are constrained by `defaultMode`/`allowedModes`. `reliability.monthlyCostLimitUsd: 50` and `warningThresholdPercent: 80` are enforced; `npm run budget` shows the current state. Set `reliability.costBudgetEnforced: false` to disable admission-time budget enforcement while spend tracking and snapshots stay active; the default is enforced. The limit is checked atomically at reservation time against active reservations and recorded spend; a late settlement after an expired reservation is still counted, and any exceedance is surfaced as `dailyOverageUsd`/`monthlyOverageUsd`. Codex `allowNonGitWorkspace` is enabled only through the personal machine config; DeepSeek preserves denied-root and Zod validation without requiring a Git repository.
+It passes `configVersion: 2` schema validation; unknown or missing fields are rejected. Providers are constrained by `defaultMode`/`allowedModes`. `reliability.monthlyCostLimitUsd: 100` and `warningThresholdPercent: 80` are advisory references; admission-time budget enforcement is off by default (`costBudgetEnforced: false`) and can be enabled explicitly. `npm run budget` shows the snapshot, separating observed cost, estimated/reserved cost, run counts and cost coverage; unknown cost is reported as `not_observable` and is never counted as zero. When enforcement is enabled, the limit is checked atomically at reservation time against active reservations and recorded spend; a late settlement after an expired reservation is still counted, and any exceedance is surfaced as `dailyOverageUsd`/`monthlyOverageUsd`. Codex `allowNonGitWorkspace` is enabled only through the personal machine config; DeepSeek preserves denied-root and Zod validation without requiring a Git repository.
 
 ### Canonical routing
 
@@ -249,7 +249,7 @@ npm run accept:edit:deepseek  DeepSeek Pro controlled promotion acceptance (temp
 npm run accept:edit:glm       GLM 5.2 controlled promotion acceptance (temporary workspace)
 npm run accept:read:glm       GLM 5.2 read-only acceptance (temporary workspace)
 npm run smoke                 MCP tool schema and runtime health smoke test
-npm run budget                Daily/monthly budget limit snapshot
+npm run budget                Advisory budget, observed/estimated cost and coverage snapshot
 npm run p0:e2e                Trusted workspace portability acceptance
 npm run p2b:e2e               Personal global integration acceptance
 npm test                      All Node.js regression tests
@@ -433,7 +433,7 @@ Sonuç `sourceClass: "mcp_resource"` ile güvenilmeyen bir gözlemdir. `workspac
 
 ### Kişisel yapılandırma
 
-`configVersion: 2` şema doğrulamasından geçer; bilinmeyen veya eksik alan reddedilir. Provider’lar `defaultMode`/`allowedModes` ile sınırlıdır. `reliability.monthlyCostLimitUsd: 50` ve `warningThresholdPercent: 80` uygulanır; `npm run budget` anlık durumu gösterir. `reliability.costBudgetEnforced: false` admission-time bütçe uygulamasını devre dışı bırakır; harcama takibi ve anlık görünüm aktif kalır, varsayılan uygulanır. Limit, rezervasyon anında aktif rezervasyonlar ve kayıtlı harcamaya göre atomik kontrol edilir; süresi dolmuş rezervasyondan sonra gelen geç settlement yine sayılır ve aşım `dailyOverageUsd`/`monthlyOverageUsd` olarak raporlanır. Codex `allowNonGitWorkspace` yalnız kişisel machine config ile açılır; DeepSeek Git repository zorunluluğu olmadan denied-root ve Zod doğrulamasını korur.
+`configVersion: 2` şema doğrulamasından geçer; bilinmeyen veya eksik alan reddedilir. Provider’lar `defaultMode`/`allowedModes` ile sınırlıdır. `reliability.monthlyCostLimitUsd: 100` ve `warningThresholdPercent: 80` bilgilendirme referansıdır; admission-time bütçe uygulaması varsayılan olarak kapalıdır (`costBudgetEnforced: false`) ve açıkça etkinleştirilebilir. `npm run budget` gözlenen maliyeti, tahmini/rezerv maliyeti, çalıştırma sayılarını ve maliyet kapsama oranını ayrı gösterir; bilinmeyen maliyet `not_observable` olarak raporlanır ve asla sıfır sayılmaz. Uygulama etkinken limit, rezervasyon anında aktif rezervasyonlar ve kayıtlı harcamaya göre atomik kontrol edilir; süresi dolmuş rezervasyondan sonra gelen geç settlement yine sayılır ve aşım `dailyOverageUsd`/`monthlyOverageUsd` olarak raporlanır. Codex `allowNonGitWorkspace` yalnız kişisel machine config ile açılır; DeepSeek Git repository zorunluluğu olmadan denied-root ve Zod doğrulamasını korur.
 
 ### Kanonik yönlendirme
 
@@ -581,7 +581,7 @@ npm run accept:edit:deepseek  DeepSeek Pro kontrollü promotion kabulü (geçici
 npm run accept:edit:glm       GLM 5.2 kontrollü promotion kabulü (geçici workspace)
 npm run accept:read:glm       GLM 5.2 salt-okunur kabulü (geçici workspace)
 npm run smoke                 MCP araç şeması ve runtime health smoke testi
-npm run budget                Günlük/aylık bütçe limiti anlık görünümü
+npm run budget                Bilgilendirme amaçlı bütçe, gözlenen/tahmini maliyet ve kapsama görünümü
 npm run p0:e2e                Trusted workspace portability kabulü
 npm run p2b:e2e               Kişisel global entegrasyon kabulü
 npm test                      Tüm Node.js regresyon testleri

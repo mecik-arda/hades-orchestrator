@@ -966,7 +966,7 @@ function foldCostBudgetState(records, now = Date.now()) {
   const state = new Map();
   const ensure = (executionIdHash) => {
     if (!state.has(executionIdHash)) {
-      state.set(executionIdHash, { reservedCostUsd: null, expiresAt: null, chargedCostUsd: null, executionCostUsd: null, settled: false, expired: false, completed: false });
+      state.set(executionIdHash, { reservedCostUsd: null, expiresAt: null, chargedCostUsd: null, executionCostUsd: null, executionCostKnown: false, settlementCostKnown: false, settled: false, expired: false, completed: false });
     }
     return state.get(executionIdHash);
   };
@@ -979,12 +979,15 @@ function foldCostBudgetState(records, now = Date.now()) {
     } else if (record.recordType === "cost_settlement") {
       const entry = ensure(record.executionIdHash);
       entry.settled = true;
+      entry.settlementCostKnown = record.actualCostKnown === true;
       entry.chargedCostUsd = Number.isFinite(record.chargedCostUsd) ? record.chargedCostUsd : entry.reservedCostUsd;
     } else if (record.recordType === "cost_reservation_expiry") {
       ensure(record.executionIdHash).expired = true;
     } else if (!record.recordType) {
       const entry = ensure(record.executionIdHash);
-      entry.executionCostUsd = Number.isFinite(record.usage?.totalCostUsd) ? record.usage.totalCostUsd : 0;
+      const executionCostKnown = Number.isFinite(record.usage?.totalCostUsd);
+      entry.executionCostUsd = executionCostKnown ? record.usage.totalCostUsd : 0;
+      entry.executionCostKnown = executionCostKnown;
       entry.completed = true;
     }
   }
@@ -995,22 +998,57 @@ function foldCostBudgetState(records, now = Date.now()) {
   return state;
 }
 
-function periodCost(records, periodStart, now = Date.now()) {
+function periodCostBreakdown(records, periodStart, now = Date.now()) {
   const scoped = records.filter((record) => {
     const recordedAt = Date.parse(record.recordedAt);
     return Number.isFinite(recordedAt) && recordedAt >= periodStart;
   });
   let total = 0;
+  let observedCostUsd = 0;
+  let estimatedCostUsd = 0;
+  let executedRuns = 0;
+  let knownCostRuns = 0;
+  let unknownCostRuns = 0;
   for (const entry of foldCostBudgetState(scoped, now).values()) {
+    if (entry.completed) executedRuns += 1;
     if (entry.settled) {
-      total += Number.isFinite(entry.chargedCostUsd) ? entry.chargedCostUsd : (entry.reservedCostUsd || 0);
-    } else if (entry.executionCostUsd !== null) {
+      const chargedCostUsd = Number.isFinite(entry.chargedCostUsd) ? entry.chargedCostUsd : (entry.reservedCostUsd || 0);
+      total += chargedCostUsd;
+      if (entry.settlementCostKnown === true) {
+        observedCostUsd += chargedCostUsd;
+        knownCostRuns += 1;
+      } else {
+        estimatedCostUsd += chargedCostUsd;
+        unknownCostRuns += 1;
+      }
+    } else if (entry.completed) {
       total += entry.executionCostUsd;
+      if (entry.executionCostKnown) {
+        observedCostUsd += entry.executionCostUsd;
+        knownCostRuns += 1;
+      } else {
+        unknownCostRuns += 1;
+      }
     } else if (!entry.expired && entry.reservedCostUsd !== null) {
       total += entry.reservedCostUsd;
+      estimatedCostUsd += entry.reservedCostUsd;
     }
   }
-  return total;
+  const measuredRuns = knownCostRuns + unknownCostRuns;
+  return {
+    total,
+    observedCostUsd,
+    estimatedCostUsd,
+    executedRuns,
+    knownCostRuns,
+    unknownCostRuns,
+    costCoverageRatio: measuredRuns === 0 ? 1 : Number((knownCostRuns / measuredRuns).toFixed(4)),
+    costMeasurementStatus: unknownCostRuns > 0 ? "not_observable" : (measuredRuns === 0 ? "no_data" : "observed")
+  };
+}
+
+function periodCost(records, periodStart, now = Date.now()) {
+  return periodCostBreakdown(records, periodStart, now).total;
 }
 
 function appendJournalRecord(filePath, record) {
@@ -1088,8 +1126,10 @@ export async function getCostBudgetSnapshot(configuration, now = new Date()) {
     recoverExpiredReservations(configuration, metricsDirectory, nowMs);
     const periods = currentPeriodStarts(now);
     const { records, invalidRecordCount } = metricRecords(metricsDirectory, periods.month);
-    const dailySpentUsd = normalizeCost(periodCost(records, periods.day, nowMs));
-    const monthlySpentUsd = normalizeCost(periodCost(records, periods.month, nowMs));
+    const dailyBreakdown = periodCostBreakdown(records, periods.day, nowMs);
+    const monthlyBreakdown = periodCostBreakdown(records, periods.month, nowMs);
+    const dailySpentUsd = normalizeCost(dailyBreakdown.total);
+    const monthlySpentUsd = normalizeCost(monthlyBreakdown.total);
     const dailyUsagePercent = dailyLimit === null ? null : normalizeCost((dailySpentUsd / dailyLimit) * 100);
     const monthlyUsagePercent = monthlyLimit === null ? null : normalizeCost((monthlySpentUsd / monthlyLimit) * 100);
     return {
@@ -1108,7 +1148,29 @@ export async function getCostBudgetSnapshot(configuration, now = new Date()) {
       monthlyWarning: monthlyUsagePercent !== null && monthlyUsagePercent >= warningThresholdPercent,
       warningThresholdPercent,
       activeReservations: activeReservationCount(records, nowMs),
-      droppedMetricRecords: invalidRecordCount
+      droppedMetricRecords: invalidRecordCount,
+      costMeasurement: {
+        window: "monthly",
+        measurementStatus: monthlyBreakdown.costMeasurementStatus,
+        observedCostUsd: normalizeCost(monthlyBreakdown.observedCostUsd),
+        estimatedCostUsd: normalizeCost(monthlyBreakdown.estimatedCostUsd),
+        executedRuns: monthlyBreakdown.executedRuns,
+        knownCostRuns: monthlyBreakdown.knownCostRuns,
+        unknownCostRuns: monthlyBreakdown.unknownCostRuns,
+        costCoverageRatio: monthlyBreakdown.costCoverageRatio,
+        droppedMetricRecords: invalidRecordCount
+      },
+      dailyCostMeasurement: {
+        window: "daily",
+        measurementStatus: dailyBreakdown.costMeasurementStatus,
+        observedCostUsd: normalizeCost(dailyBreakdown.observedCostUsd),
+        estimatedCostUsd: normalizeCost(dailyBreakdown.estimatedCostUsd),
+        executedRuns: dailyBreakdown.executedRuns,
+        knownCostRuns: dailyBreakdown.knownCostRuns,
+        unknownCostRuns: dailyBreakdown.unknownCostRuns,
+        costCoverageRatio: dailyBreakdown.costCoverageRatio,
+        droppedMetricRecords: invalidRecordCount
+      }
     };
   });
 }

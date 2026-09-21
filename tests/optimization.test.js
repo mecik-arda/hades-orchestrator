@@ -651,6 +651,13 @@ test("OPT-05b: routing değerlendirmesi profile kalite süre ve maliyetini özet
     pendingFeedback: 0,
     usefulRate: 1,
     averageDurationMs: 400,
+    costMeasurement: {
+      measurementStatus: "observed",
+      observedCostUsd: 0.03,
+      knownCostRuns: 1,
+      unknownCostRuns: 0,
+      costCoverageRatio: 1
+    },
     decisionReady: false
   });
   await assert.rejects(() => recordRoutingFeedback(configuration, executionIdHash.slice(0, 12), "not_useful"), /already recorded/);
@@ -837,6 +844,52 @@ test("OPT-06j: costBudgetEnforced false butce limitini devre disi birakir", asyn
     reason: "monthly_cost_budget_exhausted",
     budget: { period: "monthly", limitUsd: 0.2, spentUsd: 0.65, remainingUsd: 0 }
   });
+});
+
+test("OPT-06t: bütçe ölçümü gözlenen ve tahmini maliyeti kapsamayla ayırır", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cost-measurement-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configuration = {
+    statePaths: { logs: root },
+    observability: { maxMetricFileBytes: 65536 },
+    reliability: { dailyCostLimitUsd: 1, monthlyCostLimitUsd: 5, costBudgetEnforced: false, maxTotalDurationMs: 60000 }
+  };
+  const hash = (value) => crypto.createHash("sha256").update(value).digest("hex");
+  await appendRedactedRunMetric(configuration, {
+    backend: "codex",
+    executionIdHash: hash("unknown-run"),
+    recordedAt: new Date().toISOString(),
+    usage: { durationMs: 5 }
+  });
+  const unknownSnapshot = await getCostBudgetSnapshot(configuration);
+  assert.equal(unknownSnapshot.monthlySpentUsd, 0);
+  assert.equal(unknownSnapshot.costMeasurement.measurementStatus, "not_observable");
+  assert.equal(unknownSnapshot.costMeasurement.observedCostUsd, 0);
+  assert.equal(unknownSnapshot.costMeasurement.unknownCostRuns, 1);
+  assert.equal(unknownSnapshot.costMeasurement.costCoverageRatio, 0);
+  assert.equal(unknownSnapshot.dailyCostMeasurement.measurementStatus, "not_observable");
+  assert.equal(unknownSnapshot.dailyCostMeasurement.observedCostUsd, 0);
+  assert.equal(unknownSnapshot.dailyCostMeasurement.unknownCostRuns, 1);
+  await appendRedactedRunMetric(configuration, {
+    backend: "codex",
+    executionIdHash: hash("known-run"),
+    recordedAt: new Date().toISOString(),
+    usage: { totalCostUsd: 0.05, durationMs: 5 }
+  });
+  await reserveCostBudget(configuration, "estimated-run", 0.3);
+  await settleCostBudget(configuration, "estimated-run");
+  const snapshot = await getCostBudgetSnapshot(configuration);
+  assert.equal(snapshot.monthlySpentUsd, 0.35);
+  assert.equal(snapshot.costMeasurement.observedCostUsd, 0.05);
+  assert.equal(snapshot.costMeasurement.estimatedCostUsd, 0.3);
+  assert.equal(snapshot.costMeasurement.knownCostRuns, 1);
+  assert.equal(snapshot.costMeasurement.unknownCostRuns, 2);
+  assert.equal(snapshot.costMeasurement.costCoverageRatio, Number((1 / 3).toFixed(4)));
+  assert.equal(snapshot.costMeasurement.measurementStatus, "not_observable");
+  assert.equal(snapshot.dailyCostMeasurement.observedCostUsd, 0.05);
+  assert.equal(snapshot.dailyCostMeasurement.estimatedCostUsd, 0.3);
+  assert.equal(snapshot.dailyCostMeasurement.knownCostRuns, 1);
+  assert.equal(snapshot.dailyCostMeasurement.unknownCostRuns, 2);
 });
 
 test("OPT-06d: cost reservation açık settlement kaydıyla gerçek maliyete uzlaştırılır", async (t) => {
