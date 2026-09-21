@@ -7,6 +7,8 @@
 
 > Durum notu (2026-09-21): Aşama 1 tamamlandı (`docs/reports/kalici-hafiza-piyasa-arastirma-2026-08-21.md` referans raporu ve SHA-256 kontrollü Vault özeti yayımlandı). Aşama 2-5 açıktır; gerçek çok oturumlu iş doğduğunda ele alınır. Üstteki "uygulanmadı" ifadesi planın ilk yazım anına aittir.
 
+> Uygunluk notu (2026-09-21): Fayda-zarar analizi `docs/reports/VIDEO_KAYNAKLI_PLANLAR_UYGUNLUK_ANALIZI_2026-09-21.md` (Sol APPROVED) Aşama 2-5'i koşullu/açık olarak teyit etti; Aşama 4-5 resmi kapanışı da açık maddeler arasındadır. Statü değişmedi.
+
 ## Yurutme Ozeti
 
 - Arastirilan second-brain projeleri, duz Markdown dosyalari ile oturumlar arasi sureklilik sagliyor; upstream proje bu dosyalari Claude Code hook'lariyla oturum basinda context'e ekliyor.

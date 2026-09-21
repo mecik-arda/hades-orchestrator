@@ -128,6 +128,9 @@ test("HOOK-05: apply mevcut hedefte fail-closed olur, --force ile yazar", (conte
   const written = fs.readFileSync(target, "utf8");
   assert.match(written, /createSecondBrainMemoryPlugin/);
   assert.match(written, /SUBAGENT_SECOND_BRAIN_HOOK/);
+  assert.match(written, /recordMemoryHookSession/);
+  assert.match(written, /onContextInjected: async \(\{ sessionId, durationMs \}\) => \{/);
+  assert.match(written, /recordMemoryHookSession\(loadConfiguration\(\), \{ client: "opencode", sessionId, durationMs \}\)/);
   assert.equal(written.includes("store_persistent_memory"), false);
   assert.equal(written.includes("promote_memory"), false);
 });
@@ -170,4 +173,32 @@ test("HOOK-06: plugin chat.message + system.transform ile {sessionID} bazlÄ± baÄ
   const other = { system: [] };
   await plugin["experimental.chat.system.transform"]({ sessionID: "unknown" }, other);
   assert.deepEqual(other.system, []);
+});
+
+
+test("HOOK-08: plugin geri cagrisi opencode oturum kaydini birlikte ve yinelenmeden uretir", async (context) => {
+  const vaultRootPath = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-hook-session-"));
+  context.after(() => fs.rmSync(vaultRootPath, { recursive: true, force: true }));
+  const configuration = { ...createConfiguration(vaultRootPath), observability: { maxMetricFileBytes: 1048576 } };
+  const { createSecondBrainMemoryPlugin } = await import("../subagent-bridge/src/services/memory-hook-plugin.js");
+  const { recordMemoryHookSession } = await import("../subagent-bridge/src/metrics.js");
+  const plugin = createSecondBrainMemoryPlugin({
+    runHook: async () => "CONTEXT",
+    onContextInjected: async ({ sessionId, durationMs }) => {
+      await recordMemoryHookSession(configuration, { client: "opencode", sessionId, durationMs });
+      await recordMemoryHookSession(configuration, { client: "opencode", sessionId, durationMs });
+    }
+  });
+  await plugin["chat.message"]({ sessionID: "session-alpha" }, { parts: [{ type: "text", text: "ikinci beyin sorusu" }] });
+  await plugin["experimental.chat.system.transform"]({ sessionID: "session-alpha" }, { system: [] });
+  await new Promise((resolve) => setImmediate(resolve));
+  const metricsPath = path.join(configuration.statePaths.logs, "metrics", "memory-hook-runs.jsonl");
+  const records = fs.readFileSync(metricsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const sessionRecords = records.filter((record) => record.recordType === "memory_hook_session" && record.client === "opencode");
+  assert.equal(sessionRecords.length, 1);
+  assert.equal(Number.isInteger(sessionRecords[0].durationMs), true);
+  assert.equal(typeof sessionRecords[0].sessionIdHash, "string");
+  assert.equal(sessionRecords[0].sessionIdHash.length, 64);
+  assert.equal(records.some((record) => record.recordType === "memory_hook_feedback"), false);
+  assert.equal(JSON.stringify(records).includes("session-alpha"), false);
 });
