@@ -19,7 +19,7 @@ import {
   subagentExecutionRequestSchema, subagentResultSchema,
   createFailureSubagentResult, createSuccessSubagentResult
 } from "../subagent-bridge/src/schemas/core-schemas.js";
-import { ANTIGRAVITY_MODEL_MAP, READ_ONLY_INSTRUCTION, READ_ONLY_PERMISSION_RULES, CARRIER_OUTPUT_SCHEMA, hasSafeReadOnlyPermissionBaseline, hasNoConfiguredMcpServers, resolveModel, resolveAntigravityCommand, buildAntigravityArgs, classifyAntigravityError, extractAntigravityResult, normalizeCarrierStructuredOutput, writeCarrierSchemaFile, createAntigravityAdapter, createSettingsLock } from "../subagent-bridge/src/adapters/antigravity-adapter.js";
+import { ANTIGRAVITY_MODEL_MAP, READ_ONLY_INSTRUCTION, READ_ONLY_PROBE_HINT, WEB_EVIDENCE_OUTPUT_INSTRUCTION, READ_ONLY_PERMISSION_RULES, CARRIER_OUTPUT_SCHEMA, hasSafeReadOnlyPermissionBaseline, hasNoConfiguredMcpServers, resolveModel, resolveAntigravityCommand, buildAntigravityArgs, classifyAntigravityError, extractAntigravityResult, normalizeCarrierStructuredOutput, writeCarrierSchemaFile, createAntigravityAdapter, createSettingsLock } from "../subagent-bridge/src/adapters/antigravity-adapter.js";
 import { acquireReadLock, releaseReadLock, acquireWriteLock, releaseWriteLock, releaseAllLocks } from "./support/workspace-lock.js";
 
 test("AG-AC-01: AntigravityAdapter AgentAdapter kontratını uygular", () => {
@@ -351,6 +351,10 @@ test("AG-AC-15c: read-only permission policy yalnız inceleme komutlarını allo
   assert.deepEqual(READ_ONLY_PERMISSION_RULES.deny, ["command(*)", "unsandboxed(*)", "write_file(*)"]);
   assert.match(READ_ONLY_INSTRUCTION, /built-in workspace read tools/i);
   assert.match(READ_ONLY_INSTRUCTION, /Do not call MCP, terminal commands, or built-in write tools/i);
+  assert.match(WEB_EVIDENCE_OUTPUT_INSTRUCTION, /Never place URLs or citation links inside result or excerpts/i);
+  assert.match(WEB_EVIDENCE_OUTPUT_INSTRUCTION, /sourceUrl/);
+  assert.match(READ_ONLY_PROBE_HINT, /check_antigravity_subagent/);
+  assert.match(READ_ONLY_PROBE_HINT, /probeCapabilities/);
 });
 
 test("AGY-PERM-06: read-only yalnız dar mevcut izinleri ve MCP sunucusuz ortamı kabul eder", () => {
@@ -498,6 +502,7 @@ test("AGY-PERM-09a: processler arasi lock beklemesi request timeout ile sinirlan
   assert.equal(secondResult.ok, false);
   assert.equal(secondResult.timedOut, true);
   assert.equal(secondResult.reason, "timeout");
+  assert.match(secondResult.error, /check_antigravity_subagent/);
   assert.equal(fs.existsSync(lockPath), true);
   await first;
   assert.equal(fs.readFileSync(settingsPath, "utf8"), "{}");

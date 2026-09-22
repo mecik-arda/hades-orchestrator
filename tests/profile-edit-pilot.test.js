@@ -108,3 +108,78 @@ test("PILOT-PROFILE-02: yalniz codex edit profilleri kabul edilir", async (t) =>
   await assert.rejects(() => runtime.runProfileEditPilot(pilotInput({ profile: "glm_pilot" }), root), /must be codex/);
   await assert.rejects(() => runtime.runProfileEditPilot(pilotInput({ profile: "luna_pilot", model: "gpt-5.6-terra" }), root), /model does not match profile/);
 });
+
+
+test("PILOT-PROFILE-04: degisiklik uretmeyen denetimde model metni korunur ve kirpilir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "profile-edit-no-changes-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "src"), { recursive: true });
+  fs.writeFileSync(path.join(root, "src", "value.txt"), "before\n", "utf8");
+  const reportText = "AUDIT_REPORT_MARKER: dosya zaten beklendigi gibi; degisiklik gerekmiyor.";
+  const longText = `AUDIT_REPORT_MARKER_LONG:${"x".repeat(5000)}`;
+  let call = 0;
+  const codexAdapter = createFakeAdapter("codex", async (request) => {
+    call += 1;
+    return createSuccessSubagentResult("codex", request.model, { result: call === 1 ? reportText : longText, durationMs: 5 });
+  });
+  const runtime = createBridgeRuntime({
+    configuration: configuration(root, { audit_profile: { target: "codex", model: "gpt-5.6-sol", mode: "edit", priority: 1, cacheable: false } }),
+    adapters: { codex: codexAdapter },
+    sleep: async () => {}
+  });
+  const first = await runtime.runProfileEditPilot(pilotInput({ profile: "audit_profile" }), root);
+  assert.equal(first.status, "failed");
+  assert.equal(first.failureClass, "no_changes");
+  assert.equal(first.applied, false);
+  assert.equal(first.summary.includes("AUDIT_REPORT_MARKER"), true);
+  const second = await runtime.runProfileEditPilot(pilotInput({ profile: "audit_profile" }), root);
+  assert.equal(second.failureClass, "no_changes");
+  assert.equal(second.summary.startsWith("AUDIT_REPORT_MARKER_LONG:"), true);
+  assert.equal(second.summary.length <= 4003, true);
+  assert.equal(second.summary.endsWith("..."), true);
+});
+
+
+test("PILOT-PROFILE-05: onay kanali kapaliyken new_file onayi bilgilendirici mesaj dondurur", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "profile-edit-approval-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "src"), { recursive: true });
+  const createdPath = path.join(root, "src", "new-value.txt");
+  const codexAdapter = createFakeAdapter("codex", async (request) => {
+    fs.writeFileSync(path.join(request.workspace, "src", "new-value.txt"), "created\n", "utf8");
+    return createSuccessSubagentResult("codex", request.model, { result: "Created selected file", durationMs: 5 });
+  });
+  const runtime = createBridgeRuntime({
+    configuration: configuration(root, { create_profile: { target: "codex", model: "gpt-5.6-sol", mode: "edit", priority: 1, cacheable: false } }),
+    adapters: { codex: codexAdapter },
+    sleep: async () => {},
+    orchestratorApprovalEnabled: false
+  });
+  const result = await runtime.runProfileEdit(pilotInput({ profile: "create_profile", files: ["src/new-value.txt"] }), root);
+  assert.equal(result.status, "failed");
+  assert.equal(result.failureClass, "approval_required");
+  assert.equal(result.approvalClass, "new_file");
+  assert.equal(result.approvalRequired, true);
+  assert.equal(result.summary.includes("orchestrator approval channel is disabled"), true);
+  assert.equal(fs.existsSync(createdPath), false);
+});
+
+test("PILOT-PROFILE-06: onay kanali acikken new_file onayi standart mesaj dondurur", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "profile-edit-approval-open-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "src"), { recursive: true });
+  const codexAdapter = createFakeAdapter("codex", async (request) => {
+    fs.writeFileSync(path.join(request.workspace, "src", "new-value.txt"), "created\n", "utf8");
+    return createSuccessSubagentResult("codex", request.model, { result: "Created selected file", durationMs: 5 });
+  });
+  const runtime = createBridgeRuntime({
+    configuration: configuration(root, { create_profile: { target: "codex", model: "gpt-5.6-sol", mode: "edit", priority: 1, cacheable: false } }),
+    adapters: { codex: codexAdapter },
+    sleep: async () => {},
+    orchestratorApprovalEnabled: true
+  });
+  const result = await runtime.runProfileEdit(pilotInput({ profile: "create_profile", files: ["src/new-value.txt"] }), root);
+  assert.equal(result.failureClass, "approval_required");
+  assert.equal(result.approvalRequestId.length, 64);
+  assert.equal(result.summary.includes("orchestrator approval channel is disabled"), false);
+});

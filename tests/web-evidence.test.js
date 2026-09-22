@@ -219,4 +219,11 @@ test("WEB-08: detectWebIntent web niyetini ve atif kaliplarini yakalar", async (
   assert.equal(detectWebIntent("inspect the current implementation", "plain summary"), false);
   assert.equal(detectWebIntent("Inspect local files", "Kaynağa göre özet: sentetik"), true);
   assert.equal(detectWebIntent("Inspect local files", "1. source: example.org"), true);
+  assert.equal(detectWebIntent("kaynak dosyayı incele ve özetle", "plain summary"), false);
+  assert.equal(detectWebIntent("kaynak kodunu analiz et", "plain summary"), false);
+  assert.equal(detectWebIntent("kaynak bul", "plain summary"), true);
+  assert.equal(detectWebIntent("kaynakları göster", "plain summary"), true);
+  assert.equal(detectWebIntent("Google'da doğrula", "plain summary"), true);
+  assert.equal(detectWebIntent("bu siteyi incele", "plain summary"), true);
+  assert.equal(detectWebIntent("sayfadaki bilgiyi kontrol et", "plain summary"), true);
 });

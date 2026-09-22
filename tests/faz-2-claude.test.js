@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createClaudeCodeAdapter, resolveModel, classifyClaudeError, parseClaudeJson, CLAUDE_MODEL_MAP } from "../subagent-bridge/src/adapters/claude-code-adapter.js";
+import { createClaudeCodeAdapter, resolveModel, classifyClaudeError, parseClaudeJson, CLAUDE_MODEL_MAP, readClaudeAuthStatus } from "../subagent-bridge/src/adapters/claude-code-adapter.js";
 import { createBridgeRuntime } from "../subagent-bridge/src/runtime/bridge-runtime.js";
 import { createAdapter } from "../subagent-bridge/src/adapters/agent-adapter-base.js";
 import { checkCapability } from "../subagent-bridge/src/services/capability-service.js";
@@ -174,27 +174,34 @@ test("CC-AC-14c: bilinmeyen is_error metni başarı sayılmaz", () => {
 });
 
 test("CC-AC-14d: adapter hata sınıfını kanonik reason olarak döndürür", async () => {
-  const adapter = createClaudeCodeAdapter({
-    claude_code: {
-      executable: process.execPath,
-      execArgs: ["-e", "process.stdout.write(JSON.stringify({ is_error: true, result: 'unexpected provider failure' }), () => process.exit(0));", "--"]
-    }
-  });
-  const result = await adapter.execute({
-    executionId: "claude-unknown-error",
-    backend: "claude_code",
-    prompt: "inspect",
-    model: "sonnet",
-    mode: "read_only",
-    workspace: process.cwd(),
-    delegationDepth: 0,
-    caller: "test",
-    timeoutMs: 5000
-  });
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, "process_error");
-  assert.equal(result.error, "provider reported an error");
-  assert.equal(validateSubagentResult(result).success, true);
+  const previousKey = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "test-key";
+  try {
+    const adapter = createClaudeCodeAdapter({
+      claude_code: {
+        executable: process.execPath,
+        execArgs: ["-e", "process.stdout.write(JSON.stringify({ is_error: true, result: 'unexpected provider failure' }), () => process.exit(0));", "--"]
+      }
+    });
+    const result = await adapter.execute({
+      executionId: "claude-unknown-error",
+      backend: "claude_code",
+      prompt: "inspect",
+      model: "sonnet",
+      mode: "read_only",
+      workspace: process.cwd(),
+      delegationDepth: 0,
+      caller: "test",
+      timeoutMs: 5000
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "process_error");
+    assert.equal(result.error, "provider reported an error");
+    assert.equal(validateSubagentResult(result).success, true);
+  } finally {
+    if (previousKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = previousKey;
+  }
 });
 
 test("CC-AC-15: PublicToolArgs internal fields inject edilemez", () => {
@@ -414,6 +421,12 @@ test("CC-AC-14e: rate_limited kanonik sınıfı runtime retry ve attempt telemet
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-runtime-state-"));
   t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }));
   t.after(() => fs.rmSync(stateRoot, { recursive: true, force: true }));
+  const previousKey = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "test-key";
+  t.after(() => {
+    if (previousKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = previousKey;
+  });
   const adapter = createClaudeCodeAdapter({
     claude_code: {
       executable: process.execPath,
@@ -436,4 +449,87 @@ test("CC-AC-14e: rate_limited kanonik sınıfı runtime retry ve attempt telemet
   assert.equal(result.reason, "rate_limited");
   assert.ok(result.metrics.attempts.length >= 2);
   assert.equal(result.metrics.attempts.every((attempt) => attempt.failureClass === "rate_limited"), true);
+});
+
+
+test("CC-VERIFY-09: auth durum komutu JSON ciktisindan cozulur", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-auth-probe-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const okScript = path.join(root, "auth-ok.js");
+  fs.writeFileSync(okScript, "process.stdout.write(JSON.stringify({ loggedIn: true })); process.exit(1);\n", "utf8");
+  const badScript = path.join(root, "auth-bad.js");
+  fs.writeFileSync(badScript, "process.stdout.write('not json');\n", "utf8");
+  assert.equal(await readClaudeAuthStatus(process.execPath, [okScript]), true);
+  assert.equal(await readClaudeAuthStatus(process.execPath, [badScript]), false);
+});
+
+test("CC-VERIFY-10: ortam anahtari varken health auth dogru bildirir", async (t) => {
+  const previousKey = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "test-key";
+  t.after(() => {
+    if (previousKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = previousKey;
+  });
+  const adapter = createClaudeCodeAdapter({ claude_code: { executable: "cmd" } });
+  const health = await adapter.healthCheck();
+  assert.equal(health.authValid, true);
+  assert.equal(validateHealthResult(health).success, true);
+});
+
+
+test("CC-VERIFY-11: CLI oturumu varken health auth dogru bildirir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-auth-cli-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const script = path.join(root, "auth-cli.js");
+  fs.writeFileSync(script, "process.stdout.write(JSON.stringify({ loggedIn: true }));\n", "utf8");
+  const previousKey = process.env.ANTHROPIC_API_KEY;
+  const previousToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_AUTH_TOKEN;
+  t.after(() => {
+    if (previousKey !== undefined) process.env.ANTHROPIC_API_KEY = previousKey;
+    if (previousToken !== undefined) process.env.ANTHROPIC_AUTH_TOKEN = previousToken;
+  });
+  const adapter = createClaudeCodeAdapter({ claude_code: { executable: process.execPath, execArgs: [script] } });
+  const health = await adapter.healthCheck();
+  assert.equal(health.authValid, true);
+  assert.equal(validateHealthResult(health).success, true);
+});
+
+test("CC-VERIFY-12: auth yokken execute saglayiciyi calistirmadan auth_invalid doner", async (t) => {
+  const previousKey = process.env.ANTHROPIC_API_KEY;
+  const previousToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_AUTH_TOKEN;
+  t.after(() => {
+    if (previousKey !== undefined) process.env.ANTHROPIC_API_KEY = previousKey;
+    if (previousToken !== undefined) process.env.ANTHROPIC_AUTH_TOKEN = previousToken;
+  });
+  const adapter = createClaudeCodeAdapter({ claude_code: { executable: "cmd", execArgs: ["/c", "exit", "9"] } });
+  const result = await adapter.execute({
+    executionId: "claude-auth-reject",
+    backend: "claude_code",
+    prompt: "inspect",
+    model: "sonnet",
+    mode: "read_only",
+    workspace: process.cwd(),
+    delegationDepth: 0,
+    caller: "test",
+    timeoutMs: 5000
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "auth_invalid");
+  assert.match(result.error, /authentication is unavailable/);
+  assert.equal(validateSubagentResult(result).success, true);
+});
+
+test("CC-VERIFY-13: auth durum probu ayni anahtar icin onbelleklenir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-auth-cache-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const counterPath = path.join(root, "counter.txt");
+  const script = path.join(root, "auth-count.js");
+  fs.writeFileSync(script, `const fs = require("node:fs"); const p = ${JSON.stringify(counterPath)}; const current = fs.existsSync(p) ? Number(fs.readFileSync(p, "utf8")) : 0; fs.writeFileSync(p, String(current + 1)); process.stdout.write(JSON.stringify({ loggedIn: false }));\n`, "utf8");
+  assert.equal(await readClaudeAuthStatus(process.execPath, [script]), false);
+  assert.equal(await readClaudeAuthStatus(process.execPath, [script]), false);
+  assert.equal(fs.readFileSync(counterPath, "utf8"), "1");
 });

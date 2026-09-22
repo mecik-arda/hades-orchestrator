@@ -28,6 +28,32 @@ function createClaudeEnvironment(configuration) {
   };
 }
 
+function hasEnvironmentAuth() {
+  return Boolean(process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY);
+}
+
+let claudeAuthProbeCache = { key: null, expiresAt: 0, loggedIn: false };
+
+async function readClaudeAuthStatus(executable, execArgs = []) {
+  const cacheKey = `${executable}\u0000${execArgs.join("\u0000")}`;
+  const now = Date.now();
+  if (claudeAuthProbeCache.key === cacheKey && claudeAuthProbeCache.expiresAt > now) return claudeAuthProbeCache.loggedIn;
+  let loggedIn = false;
+  try {
+    const result = await runProcess(executable, [...execArgs, "auth", "status"], {
+      timeoutMs: 15000,
+      maxOutputBytes: 65536,
+      env: createProviderEnvironment("claude_code")
+    });
+    const parsed = JSON.parse(String(result.stdout || "").trim());
+    loggedIn = parsed?.loggedIn === true;
+  } catch {
+    loggedIn = false;
+  }
+  claudeAuthProbeCache = { key: cacheKey, expiresAt: now + 60000, loggedIn };
+  return loggedIn;
+}
+
 function resolveModel(alias) {
   if (!alias || typeof alias !== "string") {
     return { valid: false, error: "model alias must be a non-empty string" };
@@ -207,10 +233,12 @@ export function createClaudeCodeAdapter(configuration) {
           [...execArgs, "--version"],
           { timeoutMs: 30000, maxOutputBytes: 1048576, env: createProviderEnvironment("claude_code") }
         );
+        const environmentAuth = hasEnvironmentAuth();
+        const cliAuth = environmentAuth ? false : await readClaudeAuthStatus(executable, execArgs);
         return {
           installed: result.code === 0,
           version: result.stdout.trim() || result.stderr.trim() || null,
-          authValid: Boolean(process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY),
+          authValid: environmentAuth || cliAuth,
           executable
         };
       } catch (error) {
@@ -249,6 +277,15 @@ export function createClaudeCodeAdapter(configuration) {
       const isReadOnly = request.mode === "read_only";
       const executable = configuration?.claude_code?.executable || "claude";
       const execArgs = configuration?.claude_code?.execArgs || [];
+      if (!hasEnvironmentAuth() && !await readClaudeAuthStatus(executable, execArgs)) {
+        return createFailureSubagentResult("claude_code", request.model || "unknown", {
+          error: "claude_code authentication is unavailable",
+          reason: "auth_invalid",
+          durationMs: Date.now() - startedAt,
+          retryable: false,
+          exitCode: 1
+        });
+      }
       const timeoutMs = request.timeoutMs || configuration?.claude_code?.timeoutMs || 900000;
       const maxTurns = configuration?.claude_code?.maxTurns || 8;
 
@@ -386,4 +423,4 @@ export function createClaudeCodeAdapter(configuration) {
   };
 }
 
-export { CLAUDE_MODEL_MAP, resolveModel, classifyClaudeError, parseClaudeJson, buildEncapsulatedPrompt, resolveClaudeResultModel };
+export { CLAUDE_MODEL_MAP, resolveModel, classifyClaudeError, parseClaudeJson, buildEncapsulatedPrompt, resolveClaudeResultModel, readClaudeAuthStatus };

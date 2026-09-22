@@ -19,7 +19,7 @@ const excerptSecretPatterns = [
   /\b(?:ya29\.[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{10,}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:sk|rk)[_-](?:live|test|proj)[-_][A-Za-z0-9_-]{12,}|npm_[A-Za-z0-9]{20,}|pypi-[A-Za-z0-9_-]{20,}|hf_[A-Za-z0-9]{20,}|dop_v1_[A-Za-z0-9_-]{16,})\b/i
 ];
 const httpUrlPattern = /https?\s*:\s*\/\s*\/\s*\S+/i;
-const webIntentPromptPattern = /https?:\/\/|\bread_url\b|\bweb\b|\binternet\b|\bonline\b|\bsearch\b|\bresearch\b|\bbrowse\b|araştır|arastir|güncel|guncel|haber|fiyat|kaynak|atıf|citation|today|latest/i;
+const webIntentPromptPattern = /https?:\/\/|\bread_url\b|\bweb\b|\binternet\b|\bonline\b|\bsearch\b|\bresearch\b|\bbrowse\b|araştır|arastir|güncel|guncel|haber|fiyat|kaynak[^\s]*\s*(bul|göster|goster|ara|araştır|arastir)|\bgoogle\b|\bwebsite\b|\bsite\w*\b|\bsayfa\w*\b|çevrimiçi|cevrimici|internette|internetten|atıf|citation|today|latest/i;
 const webIntentOutputPattern = /(?:^|\n)\s*(?:\[\d+\]|\d+[.)])\s*(?:kaynak|source)|kayna[ğg]a göre|according to|retrieved from|accessed on|\bdoi:|\bwww\./i;
 
 const sourceUrlHashSchema = z.string().regex(/^[a-f0-9]{64}$/);

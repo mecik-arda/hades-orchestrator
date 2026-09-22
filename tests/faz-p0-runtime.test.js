@@ -211,10 +211,14 @@ test("P0-ANTIGRAVITY-EVIDENCE: genel Antigravity aracı yalnız salt okunur ça�
   });
 
   await handlers.runAntigravity({ prompt: "inspect", model: "gemini_flash_3_8", mode: "read_only" });
+  await handlers.runAntigravity({ prompt: "research online sources for this topic", model: "gemini_flash_3_8", mode: "read_only" });
   await assert.rejects(() => handlers.runAntigravity({ prompt: "change", model: "gemini_flash_3_8", mode: "edit" }), /expected "read_only"/);
 
-  assert.equal(requests[0].webEvidenceRequired, true);
-  assert.equal(requests.length, 1);
+  assert.equal(requests[0].webEvidenceRequired, undefined);
+  assert.equal(typeof requests[0].webEvidenceRepairPrompt, "string");
+  assert.equal(requests[0].maxWebEvidenceRepairAttempts, 1);
+  assert.equal(requests[1].webEvidenceRequired, true);
+  assert.equal(requests.length, 2);
 });
 
 test("P0-GENERIC-EDIT: genel provider araçları edit modunu runtime'a iletmez", async () => {

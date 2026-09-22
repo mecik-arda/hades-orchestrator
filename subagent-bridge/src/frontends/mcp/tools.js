@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { validateWorkspace } from "../../config.js";
 import { ANTIGRAVITY_MODEL_MAP } from "../../adapters/antigravity-adapter.js";
+import { detectWebIntent } from "../../web-evidence.js";
 
 const modeSchema = z.enum(["read_only", "edit"]).default("read_only");
 const readOnlyModeSchema = z.literal("read_only").default("read_only");
@@ -177,7 +178,7 @@ function createRuntimeRequest(input, target, trustedWorkspace, caller, abortSign
   };
 }
 
-const CARRIER_REPAIR_PROMPT = "Your previous response was rejected because it did not match the required JSON carrier. Return exactly one JSON object with a result field and nothing else. When read_url was not used, omit webEvidence or set it to an empty object {}; the host normalizes absent evidence to null. When read_url was used, include sourceUrl and a non-empty excerpts list. Do not include URLs, headers, cookies, credentials, tool, model, permission, fallback or edit fields in result or excerpts.";
+const CARRIER_REPAIR_PROMPT = "Your previous response was rejected because it did not match the required JSON carrier. Return exactly one JSON object with a result field and nothing else. Never place URLs or citation links inside result or excerpts; when read_url was used, put the source URL only in webEvidence.sourceUrl and keep excerpts free of URLs, headers, cookies, and credentials. When read_url was not used, omit webEvidence or set it to an empty object {}; the host normalizes absent evidence to null. When read_url was used, include sourceUrl and a non-empty excerpts list. Do not include URLs, headers, cookies, credentials, tool, model, permission, fallback or edit fields in result or excerpts.";
 
 function resolveAntigravityWorkspace(input, trustedWorkspace, configuration) {
   if (!input.workspace) return trustedWorkspace;
@@ -202,7 +203,11 @@ export function createMcpToolHandlers({ runtime, trustedWorkspace, caller = "ope
       const parsed = parse(publicToolSchemas.runAntigravity, input);
       const workspace = resolveAntigravityWorkspace(parsed, trustedWorkspace, configuration);
       const options = parsed.mode === "read_only"
-        ? { webEvidenceRequired: true, webEvidenceRepairPrompt: CARRIER_REPAIR_PROMPT, maxWebEvidenceRepairAttempts: 1 }
+        ? {
+          ...(detectWebIntent(parsed.prompt, "") ? { webEvidenceRequired: true } : {}),
+          webEvidenceRepairPrompt: CARRIER_REPAIR_PROMPT,
+          maxWebEvidenceRepairAttempts: 1
+        }
         : {};
       return toMcpResult(await runtime.run(createRuntimeRequest(parsed, parsed.model, workspace, caller, context.signal, options)));
     },

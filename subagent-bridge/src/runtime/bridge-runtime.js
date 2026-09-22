@@ -20,6 +20,7 @@ import { calculateChangeSetHash, classifyChangeSet, isOrchestratorApprovableClas
 import { createPreparedEditRegistry } from "../services/prepared-edit-registry.js";
 import { containsHttpUrl, containsSensitiveWebValue, containsWebMarkup, detectWebIntent, normalizeUntrustedWebEvidence, providerWebEvidenceCarrierSchema } from "../web-evidence.js";
 import { createProviderCircuitBreaker } from "../services/provider-circuit-breaker.js";
+import { isOrchestratorApprovalEnabled } from "../services/orchestrator-approval.js";
 import { createReadOnlyResultCache } from "../services/read-only-cache.js";
 import { remainingDurationMs, resolveReliabilityBudget } from "../services/reliability-budget.js";
 import { shouldRetry } from "../services/retry-service.js";
@@ -221,6 +222,14 @@ function classifyReturnedFailure(result) {
   return failureClass === "non_zero_exit" ? "process_exit" : failureClass;
 }
 
+const maxNoChangesSummaryCharacters = 4000;
+
+function truncateNoChangesSummary(summary) {
+  const text = typeof summary === "string" ? summary.trim() : "";
+  if (text.length <= maxNoChangesSummaryCharacters) return text;
+  return `${text.slice(0, maxNoChangesSummaryCharacters)}...`;
+}
+
 function withRuntimeMetrics(result, retries, extras = {}) {
   return {
     ...result,
@@ -283,10 +292,13 @@ function normalizeProviderResult(result, { requireCarrier = false, allowPlainRep
   };
 }
 
-export function createBridgeRuntime({ configuration, statePaths, host = {}, adapters, sleep, legacyHealthChecker } = {}) {
+export function createBridgeRuntime({ configuration, statePaths, host = {}, adapters, sleep, legacyHealthChecker, orchestratorApprovalEnabled } = {}) {
   if (!configuration) {
     throw new Error("runtime configuration is required");
   }
+  const approvalChannelEnabled = orchestratorApprovalEnabled === undefined
+    ? isOrchestratorApprovalEnabled(process.env)
+    : orchestratorApprovalEnabled === true;
   const runtimeConfiguration = {
     ...configuration,
     statePaths: statePaths || configuration.statePaths
@@ -1151,7 +1163,12 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               if (!classificationStable) {
                 finalPayload = { status: "failed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary: `${attempt.providerLabel} edit workspace changed during classification`, failureClass: "pilot_failed", filesChanged: [], diff: "", applied: false, fallbacks: fallbackCount, executionIdHash };
               } else {
-                finalPayload = { status: "failed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary: orchestratorApprovable ? `${attempt.providerLabel} edit requires explicit approval` : `${attempt.providerLabel} edit requires operator approval outside the orchestrator channel`, failureClass: "approval_required", filesChanged: changes.filesChanged, diff: changes.diff, applied: false, fallbacks: fallbackCount, executionIdHash, changeSetHash, approvalClass, approvalRequired: true, ...(approvalRequestId ? { approvalRequestId, approvalExpiresAt } : {}) };
+                const approvalSummary = orchestratorApprovable
+                  ? (approvalChannelEnabled
+                    ? `${attempt.providerLabel} edit requires explicit approval`
+                    : `${attempt.providerLabel} edit requires explicit approval; orchestrator approval channel is disabled in this session, so the content is returned as a diff and cannot be applied here`)
+                  : `${attempt.providerLabel} edit requires operator approval outside the orchestrator channel`;
+                finalPayload = { status: "failed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary: approvalSummary, failureClass: "approval_required", filesChanged: changes.filesChanged, diff: changes.diff, applied: false, fallbacks: fallbackCount, executionIdHash, changeSetHash, approvalClass, approvalRequired: true, ...(approvalRequestId ? { approvalRequestId, approvalExpiresAt } : {}) };
               }
               terminalFailure = true;
             } else if (promote) {
@@ -1172,7 +1189,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             }
           } else {
             const failureClass = noChanges ? "no_changes" : runtimeResult.reason || "execution_failed";
-            finalPayload = { status: "failed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary: noChanges ? `${attempt.providerLabel} edit completed without file changes` : summary, failureClass, filesChanged: changes.filesChanged, diff: changes.diff, applied: false, fallbacks: fallbackCount, executionIdHash, changeSetHash, approvalClass, approvalRequired: false };
+            finalPayload = { status: "failed", backend: runtimeResult.backend, model: runtimeResult.model, requestedModel: input.model, resolvedModel: runtimeResult.resolvedModel, accessMode: "edit", summary: noChanges ? (truncateNoChangesSummary(summary) || `${attempt.providerLabel} edit completed without file changes`) : summary, failureClass, filesChanged: changes.filesChanged, diff: changes.diff, applied: false, fallbacks: fallbackCount, executionIdHash, changeSetHash, approvalClass, approvalRequired: false };
             if (!controlledFallbackAllowed(failureClass) || index === attempts.length - 1) terminalFailure = true;
             else fallbackCount += 1;
           }

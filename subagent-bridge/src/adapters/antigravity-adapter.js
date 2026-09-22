@@ -15,6 +15,8 @@ const ANTIGRAVITY_MODEL_MAP = {
   claude_sonnet: "claude-sonnet-4-6"
 };
 
+const READ_ONLY_PROBE_HINT = " If read-only failures repeat, run check_antigravity_subagent with probeCapabilities (modelAccess, webRead) before retrying.";
+
 const READ_ONLY_INSTRUCTION = `
 === READ-ONLY MODE ===
 You MUST NOT create, modify, or delete any files in the workspace.
@@ -26,7 +28,7 @@ If asked to write or modify files, decline and explain that you are in read-only
 `;
 
 const WEB_EVIDENCE_OUTPUT_INSTRUCTION = `
-For every read-only response, return exactly a JSON object with a result field. When read_url was not used, set webEvidence to null or omit the field; the host normalizes absent evidence to null. When read_url was used, add a webEvidence object containing only sourceUrl, retrievedAt, excerpts, confidence, and verificationStatus, and excerpts must be non-empty. Do not put URLs, headers, cookies, credentials, or tool, model, permission, fallback, or edit fields in result or excerpts.
+For every read-only response, return exactly a JSON object with a result field. When read_url was not used, set webEvidence to null or omit the field; the host normalizes absent evidence to null. When read_url was used, add a webEvidence object containing only sourceUrl, retrievedAt, excerpts, confidence, and verificationStatus, and excerpts must be non-empty. Never place URLs or citation links inside result or excerpts; when read_url was used, put the source URL only in webEvidence.sourceUrl and keep excerpts free of URLs, headers, cookies, and credentials. Do not put URLs, headers, cookies, credentials, or tool, model, permission, fallback, or edit fields in result or excerpts.
 `;
 
 const READ_ONLY_PERMISSION_RULES = {
@@ -757,7 +759,7 @@ export function createAntigravityAdapter(configuration) {
           const settingsLockTimedOut = error?.code === "SETTINGS_LOCK_TIMEOUT";
           if (settingsLockTimedOut || /timed out|timeout/i.test(error.message || "")) {
             return createFailureSubagentResult("antigravity", model.model, {
-              error: "execution timed out",
+              error: `execution timed out${isReadOnly ? READ_ONLY_PROBE_HINT : ""}`,
               retryable: false,
               timedOut: true,
               exitCode: null,
@@ -887,7 +889,7 @@ export function createAntigravityAdapter(configuration) {
           const isTimeout = /timed out|timeout/i.test(error.message || "");
           if (isTimeout) {
             return createFailureSubagentResult("antigravity", model.model, {
-              error: "execution timed out",
+              error: `execution timed out${isReadOnly ? READ_ONLY_PROBE_HINT : ""}`,
               retryable: false,
               timedOut: true,
               exitCode: null,
@@ -936,4 +938,4 @@ function resolveAntigravityCommand(configuration) {
   };
 }
 
-export { ANTIGRAVITY_MODEL_MAP, READ_ONLY_INSTRUCTION, READ_ONLY_PERMISSION_RULES, CARRIER_OUTPUT_SCHEMA, hasSafeReadOnlyPermissionBaseline, hasNoConfiguredMcpServers, resolveModel, resolveAntigravityCommand, buildAntigravityArgs, classifyAntigravityError, extractAntigravityResult, normalizeCarrierStructuredOutput, writeCarrierSchemaFile };
+export { ANTIGRAVITY_MODEL_MAP, READ_ONLY_INSTRUCTION, READ_ONLY_PROBE_HINT, WEB_EVIDENCE_OUTPUT_INSTRUCTION, READ_ONLY_PERMISSION_RULES, CARRIER_OUTPUT_SCHEMA, hasSafeReadOnlyPermissionBaseline, hasNoConfiguredMcpServers, resolveModel, resolveAntigravityCommand, buildAntigravityArgs, classifyAntigravityError, extractAntigravityResult, normalizeCarrierStructuredOutput, writeCarrierSchemaFile };

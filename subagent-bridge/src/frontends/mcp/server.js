@@ -94,9 +94,7 @@ function sanitizeRuntimeHealth(result) {
   };
 }
 
-export function isOrchestratorApprovalEnabled(environment = process.env) {
-  return Boolean(environment) && environment.SUBAGENT_BRIDGE_ORCHESTRATOR_APPROVAL === "1";
-}
+export { isOrchestratorApprovalEnabled } from "../../services/orchestrator-approval.js";
 
 export function createSubagentMcpServer({ runtime, configuration, trustedWorkspace, enableOrchestratorApproval = false }) {
   const server = new McpServer({
