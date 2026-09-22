@@ -132,10 +132,14 @@ web_research_fast       → Gemini Flash, read_only, 25, cache enabled
 web_research / file_audit → Gemini Pro, read_only, 20, cache enabled
 review                  → Codex Terra, read_only, 20, cache enabled
 critical_review         → Codex Sol, read_only, 15, cache enabled
+sol6_review             → GPT-6 Sol, read_only, 13, cache enabled
+luna6_review            → GPT-6 Luna, read_only, 13, cache enabled
 luna_implementation     → Codex Luna, edit, 12, cache disabled, no fallback
 implementation          → Codex Terra, edit, 10, fallback: GLM 5.2 → DeepSeek Pro → Gemini Pro
 glm_implementation      → GLM 5.2, edit, 8, fallback: DeepSeek Pro → Codex Terra → Gemini Pro
 critical_implementation → Codex Sol, edit, 5, fallback: GLM 5.2 → DeepSeek Pro
+sol6_implementation     → GPT-6 Sol, edit, 4, fallback: Codex Sol (5.6) → DeepSeek Pro
+luna6_implementation    → GPT-6 Luna, edit, 11, no fallback
 ```
 
 Profiles live under `orchestration.taskProfiles` in `~/.config/subagent-bridge/config.json`.
@@ -149,7 +153,7 @@ Backups are created under `~/.config/subagent-bridge/backups/`; use `npm run con
 
 ### Verified provider matrix
 
-Antigravity/Gemini Pro and Flash, Codex and DeepSeek V4 Pro/Flash are verified. Because the GLM subscription is inactive, GLM models, profiles and fallbacks are not invoked; Codex Luna is the fast performance/cost implementer, Terra the balanced editor and Sol the model for hard debugging and review. The independent OpenCode backend depends on configuration, Claude Code requires an active subscription and its native acceptance phase is closed here, and Kimi/Qwen depend on catalog entries.
+Antigravity/Gemini Pro and Flash, Codex and DeepSeek V4 Pro/Flash are verified. GPT-6 Luna, GPT-6 Sol and GPT-6 Astra are verified Codex identities (live capability probe, 2026-09-22); GPT-6 Luna/Sol are preferred for the Luna/Sol roles and the GPT-5.6 counterparts remain as compatibility profiles. Because the GLM subscription is inactive, GLM models, profiles and fallbacks are not invoked; Codex Luna is the fast performance/cost implementer, Terra the balanced editor and Sol the model for hard debugging and review. The independent OpenCode backend depends on configuration, Claude Code requires an active subscription and its native acceptance phase is closed here, and Kimi/Qwen depend on catalog entries.
 
 ### Antigravity contract
 
@@ -464,10 +468,14 @@ web_research_fast       → Gemini Flash, read_only, 25, cache açık
 web_research / file_audit → Gemini Pro, read_only, 20, cache açık
 review                  → Codex Terra, read_only, 20, cache açık
 critical_review         → Codex Sol, read_only, 15, cache açık
+sol6_review             → GPT-6 Sol, read_only, 13, cache açık
+luna6_review            → GPT-6 Luna, read_only, 13, cache açık
 luna_implementation     → Codex Luna, edit, 12, cache kapalı, fallback yok
 implementation          → Codex Terra, edit, 10, fallback: GLM 5.2 → DeepSeek Pro → Gemini Pro
 glm_implementation      → GLM 5.2, edit, 8, fallback: DeepSeek Pro → Codex Terra → Gemini Pro
 critical_implementation → Codex Sol, edit, 5, fallback: GLM 5.2 → DeepSeek Pro
+sol6_implementation     → GPT-6 Sol, edit, 4, fallback: Codex Sol (5.6) → DeepSeek Pro
+luna6_implementation    → GPT-6 Luna, edit, 11, fallback yok
 ```
 
 Profiller `~/.config/subagent-bridge/config.json` içindeki `orchestration.taskProfiles` alanındadır.
@@ -481,7 +489,7 @@ Backup `~/.config/subagent-bridge/backups/` altında oluşturulur; rollback içi
 
 ### Doğrulanmış sağlayıcı matrisi
 
-Antigravity/Gemini Pro ve Flash, Codex ve DeepSeek V4 Pro/Flash doğrulanmıştır. GLM aboneliği pasif olduğundan GLM model, profil ve fallback'leri çağrılmaz; Codex Luna hızlı fiyat/performans uygulayıcı, Terra dengeli edit, Sol zor hata ayıklama ve denetim modelidir. OpenCode bağımsız backend'i yapılandırmaya bağlıdır; Claude Code etkin abonelik gerektirir ve native Claude acceptance fazı bu kurulumda kapalıdır; Kimi/Qwen katalog girdisine bağlıdır.
+Antigravity/Gemini Pro ve Flash, Codex ve DeepSeek V4 Pro/Flash doğrulanmıştır. GPT-6 Luna, GPT-6 Sol ve GPT-6 Astra doğrulanmış Codex kimlikleridir (canlı capability probe, 2026-09-22); Luna/Sol rollerinde GPT-6 sürümleri tercih edilir, GPT-5.6 karşılıkları uyumluluk profili olarak korunur. GLM aboneliği pasif olduğundan GLM model, profil ve fallback'leri çağrılmaz; Codex Luna hızlı fiyat/performans uygulayıcı, Terra dengeli edit, Sol zor hata ayıklama ve denetim modelidir. OpenCode bağımsız backend'i yapılandırmaya bağlıdır; Claude Code etkin abonelik gerektirir ve native Claude acceptance fazı bu kurulumda kapalıdır; Kimi/Qwen katalog girdisine bağlıdır.
 
 ### Antigravity sözleşmesi
 
