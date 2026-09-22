@@ -464,13 +464,17 @@ test("CC-VERIFY-09: auth durum komutu JSON ciktisindan cozulur", async (t) => {
 });
 
 test("CC-VERIFY-10: ortam anahtari varken health auth dogru bildirir", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-health-env-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const script = path.join(root, "auth-cli.js");
+  fs.writeFileSync(script, "process.stdout.write(JSON.stringify({ loggedIn: false }));\n", "utf8");
   const previousKey = process.env.ANTHROPIC_API_KEY;
   process.env.ANTHROPIC_API_KEY = "test-key";
   t.after(() => {
     if (previousKey === undefined) delete process.env.ANTHROPIC_API_KEY;
     else process.env.ANTHROPIC_API_KEY = previousKey;
   });
-  const adapter = createClaudeCodeAdapter({ claude_code: { executable: "cmd" } });
+  const adapter = createClaudeCodeAdapter({ claude_code: { executable: process.execPath, execArgs: [script] } });
   const health = await adapter.healthCheck();
   assert.equal(health.authValid, true);
   assert.equal(validateHealthResult(health).success, true);
@@ -497,6 +501,10 @@ test("CC-VERIFY-11: CLI oturumu varken health auth dogru bildirir", async (t) =>
 });
 
 test("CC-VERIFY-12: auth yokken execute saglayiciyi calistirmadan auth_invalid doner", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-auth-reject-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const script = path.join(root, "auth-none.js");
+  fs.writeFileSync(script, "process.stdout.write('not json');\n", "utf8");
   const previousKey = process.env.ANTHROPIC_API_KEY;
   const previousToken = process.env.ANTHROPIC_AUTH_TOKEN;
   delete process.env.ANTHROPIC_API_KEY;
@@ -505,7 +513,7 @@ test("CC-VERIFY-12: auth yokken execute saglayiciyi calistirmadan auth_invalid d
     if (previousKey !== undefined) process.env.ANTHROPIC_API_KEY = previousKey;
     if (previousToken !== undefined) process.env.ANTHROPIC_AUTH_TOKEN = previousToken;
   });
-  const adapter = createClaudeCodeAdapter({ claude_code: { executable: "cmd", execArgs: ["/c", "exit", "9"] } });
+  const adapter = createClaudeCodeAdapter({ claude_code: { executable: process.execPath, execArgs: [script] } });
   const result = await adapter.execute({
     executionId: "claude-auth-reject",
     backend: "claude_code",
