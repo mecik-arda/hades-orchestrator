@@ -5,7 +5,7 @@ export function queryFromParts(parts, maxCharacters = 512) {
   return textParts.join(" ").replace(/\s+/g, " ").trim().slice(0, maxCharacters);
 }
 
-export function createSecondBrainMemoryPlugin({ runHook, onContextInjected, maxSessionQueries = 50 } = {}) {
+export function createSecondBrainMemoryPlugin({ runHook, onContextInjected, maxSessionQueries = 50, now = () => performance.now() } = {}) {
   const latestQueries = new Map();
   return {
     "chat.message": async (input, output) => {
@@ -13,7 +13,7 @@ export function createSecondBrainMemoryPlugin({ runHook, onContextInjected, maxS
       const query = queryFromParts(output?.parts);
       if (!query) return;
       latestQueries.delete(input.sessionID);
-      latestQueries.set(input.sessionID, { query, startedAt: Date.now() });
+      latestQueries.set(input.sessionID, { query });
       while (latestQueries.size > maxSessionQueries) {
         latestQueries.delete(latestQueries.keys().next().value);
       }
@@ -23,12 +23,14 @@ export function createSecondBrainMemoryPlugin({ runHook, onContextInjected, maxS
       if (!sessionID || typeof runHook !== "function") return;
       const queryState = latestQueries.get(sessionID);
       if (!queryState || !Array.isArray(output?.system)) return;
+      const startedAt = now();
       const context = await runHook({ query: queryState.query });
+      const durationMs = Math.max(0, Math.round(now() - startedAt));
       if (typeof context === "string" && context.length > 0 && !output.system.includes(context)) {
         output.system.push(context);
         setImmediate(() => {
           try {
-            const result = onContextInjected?.({ sessionId: sessionID, durationMs: Date.now() - queryState.startedAt });
+            const result = onContextInjected?.({ sessionId: sessionID, durationMs });
             if (result && typeof result.then === "function") result.catch(() => {});
           } catch {
           }

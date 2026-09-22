@@ -95,20 +95,21 @@ function notifyContextInjected(onContextInjected, payload) {
   });
 }
 
-export async function runMemoryHookClient({ client = "generic", input = process.stdin, output = process.stdout, hook, onContextInjected } = {}) {
+export async function runMemoryHookClient({ client = "generic", input = process.stdin, output = process.stdout, hook, onContextInjected, now = () => performance.now() } = {}) {
   if (!memoryHookClientNames.includes(client)) return { delivered: false };
   try {
-    const startedAt = Date.now();
     const rawInput = await readStreamLimited(input);
     const query = parsePromptFromHookInput(rawInput);
     const sessionId = parseSessionIdFromHookInput(rawInput);
     if (!query) return { delivered: false };
     const runHook = hook || createMemoryHook();
+    const startedAt = now();
     const context = await runHook({ query });
+    const durationMs = Math.max(0, Math.round(now() - startedAt));
     const formatted = formatMemoryHookClientOutput(client, typeof context === "string" ? context : "");
     if (!formatted) return { delivered: false };
     await writeOutput(output, formatted);
-    if (sessionId) notifyContextInjected(onContextInjected, { sessionId, durationMs: Date.now() - startedAt });
+    if (sessionId) notifyContextInjected(onContextInjected, { sessionId, durationMs });
     return { delivered: true };
   } catch {
     return { delivered: false };

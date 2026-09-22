@@ -60,12 +60,15 @@ test("CLIENT-03: CLI köprüsü enjeksiyonu yapar, hatada sessiz kalır", async 
   const queries = [];
   const injections = [];
   const output = fakeOutput();
+  let clock = 0;
   const delivered = await runMemoryHookClient({
     client: "claude",
+    now: () => clock,
     input: fakeInput(JSON.stringify({ prompt: "  ikinci   beyin  ", session_id: "s1" })),
     output,
     hook: async ({ query }) => {
       queries.push(query);
+      clock += 35;
       return "BAĞLAM";
     },
     onContextInjected: (value) => injections.push(value)
@@ -76,7 +79,7 @@ test("CLIENT-03: CLI köprüsü enjeksiyonu yapar, hatada sessiz kalır", async 
   assert.deepEqual(queries, ["ikinci beyin"]);
   assert.equal(injections.length, 1);
   assert.equal(injections[0].sessionId, "s1");
-  assert.equal(Number.isInteger(injections[0].durationMs), true);
+  assert.equal(injections[0].durationMs, 35);
   assert.deepEqual(JSON.parse(output.chunks.join("")), {
     hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "BAĞLAM" }
   });
@@ -216,4 +219,27 @@ test("CLIENT-06: codex kurulumu hooks.json yazar ve mevcut hedefte fail-closed o
   const refused = childProcess.spawnSync(process.execPath, [installerPath, "--client=codex", "--apply", `--target=${target}`], { encoding: "utf8" });
   assert.equal(refused.status, 1);
   assert.deepEqual(JSON.parse(fs.readFileSync(target, "utf8")), written);
+});
+
+
+test("CLIENT-07: saat gerilemesinde sure sifira kirpilir", async () => {
+  const injections = [];
+  const output = fakeOutput();
+  let clock = 100;
+  const delivered = await runMemoryHookClient({
+    client: "codex",
+    now: () => clock,
+    input: fakeInput(JSON.stringify({ prompt: "soru", session_id: "clock-regression" })),
+    output,
+    hook: async () => {
+      clock -= 40;
+      return "BAGLAM";
+    },
+    onContextInjected: (value) => injections.push(value)
+  });
+  assert.equal(delivered.delivered, true);
+  await nextTurn();
+  assert.equal(injections.length, 1);
+  assert.equal(injections[0].sessionId, "clock-regression");
+  assert.equal(injections[0].durationMs, 0);
 });
