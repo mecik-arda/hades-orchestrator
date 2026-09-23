@@ -153,7 +153,7 @@ Backups are created under `~/.config/subagent-bridge/backups/`; use `npm run con
 
 ### Verified provider matrix
 
-Antigravity/Gemini Pro and Flash, Codex and DeepSeek V4 Pro/Flash are verified. GPT-6 Luna, GPT-6 Sol and GPT-6 Astra are verified Codex identities (live capability probe, 2026-09-22); GPT-6 Luna/Sol are preferred for the Luna/Sol roles and the GPT-5.6 counterparts remain as compatibility profiles. Because the GLM subscription is inactive, GLM models, profiles and fallbacks are not invoked; Codex Luna is the fast performance/cost implementer, Terra the balanced editor and Sol the model for hard debugging and review. The independent OpenCode backend depends on configuration, Claude Code requires an active subscription and its native acceptance phase is closed here, and Kimi/Qwen depend on catalog entries.
+Antigravity/Gemini Pro and Flash, Codex and DeepSeek V4 Pro/Flash are verified. GPT-6 Luna, GPT-6 Sol and GPT-6 Astra are verified Codex identities (live capability probe, 2026-09-22); GPT-6 Luna/Sol are preferred for the Luna/Sol roles and the GPT-5.6 counterparts remain as compatibility profiles. Because the GLM subscription is inactive, GLM models, profiles and fallbacks are not invoked; Codex Luna is the fast performance/cost implementer, Terra the balanced editor and Sol the model for hard debugging and review. The independent OpenCode backend depends on configuration, Claude Code requires an active subscription and its native acceptance phase is closed here, and Kimi/Qwen depend on catalog entries. Claude Code health combines `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` with the CLI `claude auth status` result; when neither reports an active session the call fails fast with `auth_invalid`.
 
 ### Antigravity contract
 
@@ -168,6 +168,8 @@ claude_sonnet     → claude-sonnet-4-6
 ```
 
 Read-only calls are constrained with `--add-dir`, `deny write_file(*)` and `no command(*)` policies. The `agy mcp list` output must be `No MCP servers configured.`; external MCP, permanently broad permissions, mutation and network probing are rejected. Settings are serialized with a PID lock and restored afterwards.
+
+Read-only calls choose the evidence mode from the prompt: web-intent prompts stay in strict mode with the JSON carrier and the single carrier repair attempt, while local analysis prompts run in repair mode where a plain, URL-free result is accepted without web evidence. URLs are allowed only inside `webEvidence.sourceUrl`; `result` and `excerpts` must stay URL-free.
 
 Canonical error classes are `rate_limited`, `authentication_failure`, `permission_denied`, `timeout`, `server`, `network`, `process_exit`, `process_error` and `output_limit`; the real `exitCode` and `signal` are preserved. The provider circuit key is model-scoped for Antigravity (`antigravity:<model>`), so a transient failure in one model does not open the circuit for other Gemini models.
 
@@ -489,7 +491,7 @@ Backup `~/.config/subagent-bridge/backups/` altında oluşturulur; rollback içi
 
 ### Doğrulanmış sağlayıcı matrisi
 
-Antigravity/Gemini Pro ve Flash, Codex ve DeepSeek V4 Pro/Flash doğrulanmıştır. GPT-6 Luna, GPT-6 Sol ve GPT-6 Astra doğrulanmış Codex kimlikleridir (canlı capability probe, 2026-09-22); Luna/Sol rollerinde GPT-6 sürümleri tercih edilir, GPT-5.6 karşılıkları uyumluluk profili olarak korunur. GLM aboneliği pasif olduğundan GLM model, profil ve fallback'leri çağrılmaz; Codex Luna hızlı fiyat/performans uygulayıcı, Terra dengeli edit, Sol zor hata ayıklama ve denetim modelidir. OpenCode bağımsız backend'i yapılandırmaya bağlıdır; Claude Code etkin abonelik gerektirir ve native Claude acceptance fazı bu kurulumda kapalıdır; Kimi/Qwen katalog girdisine bağlıdır.
+Antigravity/Gemini Pro ve Flash, Codex ve DeepSeek V4 Pro/Flash doğrulanmıştır. GPT-6 Luna, GPT-6 Sol ve GPT-6 Astra doğrulanmış Codex kimlikleridir (canlı capability probe, 2026-09-22); Luna/Sol rollerinde GPT-6 sürümleri tercih edilir, GPT-5.6 karşılıkları uyumluluk profili olarak korunur. GLM aboneliği pasif olduğundan GLM model, profil ve fallback'leri çağrılmaz; Codex Luna hızlı fiyat/performans uygulayıcı, Terra dengeli edit, Sol zor hata ayıklama ve denetim modelidir. OpenCode bağımsız backend'i yapılandırmaya bağlıdır; Claude Code etkin abonelik gerektirir ve native Claude acceptance fazı bu kurulumda kapalıdır; Kimi/Qwen katalog girdisine bağlıdır. Claude Code health kontrolü `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` ile CLI'ın `claude auth status` sonucunu birleştirir; iki kaynak da etkin oturum bildirmezse çağrı `auth_invalid` ile erken reddedilir.
 
 ### Antigravity sözleşmesi
 
@@ -504,6 +506,8 @@ claude_sonnet     → claude-sonnet-4-6
 ```
 
 Salt-okunur çağrı `--add-dir`, `deny write_file(*)` ve `no command(*)` politikalarıyla sınırlanır. `agy mcp list` sonucu `No MCP servers configured.` olmalıdır; harici MCP, kalıcı geniş izin, mutasyon ve network probe reddedilir. Ayarlar PID lock ile serileştirilir ve geri yüklenir.
+
+Salt-okunur çağrılar kanıt modunu prompta göre seçer: web niyeti taşıyan promptlar JSON carrier'lı strict modda kalır ve tek carrier onarım denemesi yapılır; yerel analiz promptları URL içermeyen düz metnin web kanıtı olmadan kabul edildiği repair modunda çalışır. URL yalnızca `webEvidence.sourceUrl` içinde bulunabilir; `result` ve `excerpts` URL içermemelidir.
 
 Kanonik hata sınıfları `rate_limited`, `authentication_failure`, `permission_denied`, `timeout`, `server`, `network`, `process_exit`, `process_error` ve `output_limit`’tir; gerçek `exitCode` ve `signal` korunur. Provider circuit anahtarı Antigravity’de model bazlıdır (`antigravity:<model>`), böylece bir modelin geçici hatası diğer Gemini modellerini kapatmaz.
 
