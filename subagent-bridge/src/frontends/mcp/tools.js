@@ -66,7 +66,7 @@ export const publicToolSchemas = {
   }).strict(),
   runCodex: z.object({
     prompt: z.string().min(1).max(60000),
-    model: z.string().min(1).optional(),
+    model: z.string().min(1).max(120).default("gpt-6-sol"),
     mode: readOnlyModeSchema,
     timeout_seconds: timeoutSecondsSchema
   }).strict(),

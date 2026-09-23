@@ -142,7 +142,7 @@ sol6_implementation     → GPT-6 Sol, edit, 4, fallback: Codex Sol (5.6) → De
 luna6_implementation    → GPT-6 Luna, edit, 11, no fallback
 ```
 
-Profiles live under `orchestration.taskProfiles` in `~/.config/subagent-bridge/config.json`.
+Profiles live under `orchestration.taskProfiles` in `~/.config/subagent-bridge/config.json`. Codex subagent calls without an explicit model default to `gpt-6-sol` at the tool layer (`run_codex_subagent` and the global `codex` tool); an explicit model overrides this default.
 
 ```powershell
 npm run config:apply-routing
@@ -478,7 +478,7 @@ sol6_implementation     → GPT-6 Sol, edit, 4, fallback: Codex Sol (5.6) → De
 luna6_implementation    → GPT-6 Luna, edit, 11, fallback yok
 ```
 
-Profiller `~/.config/subagent-bridge/config.json` içindeki `orchestration.taskProfiles` alanındadır.
+Profiller `~/.config/subagent-bridge/config.json` içindeki `orchestration.taskProfiles` alanındadır. Model belirtilmeyen Codex subagent çağrıları araç katmanında `gpt-6-sol` ile sabitlenir (`run_codex_subagent` ve global `codex` aracı); açıkça verilen model bu varsayılanı geçersiz kılar.
 
 ```powershell
 npm run config:apply-routing
