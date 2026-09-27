@@ -73,7 +73,7 @@ Durum: Rapor sozlesmesi ve ilk kaynakli referans rapor `docs/reports/kalici-hafi
 - `docs/reports` icin rapor dosyasi adlandirma, zorunlu metadata ve kaynak formatini tanimla.
 - Raporlarda hedef, kapsam, bulgular, kanit, celiskiler, riskler, oneriler ve acik sorular bolumlerini zorunlu kil.
 - Raporu karar kaydi veya kalici hafiza olarak kabul etme; bunlar ayri insan/ana orkestrator degerlendirmesi gerektirir.
-- Ilk referans raporu olarak `KALICI_HAFIZA_PIYASA_ARASTIRMASI_2026-08-21.md` bulgularini kaynakli rapor sozlesmesine aktar. Bu, mevcut planlar arasinda rapor formatini gercek bir ornekle dogrular.
+- Ilk referans raporu olarak `docs/plans/yapilanlar/KALICI_HAFIZA_PIYASA_ARASTIRMASI_2026-08-21.md` bulgularini kaynakli rapor sozlesmesine aktar. Bu, mevcut planlar arasinda rapor formatini gercek bir ornekle dogrular.
 - Bu raporun ana orkestrator tarafindan onaylanan, secret ve injection taramasindan gecen kisa sonucunu `00_Inbox` altinda semantic draft olarak Vault'a yaz. Tekrar ve celiski analizinden, SHA-256 dogrulamasindan ve bilincli promote kararindan once yayinlama yapma.
 - Kabul kriteri: En az bir mevcut arastirma raporu yeni sozlesmeye gore eksiksiz ve kaynakli olmalidir.
 - Kabul kriteri: Ilk referans raporunun Vault ozeti yalniz promote sonrasinda published aramada gorunur; audit kaydi icerik, yol, gorev kimligi veya kaynak URL icermez.

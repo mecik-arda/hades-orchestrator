@@ -272,12 +272,13 @@ npm run routing:feedback      Record a task-profile user outcome
 npm run routing:classify      Classify a read-only routing run before feedback
 npm run hook:feedback          Record a redacted memory-hook session outcome
 npm run hook:classify          Classify a memory-hook session before feedback
+npm run hook:attribute-history Add a separately approved legacy attribution
 npm run memory:review         Persistent memory lifecycle review
 npm run memory:doctor         Read-only Vault health, version and audit diagnosis
 npm run memory:repair         Explicit Vault repair (dry-run by default, --apply to write)
 npm run state:migrate         Explicit runtime state migration (dry-run by default)
 npm run video:collect         Collect a public YouTube transcript as an untrusted, hashed envelope (--url=, optional --out=)
-npm run hook:install          Generate the opt-in read-only memory hook (--client=opencode|codex|claude)
+npm run hook:install          Generate the opt-in read-only memory hook (--client=opencode|codex|claude; optional --project-root= and --cohort=)
 npm run memory:evaluate       Retrieval quality evaluation
 npm run config:backup         Personal policy backup
 ```
@@ -294,7 +295,13 @@ The write pipeline rejects secret-like, PII-shaped and prompt-injection content 
 
 `npm run memory:doctor` reports frontmatter, soft-expiry, quarantine, hash-integrity, schema-version and audit-race findings read-only; it never deletes, moves, merges or repairs a note. The Vault and runtime state carry explicit schema versions; incompatible state fails closed at startup and requires `npm run state:migrate`.
 
-The optional hook enriches a client session with at most five read-only Vault excerpts (1200 characters). It never writes or publishes, excludes drafts, expired and quarantined notes, and stays silent when memory is unavailable. Consumption profiles (`normal`, `economic`, `manual`) only change automation parameters; secret scanning, path/symlink protection, SHA-256 locking, schema validation, quarantine and write permissions are invariant. Install per client with `npm run hook:install -- --client=opencode` (add `--apply`), `--client=codex` (`~/.codex/hooks.json`, requires `/hooks` trust review) or `--client=claude` (prints the `settings.json` snippet; merge manually). The OpenCode plugin additionally requires `SUBAGENT_SECOND_BRAIN_HOOK=1`.
+The optional hook enriches a client session with at most five read-only Vault excerpts (1200 characters). It never writes or publishes, excludes drafts, expired and quarantined notes, and stays silent when memory is unavailable. Consumption profiles (`normal`, `economic`, `manual`) only change automation parameters; secret scanning, path/symlink protection, SHA-256 locking, schema validation, quarantine and write permissions are invariant. Install per client with `npm run hook:install -- --client=opencode` (add `--apply`), `--client=codex` (`~/.codex/hooks.json`, requires `/hooks` trust review) or `--client=claude` (prints a settings snippet for manual merge). The OpenCode plugin additionally requires `SUBAGENT_SECOND_BRAIN_HOOK=1`.
+
+Optional project cohort reporting uses the local registry `~/.config/subagent-bridge/memory-hook-cohorts.json` or an absolute `SUBAGENT_MEMORY_HOOK_COHORT_REGISTRY` override. Its version-1 JSON maps `project_alpha` and `project_beta` to exact canonical project roots and explicitly listed worktrees; the file stays outside Git and its paths never enter metrics. A project install uses `--project-root=<root>`; adding `--cohort=project_alpha|project_beta` enables a named cohort after registry validation. Omitting `--cohort` for a project install fixes that hook to `unassigned`. Global hooks reject a fixed named cohort; omitting the cohort resolves the current root dynamically through the registry, while explicit `--cohort=unassigned` forces the unassigned bucket. Codex project hooks safely merge into `<root>/.codex/hooks.json`; an existing non-identical OpenCode plugin is never overwritten; Claude prints a snippet for manual merge into `<root>/.claude/settings.local.json`. If global and project hooks run together, matching named attributions are idempotent; a named/unassigned mismatch is immutable and recorded as an attribution conflict. Cohort report keys identify project metadata and should be treated as non-anonymous when shared.
+
+Project-local generated hooks include absolute interpreter and orchestrator-install paths, so treat the generated OpenCode plugin and Codex hook configuration as machine-specific. Keep them ignored/local unless the path is standardized for every consumer, and review them before committing.
+
+Legacy outcome labels remain `legacy_unattributed` in the canonical M2 view. The one-off `npm run hook:attribute-history` path adds a separate `historicalAttribution` view for explicitly approved legacy sessions. Its closed attribution bases distinguish `user_confirmed` (the OpenCode `not_useful` Project Beta session) from `session_metadata_verified` (the two Project Alpha sessions whose metric hashes matched OpenCode session IDs and whose canonical directory/worktree metadata matched Project Alpha). It requires an exact full session-ID confirmation pair plus an orchestrator-supplied one-shot expected hash, verifies the existing eligible session/outcome, and appends a path-free event. It does not edit session/disposition/feedback rows or affect canonical `byProjectCohort`, global M2 totals or `decisionReady`; unrelated legacy labels remain unattributed. This is not a bulk-migration command.
 
 `npm run video:collect -- --url=<watch-url> [--out=<file>]` downloads only subtitles and oEmbed metadata for a public YouTube video through local `yt-dlp`, verifies the video identity, enforces 2 MB subtitle and 400k character transcript limits and prints a hashed `untrusted_video_transcript` envelope. Antigravity read-only calls additionally enforce the JSON carrier with `--json-schema` and allow one bounded carrier repair attempt when validation fails. Nested JSON carrier envelopes are unwrapped to a bounded depth of two; inner `webEvidence` is preserved when the outer layer is empty, and invalid evidence is rejected by the strict schema.
 
@@ -308,7 +315,8 @@ DeepSeek results are validated with Zod; transient failures use retry, circuit b
 ├─ antigravity-runs.jsonl
 ├─ opencode-runs.jsonl
 ├─ claude_code-runs.jsonl
-└─ direct-edit-baseline-runs.jsonl
+├─ direct-edit-baseline-runs.jsonl
+└─ memory-hook-runs.jsonl
 ```
 
 Records never contain prompt, response, diff, workspace or file paths, task ID or secrets. The optional `<workspace>/.hades/runs.jsonl` mirror is managed with `npm run runs:mirror -- enable|status|view|disable|clear --confirm`.
@@ -610,12 +618,13 @@ npm run routing:feedback      Task-profile kullanıcı sonucu kaydı
 npm run routing:classify      Read-only routing kaydını geri bildirimden önce sınıflandırır
 npm run hook:feedback         Redacted hafıza hook oturum sonucu kaydı
 npm run hook:classify         Hafıza hook oturumunu geri bildirim öncesi sınıflandırma
+npm run hook:attribute-history Ayrı historical view için onaylı legacy atıf
 npm run memory:review         Kalıcı hafıza yaşam döngüsü denetimi
 npm run memory:doctor         Salt-okunur Vault sağlık, sürüm ve audit teşhisi
 npm run memory:repair         Açık Vault onarımı (varsayılan dry-run, yazmak için --apply)
 npm run state:migrate         Explicit runtime state migrasyonu (varsayılan dry-run)
 npm run video:collect         Herkese açık YouTube altyazısını güvenilmeyen, hashlı zarf olarak toplar (--url=, opsiyonel --out=)
-npm run hook:install          Opt-in salt-okunur hafıza hook'u üretir (--client=opencode|codex|claude)
+npm run hook:install          Opt-in salt-okunur hafıza hook'u üretir (--client=opencode|codex|claude; opsiyonel --project-root= ve --cohort=)
 npm run memory:evaluate       Retrieval kalite değerlendirmesi
 npm run config:backup         Kişisel policy backup'ı
 ```
@@ -632,7 +641,13 @@ Yazma hattı secret benzeri, PII biçimli ve prompt injection içeren metni yaz�
 
 `npm run memory:doctor` frontmatter, soft-expiry, karantina, hash bütünlüğü, şema sürümü ve audit yarış bulgularını salt-okunur raporlar; hiçbir notu silmez, taşımaz, birleştirmez veya onarmaz. Vault ve runtime state açık şema sürümleri taşır; uyumsuz state başlangıçta fail-closed olur ve `npm run state:migrate` gerektirir.
 
-İsteğe bağlı hook, istemci oturumuna en fazla beş salt-okunur Vault alıntısı (1200 karakter) ekler. Asla yazmaz veya yayınlamaz; taslak, süresi dolmuş ve karantina notlarını dışlar; hafıza erişilemezse sessiz kalır. Tüketim profilleri (`normal`, `economic`, `manual`) yalnız otomasyon parametrelerini değiştirir; secret taraması, path/symlink koruması, SHA-256 kilidi, şema doğrulaması, karantina ve yazma izinleri değişmez. İstemci bazında kurulum: `npm run hook:install -- --client=opencode` (`--apply` ekle), `--client=codex` (`~/.codex/hooks.json`, `/hooks` güven incelemesi gerekir) veya `--client=claude` (`settings.json` snippet'ini yazdırır; elle birleştir). OpenCode plugin'i ayrıca `SUBAGENT_SECOND_BRAIN_HOOK=1` gerektirir.
+İsteğe bağlı hook, istemci oturumuna en fazla beş salt-okunur Vault alıntısı (1200 karakter) ekler. Asla yazmaz veya yayınlamaz; taslak, süresi dolmuş ve karantina notlarını dışlar; hafıza erişilemezse sessiz kalır. Tüketim profilleri (`normal`, `economic`, `manual`) yalnız otomasyon parametrelerini değiştirir; secret taraması, path/symlink koruması, SHA-256 kilidi, şema doğrulaması, karantina ve yazma izinleri değişmez. İstemci bazında kurulum: `npm run hook:install -- --client=opencode` (`--apply` ekle), `--client=codex` (`~/.codex/hooks.json`, `/hooks` güven incelemesi gerekir) veya `--client=claude` (elle birleştirilecek settings snippet'i üretir). OpenCode plugin'i ayrıca `SUBAGENT_SECOND_BRAIN_HOOK=1` gerektirir.
+
+İsteğe bağlı proje cohort raporlaması `~/.config/subagent-bridge/memory-hook-cohorts.json` yerel registry'sini veya mutlak `SUBAGENT_MEMORY_HOOK_COHORT_REGISTRY` override'ını kullanır. Sürüm 1 JSON, `project_alpha` ve `project_beta` değerlerini tam canonical project root'ları ve ayrıca listelenmiş worktree'lerle eşler; registry Git dışında kalır ve yollar metriklere yazılmaz. Proje kurulumu `--project-root=<root>` alır; `--cohort=project_alpha|project_beta` eklenirse registry doğrulamasından sonra named cohort kullanılır. Proje kurulumunda `--cohort` atlanması o hook'u sabit `unassigned` yapar. Global hook'lar sabit named cohort'u reddeder; cohort atlanırsa mevcut root'u registry ile dinamik çözer, açık `--cohort=unassigned` ise `unassigned` değerini sabitler. Codex proje hook'u `<root>/.codex/hooks.json` ayarını güvenle birleştirir; farklı içerikli mevcut OpenCode plugin'inin üzerine yazılmaz; Claude `<root>/.claude/settings.local.json` içine elle eklenecek snippet üretir. Global ve proje hook'ları birlikte çalışırsa eşleşen named atıflar idempotenttir; named/unassigned uyuşmazlığı değiştirilemez ve attribution conflict olarak kaydedilir. Cohort anahtarları proje metadata'sıdır; paylaşılan raporlar anonim kabul edilmemelidir.
+
+Eski outcome etiketleri canonical M2 görünümünde `legacy_unattributed` kalır. Tek kullanımlık `npm run hook:attribute-history` akışı yalnız ayrıca onaylanmış eski oturumları `historicalAttribution` görünümüne ekler. Kapalı attribution basis değerleri `user_confirmed` (Project Beta OpenCode `not_useful`) ve `session_metadata_verified` (metric hash'i OpenCode session ID'siyle, canonical directory/worktree metadata'sı Project Alpha ile eşleşen iki oturum) ayrımını korur. Tam session-ID confirmation çifti, orchestrator'ın tek-seferlik beklenen hash'i ve eligible session/outcome doğrulanır; path içermeyen append-only event yazılır. Eski session/disposition/feedback kayıtları değişmez; canonical `byProjectCohort`, global M2 toplamları ve `decisionReady` etkilenmez, ilgisiz legacy etiketler atıfsız kalır. Bu komut toplu migrasyon yapmaz.
+
+Proje kapsamlı üretilen hook'lar mutlak interpreter ve orchestrator kurulum yolları içerir; OpenCode plugin'i ve Codex hook ayarını makineye özel kabul edin. Tüm tüketicilerde yol standartlaştırılmadıkça dosyaları local/ignore tutun ve commit öncesi inceleyin.
 
 `npm run video:collect -- --url=<watch-adresi> [--out=<dosya>]` herkese açık bir YouTube videosu için yalnız altyazı ve oEmbed künyesini yerel `yt-dlp` ile indirir, video kimliğini doğrular, 2 MB altyazı ve 400 bin karakter transcript sınırlarını uygular ve hashlı `untrusted_video_transcript` zarfını yazdırır. Antigravity salt-okunur çağrıları ayrıca JSON carrier'ı `--json-schema` ile zorlar ve doğrulama düştüğünde tek denemelik sınırlı carrier onarımına izin verir. İç içe JSON carrier zarfları en fazla iki derinlikte çözülür; dış katman boşken iç `webEvidence` korunur ve geçersiz kanıt strict şemada reddedilir.
 
@@ -646,7 +661,8 @@ DeepSeek sonucu Zod ile doğrulanır; geçici hatalarda retry, circuit breaker v
 ├─ antigravity-runs.jsonl
 ├─ opencode-runs.jsonl
 ├─ claude_code-runs.jsonl
-└─ direct-edit-baseline-runs.jsonl
+├─ direct-edit-baseline-runs.jsonl
+└─ memory-hook-runs.jsonl
 ```
 
 Kayıtlar prompt, cevap, diff, workspace veya dosya yolu, task ID ve secret içermez. İsteğe bağlı `<workspace>/.hades/runs.jsonl` mirror’ı `npm run runs:mirror -- enable|status|view|disable|clear --confirm` ile yönetilir.

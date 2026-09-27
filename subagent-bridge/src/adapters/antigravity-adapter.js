@@ -38,7 +38,9 @@ const READ_ONLY_PERMISSION_RULES = {
   deny: [
     "command(*)",
     "unsandboxed(*)",
-    "write_file(*)"
+    "write_file(*)",
+    "mcp(*)",
+    "execute_url(*)"
   ]
 };
 
@@ -233,7 +235,13 @@ function readSettingsSentinel() {
 
 function hasSafeReadOnlyPermissionBaseline(settings) {
   const allow = settings?.permissions?.allow;
-  return !Array.isArray(allow) || allow.every((rule) => READ_ONLY_PERMISSION_RULES.allow.includes(rule));
+  if (!Array.isArray(allow)) return true;
+  const deniedActions = new Set(READ_ONLY_PERMISSION_RULES.deny.map((rule) => rule.slice(0, rule.indexOf("("))));
+  return allow.every((rule) => {
+    if (typeof rule !== "string") return false;
+    const match = /^([a-z_]+)\(([^\r\n\0]+)\)$/u.exec(rule);
+    return Boolean(match && (match[1] === "read_url" || deniedActions.has(match[1])));
+  });
 }
 
 function hasNoConfiguredMcpServers(result) {

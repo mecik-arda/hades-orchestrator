@@ -4,6 +4,8 @@ import path from "node:path";
 
 const clientArgument = process.argv.find((argument) => argument.startsWith("--client="));
 const requestedClient = clientArgument ? clientArgument.slice("--client=".length) : "generic";
+const cohortArgument = process.argv.find((argument) => argument.startsWith("--cohort="));
+const requestedCohort = cohortArgument ? cohortArgument.slice("--cohort=".length) : undefined;
 const diagnosticPath = path.join(os.tmpdir(), "subagent-memory-hook-error.log");
 const diagnosticMaxBytes = 65536;
 
@@ -27,9 +29,10 @@ try {
   const client = memoryHookClientNames.includes(requestedClient) ? requestedClient : "generic";
   await runMemoryHookClient({
     client,
-    onContextInjected: async ({ sessionId, durationMs }) => {
+    requestedCohort,
+    onContextInjected: async ({ sessionId, durationMs, projectCohort }) => {
       try {
-        await recordMemoryHookSession(loadConfiguration(), { client, sessionId, durationMs });
+        await recordMemoryHookSession(loadConfiguration(), { client, sessionId, durationMs, projectCohort });
       } catch {
       }
     }

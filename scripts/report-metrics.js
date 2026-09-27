@@ -33,7 +33,7 @@ export function summarizeMetrics(records, sloPolicy) {
     .filter((record) => record.recordType === "routing_disposition" && record.executionIdHash)
     .map((record) => [record.executionIdHash, record.disposition]));
   const legacyRoutingFeedback = records.filter((record) => record.recordType === "routing_feedback" && record.executionIdHash && !routingDisposition.has(record.executionIdHash)).length;
-  const memoryHookRecords = records.filter((record) => ["memory_hook_session", "memory_hook_disposition", "memory_hook_feedback"].includes(record.recordType));
+  const memoryHookRecords = records.filter((record) => ["memory_hook_session", "memory_hook_disposition", "memory_hook_feedback", "memory_hook_attribution_conflict", "memory_hook_historical_attribution"].includes(record.recordType));
   records = records.filter((record) => !record.recordType);
   const editRecords = records.filter((record) => record.mode === "edit" && record.outcomeStatus === "completed" && record.executionIdHash);
   const summarizeDirectEditRuns = (runs) => {

@@ -29,11 +29,13 @@ const requiredFiles = [
   "scripts/classify-routing-feedback.js",
   "scripts/record-memory-hook-feedback.js",
   "scripts/classify-memory-hook.js",
+  "scripts/attribute-memory-hook-history.js",
   "subagent-bridge/src/project-runs.js",
   "subagent-bridge/src/recent-runs.js",
   "subagent-bridge/src/glm.js",
   "subagent-bridge/src/services/disposable-workspace.js",
   "subagent-bridge/src/services/memory-hook-identity.js",
+  "subagent-bridge/src/services/memory-hook-cohort.js",
   "subagent-bridge/src/server.js"
 ];
 

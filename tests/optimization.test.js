@@ -1008,7 +1008,9 @@ test("OPT-06l: settlement yapılan rezervasyon expire edilmez ve gerçek maliyet
   };
   await reserveCostBudget(configuration, "settled-process", 0.4);
   assert.deepEqual(await settleCostBudget(configuration, "settled-process", 0.05), { settled: true, chargedCostUsd: 0.05 });
-  const snapshot = await getCostBudgetSnapshot(configuration, new Date(Date.now() + 3600000));
+  const currentDate = new Date();
+  const endOfCurrentUtcDay = new Date(Date.UTC(currentDate.getUTCFullYear(), currentDate.getUTCMonth(), currentDate.getUTCDate(), 23, 59, 59, 999));
+  const snapshot = await getCostBudgetSnapshot(configuration, endOfCurrentUtcDay);
   assert.equal(snapshot.dailySpentUsd, 0.05);
   assert.equal(snapshot.activeReservations, 0);
   const journal = fs.readFileSync(path.join(root, "metrics", "cost-budget-runs.jsonl"), "utf8");

@@ -13,6 +13,7 @@ import {
   retryStopReasonValues
 } from "./schemas/core-schemas.js";
 import { normalizeMemoryHookSessionId } from "./services/memory-hook-identity.js";
+import { memoryHookNamedCohorts, memoryHookProjectCohorts, memoryHookReportCohorts } from "./services/memory-hook-cohort.js";
 
 function hashValue(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -527,7 +528,7 @@ function sanitizeMemoryHookSessionMetric(metric) {
   if (!memoryHookFeedbackClients.includes(metric.client)) throw new Error("invalid memory hook client");
   const sessionIdHash = sanitizeHash(metric.sessionIdHash);
   if (!sessionIdHash) throw new Error("invalid memory hook session id hash");
-  return {
+  const sanitized = {
     recordType: "memory_hook_session",
     recordedAt: sanitizeRecordedAt(metric.recordedAt),
     backend: "memory-hook",
@@ -535,6 +536,11 @@ function sanitizeMemoryHookSessionMetric(metric) {
     client: metric.client,
     durationMs: sanitizeDurationMs(metric.durationMs)
   };
+  if (Object.hasOwn(metric, "projectCohort")) {
+    if (!memoryHookProjectCohorts.includes(metric.projectCohort)) throw new Error("invalid memory hook project cohort");
+    sanitized.projectCohort = metric.projectCohort;
+  }
+  return sanitized;
 }
 
 function sanitizeMemoryHookDispositionMetric(metric) {
@@ -553,6 +559,37 @@ function sanitizeMemoryHookDispositionMetric(metric) {
   };
 }
 
+function sanitizeMemoryHookAttributionConflictMetric(metric) {
+  if (!memoryHookFeedbackClients.includes(metric.client)) throw new Error("invalid memory hook feedback client");
+  const sessionIdHash = sanitizeHash(metric.sessionIdHash);
+  if (!sessionIdHash) throw new Error("invalid memory hook session id hash");
+  return {
+    recordType: "memory_hook_attribution_conflict",
+    recordedAt: sanitizeRecordedAt(metric.recordedAt),
+    backend: "memory-hook",
+    sessionIdHash,
+    client: metric.client
+  };
+}
+
+function sanitizeMemoryHookHistoricalAttributionMetric(metric) {
+  if (metric.client !== "opencode") throw new Error("invalid historical memory hook client");
+  const supportedAttribution = (metric.projectCohort === "project_beta" && metric.attributionBasis === "user_confirmed")
+    || (metric.projectCohort === "project_alpha" && metric.attributionBasis === "session_metadata_verified");
+  if (!supportedAttribution) throw new Error("invalid historical memory hook attribution");
+  const sessionIdHash = sanitizeHash(metric.sessionIdHash);
+  if (!sessionIdHash) throw new Error("invalid historical memory hook session hash");
+  return {
+    recordType: "memory_hook_historical_attribution",
+    recordedAt: sanitizeRecordedAt(metric.recordedAt),
+    backend: "memory-hook",
+    sessionIdHash,
+    client: "opencode",
+    projectCohort: metric.projectCohort,
+    attributionBasis: metric.attributionBasis
+  };
+}
+
 function sanitizeRecordTypeMetric(metric) {
   if (metric.recordType === "health_snapshot") return sanitizeHealthSnapshotMetric(metric);
   if (metric.recordType === "live_observation") return sanitizeLiveObservationMetric(metric);
@@ -562,6 +599,8 @@ function sanitizeRecordTypeMetric(metric) {
   if (metric.recordType === "routing_disposition") return sanitizeDispositionMetric(metric, "routing_disposition", routingDispositions);
   if (metric.recordType === "routing_feedback") return sanitizeFeedbackMetric(metric, "routing_feedback");
   if (metric.recordType === "memory_hook_session") return sanitizeMemoryHookSessionMetric(metric);
+  if (metric.recordType === "memory_hook_attribution_conflict") return sanitizeMemoryHookAttributionConflictMetric(metric);
+  if (metric.recordType === "memory_hook_historical_attribution") return sanitizeMemoryHookHistoricalAttributionMetric(metric);
   if (metric.recordType === "memory_hook_disposition") return sanitizeMemoryHookDispositionMetric(metric);
   if (metric.recordType === "memory_hook_feedback") return sanitizeMemoryHookFeedbackMetric(metric);
   return {
@@ -844,27 +883,53 @@ export async function recordRoutingFeedback(configuration, feedbackId, outcome) 
   });
 }
 
-export async function recordMemoryHookSession(configuration, { client = "generic", sessionId, durationMs = null } = {}) {
+export async function recordMemoryHookSession(configuration, { client = "generic", sessionId, durationMs = null, projectCohort = "unassigned" } = {}) {
   if (!memoryHookFeedbackClients.includes(client)) throw new Error("unsupported memory hook client");
   const normalizedSessionId = normalizeMemoryHookSessionId(sessionId);
   if (!normalizedSessionId) throw new Error("invalid memory hook session ID");
   if (durationMs !== null && (!Number.isFinite(durationMs) || durationMs < 0)) throw new Error("invalid memory hook duration");
+  if (!memoryHookProjectCohorts.includes(projectCohort)) throw new Error("unsupported memory hook project cohort");
   const sessionIdHash = hashValue(normalizedSessionId);
   const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
   fs.mkdirSync(metricsDirectory, { recursive: true });
   return withMetricLock(path.join(metricsDirectory, "memory-hook-feedback.lock"), async () => {
     const { records } = metricRecords(metricsDirectory);
-    const existing = records.find((record) => record.recordType === "memory_hook_session" && record.sessionIdHash === sessionIdHash && record.client === client);
-    if (existing) return { recorded: false, sessionIdHash: sessionIdHash.slice(0, 12), client, durationMs: existing.durationMs };
+    const existing = records.filter((record) => record.recordType === "memory_hook_session" && record.sessionIdHash === sessionIdHash && record.client === client);
+    if (existing.length > 0) {
+      const existingCohorts = new Set(existing.map((record) => Object.hasOwn(record, "projectCohort") ? record.projectCohort : "legacy_unattributed"));
+      const hasLegacyAndCurrent = existingCohorts.has("legacy_unattributed") && existingCohorts.size > 1;
+      const cohortConflict = existingCohorts.size > 1 || hasLegacyAndCurrent || [...existingCohorts].some((cohort) => cohort !== "legacy_unattributed" && cohort !== projectCohort);
+      const alreadyConflicted = records.some((record) => record.recordType === "memory_hook_attribution_conflict" && record.sessionIdHash === sessionIdHash && record.client === client);
+      if (cohortConflict && !alreadyConflicted) {
+        await appendRedactedRunMetric(configuration, {
+          recordType: "memory_hook_attribution_conflict",
+          recordedAt: new Date().toISOString(),
+          backend: "memory-hook",
+          sessionIdHash,
+          client
+        });
+      }
+      const first = existing[0];
+      return {
+        recorded: false,
+        conflict: cohortConflict || alreadyConflicted,
+        legacyUnattributed: existingCohorts.has("legacy_unattributed") && !hasLegacyAndCurrent,
+        sessionIdHash: sessionIdHash.slice(0, 12),
+        client,
+        projectCohort: Object.hasOwn(first, "projectCohort") ? first.projectCohort : null,
+        durationMs: first.durationMs
+      };
+    }
     await appendRedactedRunMetric(configuration, {
       recordType: "memory_hook_session",
       recordedAt: new Date().toISOString(),
       backend: "memory-hook",
       sessionIdHash,
       client,
-      durationMs
+      durationMs,
+      projectCohort
     });
-    return { recorded: true, sessionIdHash: sessionIdHash.slice(0, 12), client, durationMs };
+    return { recorded: true, sessionIdHash: sessionIdHash.slice(0, 12), client, durationMs, projectCohort };
   });
 }
 
@@ -924,6 +989,61 @@ export async function recordMemoryHookFeedback(configuration, { client = "generi
   });
 }
 
+export async function recordMemoryHookHistoricalAttribution(configuration, {
+  client = "opencode",
+  sessionId,
+  confirmationSessionId,
+  expectedSessionIdHash,
+  projectCohort = "project_beta",
+  attributionBasis = "user_confirmed"
+} = {}) {
+  if (client !== "opencode") throw new Error("historical attribution client is not authorized");
+  const userConfirmedprojectBeta = projectCohort === "project_beta" && attributionBasis === "user_confirmed";
+  const verifiedprojectAlphaMetadata = projectCohort === "project_alpha" && attributionBasis === "session_metadata_verified";
+  if (!userConfirmedprojectBeta && !verifiedprojectAlphaMetadata) throw new Error("historical attribution cohort and basis are not authorized");
+  const normalizedSessionId = normalizeMemoryHookSessionId(sessionId);
+  const normalizedConfirmationSessionId = normalizeMemoryHookSessionId(confirmationSessionId);
+  if (!normalizedSessionId || !normalizedConfirmationSessionId || normalizedSessionId !== normalizedConfirmationSessionId) {
+    throw new Error("historical attribution session confirmation mismatch");
+  }
+  const trustedExpectedSessionIdHash = sanitizeHash(expectedSessionIdHash);
+  if (!trustedExpectedSessionIdHash) throw new Error("historical attribution authorization unavailable");
+  const sessionIdHash = hashValue(normalizedSessionId);
+  if (sessionIdHash !== trustedExpectedSessionIdHash) throw new Error("historical attribution session is not authorized");
+  const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
+  fs.mkdirSync(metricsDirectory, { recursive: true });
+  return withMetricLock(path.join(metricsDirectory, "memory-hook-feedback.lock"), async () => {
+    const { records } = metricRecords(metricsDirectory);
+    const sessions = records.filter((record) => record.recordType === "memory_hook_session" && record.sessionIdHash === sessionIdHash && record.client === client);
+    if (sessions.length === 0) throw new Error("historical attribution session not found");
+    if (sessions.some((record) => Object.hasOwn(record, "projectCohort"))) throw new Error("historical attribution session is not legacy");
+    const dispositions = records.filter((record) => record.recordType === "memory_hook_disposition" && record.sessionIdHash === sessionIdHash && record.client === client);
+    if (dispositions.length === 0 || dispositions.some((record) => record.disposition !== "eligible_real_user")) {
+      throw new Error("historical attribution session is not eligible");
+    }
+    const feedback = records.filter((record) => record.recordType === "memory_hook_feedback" && record.sessionIdHash === sessionIdHash && record.client === client);
+    const outcomes = new Set(feedback.map((record) => record.outcome));
+    const allowedOutcomes = userConfirmedprojectBeta ? ["not_useful"] : ["partial", "not_useful"];
+    if (outcomes.size !== 1 || !allowedOutcomes.includes([...outcomes][0])) throw new Error("historical attribution outcome is not authorized");
+    const existing = records.filter((record) => record.recordType === "memory_hook_historical_attribution" && record.sessionIdHash === sessionIdHash && record.client === client);
+    if (existing.length > 0) {
+      const sameAttribution = existing.every((record) => record.projectCohort === projectCohort && record.attributionBasis === attributionBasis);
+      if (!sameAttribution) throw new Error("historical attribution conflicts with existing attribution");
+      return { recorded: false, idempotent: true, client, projectCohort, attributionBasis };
+    }
+    await appendRedactedRunMetric(configuration, {
+      recordType: "memory_hook_historical_attribution",
+      recordedAt: new Date().toISOString(),
+      backend: "memory-hook",
+      sessionIdHash,
+      client,
+      projectCohort,
+      attributionBasis
+    });
+    return { recorded: true, idempotent: false, client, projectCohort, attributionBasis };
+  });
+}
+
 export function summarizeMemoryHookFeedback(records, { now = Date.now() } = {}) {
   const sessionKey = (record) => `${record.client}:${record.sessionIdHash}`;
   const sessions = new Map(records
@@ -945,6 +1065,122 @@ export function summarizeMemoryHookFeedback(records, { now = Date.now() } = {}) 
   const usefulOrPartial = outcomes.useful + outcomes.partial;
   const pilotStartAt = feedback.map((record) => Date.parse(sessions.get(sessionKey(record))?.recordedAt)).filter(Number.isFinite).sort((left, right) => left - right)[0] ?? null;
   const pilotWindowElapsed = pilotStartAt !== null && now - pilotStartAt >= 14 * 86400000;
+  const cohortBySession = new Map();
+  const sessionRecordsByKey = new Map();
+  for (const record of records.filter((entry) => entry.recordType === "memory_hook_session" && entry.sessionIdHash)) {
+    const key = sessionKey(record);
+    const grouped = sessionRecordsByKey.get(key) || [];
+    grouped.push(record);
+    sessionRecordsByKey.set(key, grouped);
+  }
+  const conflictKeys = new Set(records
+    .filter((record) => record.recordType === "memory_hook_attribution_conflict" && record.sessionIdHash)
+    .map(sessionKey));
+  for (const [key, sessionRecords] of sessionRecordsByKey) {
+    const cohorts = new Set(sessionRecords.map((record) => Object.hasOwn(record, "projectCohort") ? record.projectCohort : "legacy_unattributed"));
+    const storedConflict = cohorts.size > 1 || [...cohorts].some((cohort) => !memoryHookReportCohorts.includes(cohort));
+    if (conflictKeys.has(key) || storedConflict) {
+      cohortBySession.set(key, "attribution_conflict");
+    } else {
+      const [cohort] = cohorts;
+      cohortBySession.set(key, memoryHookReportCohorts.includes(cohort) ? cohort : "attribution_conflict");
+    }
+  }
+  const byProjectCohort = Object.fromEntries(memoryHookReportCohorts.map((cohort) => [cohort, {
+    labeledSessions: 0,
+    outcomes: Object.fromEntries(memoryHookFeedbackOutcomes.map((outcome) => [outcome, 0])),
+    usefulOrPartialRate: null
+  }]));
+  for (const record of feedback) {
+    const cohort = cohortBySession.get(sessionKey(record)) || "legacy_unattributed";
+    const aggregate = byProjectCohort[cohort] || byProjectCohort.attribution_conflict;
+    aggregate.labeledSessions += 1;
+    if (record.outcome in aggregate.outcomes) aggregate.outcomes[record.outcome] += 1;
+  }
+  for (const aggregate of Object.values(byProjectCohort)) {
+    const usefulOrPartial = aggregate.outcomes.useful + aggregate.outcomes.partial;
+    aggregate.usefulOrPartialRate = aggregate.labeledSessions > 0 ? Number((usefulOrPartial / aggregate.labeledSessions).toFixed(4)) : null;
+  }
+  const historicalRecordsBySession = new Map();
+  for (const record of records.filter((entry) => entry.recordType === "memory_hook_historical_attribution" && entry.sessionIdHash)) {
+    const key = sessionKey(record);
+    const entries = historicalRecordsBySession.get(key) || [];
+    entries.push(record);
+    historicalRecordsBySession.set(key, entries);
+  }
+  const historicalAttributionBySession = new Map();
+  for (const [key, entries] of historicalRecordsBySession) {
+    const assignments = new Set(entries.map((entry) => `${entry.projectCohort}:${entry.attributionBasis}`));
+    const validEntries = entries.every((entry) => entry.client === "opencode"
+      && ((entry.projectCohort === "project_beta" && entry.attributionBasis === "user_confirmed")
+        || (entry.projectCohort === "project_alpha" && entry.attributionBasis === "session_metadata_verified")));
+    if (assignments.size !== 1 || !validEntries) {
+      historicalAttributionBySession.set(key, { conflict: true });
+      continue;
+    }
+    const [assignment] = assignments;
+    const [projectCohort, attributionBasis] = assignment.split(":");
+    historicalAttributionBySession.set(key, { projectCohort, attributionBasis, conflict: false });
+  }
+  const historicalAttributionBases = ["user_confirmed", "session_metadata_verified"];
+  const emptyHistoricalAggregate = () => ({
+    labeledSessions: 0,
+    outcomes: Object.fromEntries(memoryHookFeedbackOutcomes.map((outcome) => [outcome, 0])),
+    usefulOrPartialRate: null
+  });
+  const historicalByProjectCohort = Object.fromEntries(memoryHookNamedCohorts.map((cohort) => [cohort, {
+    ...emptyHistoricalAggregate(),
+    byAttributionBasis: Object.fromEntries(historicalAttributionBases.map((basis) => [basis, emptyHistoricalAggregate()]))
+  }]));
+  let unattributedLegacyLabeledSessions = 0;
+  let conflictingLegacyLabeledSessions = 0;
+  for (const record of feedback) {
+    const key = sessionKey(record);
+    if (cohortBySession.get(key) !== "legacy_unattributed") continue;
+    const attribution = historicalAttributionBySession.get(key);
+    if (attribution?.conflict) {
+      conflictingLegacyLabeledSessions += 1;
+      continue;
+    }
+    if (!attribution) {
+      unattributedLegacyLabeledSessions += 1;
+      continue;
+    }
+    const validOutcome = attribution.attributionBasis === "user_confirmed"
+      ? record.outcome === "not_useful"
+      : ["partial", "not_useful"].includes(record.outcome);
+    if (!validOutcome) {
+      conflictingLegacyLabeledSessions += 1;
+      continue;
+    }
+    const aggregate = historicalByProjectCohort[attribution.projectCohort];
+    aggregate.labeledSessions += 1;
+    if (record.outcome in aggregate.outcomes) aggregate.outcomes[record.outcome] += 1;
+    const basisAggregate = aggregate.byAttributionBasis[attribution.attributionBasis];
+    basisAggregate.labeledSessions += 1;
+    if (record.outcome in basisAggregate.outcomes) basisAggregate.outcomes[record.outcome] += 1;
+  }
+  for (const aggregate of Object.values(historicalByProjectCohort)) {
+    const usefulOrPartial = aggregate.outcomes.useful + aggregate.outcomes.partial;
+    aggregate.usefulOrPartialRate = aggregate.labeledSessions > 0 ? Number((usefulOrPartial / aggregate.labeledSessions).toFixed(4)) : null;
+    for (const basisAggregate of Object.values(aggregate.byAttributionBasis)) {
+      const basisUsefulOrPartial = basisAggregate.outcomes.useful + basisAggregate.outcomes.partial;
+      basisAggregate.usefulOrPartialRate = basisAggregate.labeledSessions > 0 ? Number((basisUsefulOrPartial / basisAggregate.labeledSessions).toFixed(4)) : null;
+    }
+  }
+  const historicalAttribution = {
+    attributionBases: historicalAttributionBases,
+    attributedLabeledSessions: Object.values(historicalByProjectCohort).reduce((total, aggregate) => total + aggregate.labeledSessions, 0),
+    byProjectCohort: historicalByProjectCohort,
+    unattributedLegacyLabeledSessions,
+    conflictingLegacyLabeledSessions
+  };
+  const attributionConflictEventCount = new Set(records
+    .filter((record) => record.recordType === "memory_hook_attribution_conflict" && record.sessionIdHash)
+    .map(sessionKey)).size;
+  const attributionConflictSessionCount = new Set([...conflictKeys, ...[...cohortBySession]
+    .filter(([, cohort]) => cohort === "attribution_conflict")
+    .map(([key]) => key)]).size;
   return {
     labeledSessions,
     outcomes,
@@ -953,7 +1189,11 @@ export function summarizeMemoryHookFeedback(records, { now = Date.now() } = {}) 
     p95DurationMs: durations.length > 0 ? durations[Math.min(durations.length - 1, Math.ceil(durations.length * 0.95) - 1)] : null,
     pilotStartAt: pilotStartAt === null ? null : new Date(pilotStartAt).toISOString(),
     pilotWindowElapsed,
-    decisionReady: labeledSessions >= 15 || pilotWindowElapsed
+    decisionReady: labeledSessions >= 15 || pilotWindowElapsed,
+    byProjectCohort,
+    attributionConflictSessionCount,
+    attributionConflictEventCount,
+    historicalAttribution
   };
 }
 

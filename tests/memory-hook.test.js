@@ -91,7 +91,7 @@ test("HOOK-03: hata ana oturumu durdurmadan boş bağlam döner", async () => {
   assert.equal(await emptyQueryHook({ query: "" }), "");
 });
 
-test("HOOK-04: hook salt-okunur aramayla sınırlıdır ve kurulum varsayılan kapalı/dry-run", () => {
+test("HOOK-04: hook salt-okunur aramayla sınırlıdır ve kurulum varsayılan kapalı/dry-run", (context) => {
   const providerSource = fs.readFileSync(path.resolve("subagent-bridge/src/services/memory-hook.js"), "utf8");
   const pluginSource = fs.readFileSync(path.resolve("subagent-bridge/src/services/memory-hook-plugin.js"), "utf8");
   for (const source of [providerSource, pluginSource]) {
@@ -102,10 +102,12 @@ test("HOOK-04: hook salt-okunur aramayla sınırlıdır ve kurulum varsayılan k
   const installerPath = path.resolve("scripts/install-memory-hook.js");
   const installerSource = fs.readFileSync(installerPath, "utf8");
   assert.match(installerSource, /SUBAGENT_SECOND_BRAIN_HOOK/);
-  assert.match(installerSource, /target_exists/);
+  assert.match(installerSource, /existing_plugin_requires_manual_merge/);
   const defaultTarget = path.resolve(".opencode/plugins/second-brain-memory.js");
   const existedBefore = fs.existsSync(defaultTarget);
-  const output = childProcess.execFileSync(process.execPath, [installerPath], { encoding: "utf8" });
+  const targetDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-hook-dry-run-"));
+  context.after(() => fs.rmSync(targetDirectory, { recursive: true, force: true }));
+  const output = childProcess.execFileSync(process.execPath, [installerPath, `--project-root=${targetDirectory}`], { encoding: "utf8" });
   const result = JSON.parse(output.slice(output.indexOf("{"), output.indexOf("}") + 1));
   assert.equal(result.mode, "dry_run");
   assert.equal(result.written, false);
@@ -114,30 +116,61 @@ test("HOOK-04: hook salt-okunur aramayla sınırlıdır ve kurulum varsayılan k
   assert.equal(fs.existsSync(defaultTarget), existedBefore);
 });
 
-test("HOOK-05: apply mevcut hedefte fail-closed olur, --force ile yazar", (context) => {
+test("HOOK-05: OpenCode installer mevcut farklı hedefi --force ile de ezmez", (context) => {
   const targetDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-hook-install-"));
   context.after(() => fs.rmSync(targetDirectory, { recursive: true, force: true }));
-  const target = path.join(targetDirectory, "second-brain-memory.js");
+  const target = path.join(targetDirectory, ".opencode", "plugins", "second-brain-memory.js");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, "existing", "utf8");
   const installerPath = path.resolve("scripts/install-memory-hook.js");
-  const refused = childProcess.spawnSync(process.execPath, [installerPath, "--apply", `--target=${target}`], { encoding: "utf8" });
+  const refused = childProcess.spawnSync(process.execPath, [installerPath, "--apply", "--force", `--project-root=${targetDirectory}`, `--target=${target}`], { encoding: "utf8" });
   assert.equal(refused.status, 1);
   assert.equal(fs.readFileSync(target, "utf8"), "existing");
-  const forced = childProcess.spawnSync(process.execPath, [installerPath, "--apply", "--force", `--target=${target}`], { encoding: "utf8" });
-  assert.equal(forced.status, 0);
+  fs.rmSync(target);
+  const applied = childProcess.spawnSync(process.execPath, [installerPath, "--apply", `--project-root=${targetDirectory}`, `--target=${target}`], { encoding: "utf8" });
+  assert.equal(applied.status, 0);
   const written = fs.readFileSync(target, "utf8");
   assert.match(written, /createSecondBrainMemoryPlugin/);
+  assert.match(written, /resolveOpenCodeProjectCohort/);
   assert.match(written, /SUBAGENT_SECOND_BRAIN_HOOK/);
   assert.match(written, /recordMemoryHookSession/);
-  assert.match(written, /onContextInjected: async \(\{ sessionId, durationMs \}\) => \{/);
-  assert.match(written, /recordMemoryHookSession\(loadConfiguration\(\), \{ client: "opencode", sessionId, durationMs \}\)/);
+  assert.match(written, /plugin_enabled/);
+  assert.match(written, /plugin_disabled/);
+  assert.match(written, /session_metric_write_failed/);
+  assert.match(written, /body.extra = \{ sessionIdHash \}/);
+  assert.match(written, /onContextInjected: async \(\{ sessionId, sessionIdHash, durationMs, projectCohort \}\) => \{/);
+  assert.match(written, /recordMemoryHookSession\(loadConfiguration\(\), \{ client: "opencode", sessionId, durationMs, projectCohort \}\)/);
+  assert.match(written, /requestedCohort: "unassigned"/);
   assert.equal(written.includes("store_persistent_memory"), false);
   assert.equal(written.includes("promote_memory"), false);
 });
 
-test("HOOK-07: codex hook komutu Windows'ta tirnaksiz ve kabuk uyumlu uretilir", { skip: process.platform !== "win32" }, () => {
+test("HOOK-09: named OpenCode install exact registry kökü ve cohort gerektirir", (context) => {
+  const targetDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-hook-named-install-"));
+  context.after(() => fs.rmSync(targetDirectory, { recursive: true, force: true }));
+  const registryPath = path.join(targetDirectory, "memory-hook-cohorts.json");
+  fs.writeFileSync(registryPath, JSON.stringify({ schemaVersion: 1, projects: [{ cohort: "project_alpha", roots: [targetDirectory] }] }), "utf8");
   const installerPath = path.resolve("scripts/install-memory-hook.js");
-  const output = childProcess.execFileSync(process.execPath, [installerPath, "--client=codex"], { encoding: "utf8" });
+  const env = { ...process.env, SUBAGENT_MEMORY_HOOK_COHORT_REGISTRY: registryPath };
+  const installed = childProcess.spawnSync(process.execPath, [installerPath, "--client=opencode", `--project-root=${targetDirectory}`, "--cohort=project_alpha"], { encoding: "utf8", env });
+  assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+  const generated = installed.stdout.slice(installed.stdout.indexOf("\nimport "));
+  assert.match(generated, /requestedCohort: "project_alpha"/);
+  assert.equal(fs.existsSync(path.join(targetDirectory, ".opencode", "plugins", "second-brain-memory.js")), false);
+  const mismatch = childProcess.spawnSync(process.execPath, [installerPath, "--client=opencode", `--project-root=${targetDirectory}`, "--cohort=project_beta"], { encoding: "utf8", env });
+  assert.equal(mismatch.status, 1);
+  assert.equal(JSON.parse(mismatch.stdout).reason, "cohort_mismatch");
+});
+
+test("HOOK-07: codex hook komutu Windows'ta tirnaksiz ve kabuk uyumlu uretilir", { skip: process.platform !== "win32" }, (context) => {
+  const targetDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-codex-dry-run-"));
+  context.after(() => fs.rmSync(targetDirectory, { recursive: true, force: true }));
+  const target = path.join(targetDirectory, ".codex", "hooks.json");
+  const installerPath = path.resolve("scripts/install-memory-hook.js");
+  const output = childProcess.execFileSync(process.execPath, [installerPath, "--client=codex"], {
+    encoding: "utf8",
+    env: { ...process.env, HOME: targetDirectory, USERPROFILE: targetDirectory }
+  });
   const result = JSON.parse(output.slice(output.indexOf("{"), output.indexOf("}") + 1));
   assert.equal(result.commandQuoted, false);
   const sourceIndex = output.indexOf('{\n  "hooks"');
@@ -155,26 +188,74 @@ test("HOOK-07: codex hook komutu Windows'ta tirnaksiz ve kabuk uyumlu uretilir",
 
 test("HOOK-06: plugin chat.message + system.transform ile {sessionID} bazlı bağlam enjekte eder", async () => {
   const { createSecondBrainMemoryPlugin, queryFromParts } = await import("../subagent-bridge/src/services/memory-hook-plugin.js");
+  const { createHash } = await import("node:crypto");
   assert.equal(queryFromParts([{ type: "text", text: "  ikinci   beyin  " }, { type: "text", text: "sorusu" }]), "ikinci beyin sorusu");
   assert.equal(queryFromParts([{ type: "text", text: "x".repeat(600) }]).length, 512);
   const injected = [];
   const sessions = [];
+  const statuses = [];
   let clock = 1000;
-  const plugin = createSecondBrainMemoryPlugin({ now: () => clock, runHook: async ({ query }) => { injected.push(query); clock += 40; return "CONTEXT"; }, onContextInjected: (value) => sessions.push(value) });
+  const plugin = createSecondBrainMemoryPlugin({ now: () => clock, runHook: async ({ query }) => { injected.push(query); clock += 40; return "CONTEXT"; }, onContextInjected: (value) => sessions.push(value), onDiagnostic: (status) => statuses.push(status) });
   await plugin["chat.message"]({ sessionID: "s1" }, { parts: [{ type: "text", text: "ikinci beyin" }] });
   clock += 250;
   const output = { system: [] };
   await plugin["experimental.chat.system.transform"]({ sessionID: "s1" }, output);
   assert.deepEqual(output.system, ["CONTEXT"]);
   assert.deepEqual(injected, ["ikinci beyin"]);
-  assert.equal(sessions.length, 0);
-  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0].sessionId, "s1");
   assert.equal(sessions[0].durationMs, 40);
+  assert.deepEqual(statuses.map(({ status }) => status), ["memory_context_available"]);
+  assert.equal(statuses[0].sessionIdHash, createHash("sha256").update("s1").digest("hex"));
   const other = { system: [] };
   await plugin["experimental.chat.system.transform"]({ sessionID: "unknown" }, other);
   assert.deepEqual(other.system, []);
+});
+
+test("HOOK-06B: metrik callback'i başarısız olsa da enjekte edilen bağlam korunur", async () => {
+  const { createSecondBrainMemoryPlugin } = await import("../subagent-bridge/src/services/memory-hook-plugin.js");
+  const plugin = createSecondBrainMemoryPlugin({
+    runHook: async () => "CONTEXT",
+    onContextInjected: async () => { throw new Error("metric write failed"); }
+  });
+  await plugin["chat.message"]({ sessionID: "s1" }, { parts: [{ type: "text", text: "projectBeta Teams kararı" }] });
+  const output = { system: [] };
+  await plugin["experimental.chat.system.transform"]({ sessionID: "s1" }, output);
+  assert.deepEqual(output.system, ["CONTEXT"]);
+});
+
+test("HOOK-06C: bağlam system prompt'ta zaten varsa tekrar eklemeden session metriği üretir", async () => {
+  const { createSecondBrainMemoryPlugin } = await import("../subagent-bridge/src/services/memory-hook-plugin.js");
+  const sessions = [];
+  const plugin = createSecondBrainMemoryPlugin({
+    runHook: async () => "CONTEXT",
+    onContextInjected: (value) => sessions.push(value)
+  });
+  await plugin["chat.message"]({ sessionID: "s1" }, { parts: [{ type: "text", text: "projectBeta Teams kararı" }] });
+  const output = { system: ["CONTEXT"] };
+  await plugin["experimental.chat.system.transform"]({ sessionID: "s1" }, output);
+  assert.deepEqual(output.system, ["CONTEXT"]);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].sessionId, "s1");
+});
+
+test("HOOK-06D: eşleşme olmayan sorgu redakte durum koduyla raporlanır", async () => {
+  const { createSecondBrainMemoryPlugin } = await import("../subagent-bridge/src/services/memory-hook-plugin.js");
+  const statuses = [];
+  const sessions = [];
+  const { createHash } = await import("node:crypto");
+  const plugin = createSecondBrainMemoryPlugin({
+    runHook: async () => "",
+    onContextInjected: (value) => sessions.push(value),
+    onDiagnostic: (status) => statuses.push(status)
+  });
+  await plugin["chat.message"]({ sessionID: "s1" }, { parts: [{ type: "text", text: "projectBeta Teams karar" }] });
+  await plugin["experimental.chat.system.transform"]({ sessionID: "s1" }, { system: [] });
+  assert.deepEqual(statuses.map(({ status }) => status), ["memory_context_unavailable"]);
+  assert.equal(statuses[0].sessionIdHash, createHash("sha256").update("s1").digest("hex"));
+  assert.equal(JSON.stringify(statuses).includes("projectBeta"), false);
+  assert.equal(JSON.stringify(statuses).includes("s1"), false);
+  assert.deepEqual(sessions, []);
 });
 
 
@@ -185,9 +266,11 @@ test("HOOK-08: plugin geri cagrisi opencode oturum kaydini birlikte ve yinelenme
   const { createSecondBrainMemoryPlugin } = await import("../subagent-bridge/src/services/memory-hook-plugin.js");
   const { recordMemoryHookSession } = await import("../subagent-bridge/src/metrics.js");
   let clock = 500;
+  const statuses = [];
   const plugin = createSecondBrainMemoryPlugin({
     now: () => clock,
     runHook: async () => { clock += 30; return "CONTEXT"; },
+    onDiagnostic: (status) => statuses.push(status),
     onContextInjected: async ({ sessionId, durationMs }) => {
       await recordMemoryHookSession(configuration, { client: "opencode", sessionId, durationMs });
       await recordMemoryHookSession(configuration, { client: "opencode", sessionId, durationMs });
@@ -195,7 +278,6 @@ test("HOOK-08: plugin geri cagrisi opencode oturum kaydini birlikte ve yinelenme
   });
   await plugin["chat.message"]({ sessionID: "session-alpha" }, { parts: [{ type: "text", text: "ikinci beyin sorusu" }] });
   await plugin["experimental.chat.system.transform"]({ sessionID: "session-alpha" }, { system: [] });
-  await new Promise((resolve) => setImmediate(resolve));
   const metricsPath = path.join(configuration.statePaths.logs, "metrics", "memory-hook-runs.jsonl");
   const records = fs.readFileSync(metricsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
   const sessionRecords = records.filter((record) => record.recordType === "memory_hook_session" && record.client === "opencode");
@@ -203,6 +285,9 @@ test("HOOK-08: plugin geri cagrisi opencode oturum kaydini birlikte ve yinelenme
   assert.equal(sessionRecords[0].durationMs, 30);
   assert.equal(typeof sessionRecords[0].sessionIdHash, "string");
   assert.equal(sessionRecords[0].sessionIdHash.length, 64);
+  assert.deepEqual(statuses.map(({ status }) => status), ["memory_context_available"]);
+  assert.equal(statuses[0].sessionIdHash, sessionRecords[0].sessionIdHash);
+  assert.equal(JSON.stringify(statuses).includes("session-alpha"), false);
   assert.equal(records.some((record) => record.recordType === "memory_hook_feedback"), false);
   assert.equal(JSON.stringify(records).includes("session-alpha"), false);
 });

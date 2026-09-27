@@ -348,7 +348,7 @@ test("AG-AC-16c: carrier şema dosyası yazma hatasında geçici dizin temizleni
 
 test("AG-AC-15c: read-only permission policy yalnız inceleme komutlarını allow eder", () => {
   assert.deepEqual(READ_ONLY_PERMISSION_RULES.allow, ["read_url(*)"]);
-  assert.deepEqual(READ_ONLY_PERMISSION_RULES.deny, ["command(*)", "unsandboxed(*)", "write_file(*)"]);
+  assert.deepEqual(READ_ONLY_PERMISSION_RULES.deny, ["command(*)", "unsandboxed(*)", "write_file(*)", "mcp(*)", "execute_url(*)"]);
   assert.match(READ_ONLY_INSTRUCTION, /built-in workspace read tools/i);
   assert.match(READ_ONLY_INSTRUCTION, /Do not call MCP, terminal commands, or built-in write tools/i);
   assert.match(WEB_EVIDENCE_OUTPUT_INSTRUCTION, /Never place URLs or citation links inside result or excerpts/i);
@@ -359,9 +359,17 @@ test("AG-AC-15c: read-only permission policy yalnız inceleme komutlarını allo
 
 test("AGY-PERM-06: read-only yalnız dar mevcut izinleri ve MCP sunucusuz ortamı kabul eder", () => {
   assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: [] } }), true);
-  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["command(rg)"] } }), false);
-  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["mcp(*)"] } }), false);
-  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["command(*)"] } }), false);
+  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["command(specific)"] } }), true);
+  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["unsandboxed(specific)"] } }), true);
+  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["write_file(src/)"] } }), true);
+  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["mcp(server/tool)"] } }), true);
+  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["execute_url(example.com)"] } }), true);
+  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["read_url(example.com)"] } }), true);
+  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["command(*)"] } }), true);
+  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["mcp(*)"] } }), true);
+  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["read_file(*)"] } }), false);
+  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: ["unknown(rule)"] } }), false);
+  assert.equal(hasSafeReadOnlyPermissionBaseline({ permissions: { allow: [null] } }), false);
   assert.equal(hasNoConfiguredMcpServers({ code: 0, stdout: "No MCP servers configured.\n" }), true);
   assert.equal(hasNoConfiguredMcpServers({ code: 0, stdout: "filesystem: connected" }), false);
   assert.equal(hasNoConfiguredMcpServers({ code: 1, stdout: "No MCP servers configured." }), false);
@@ -422,15 +430,18 @@ test("AGY-PERM-08a: settings mutex request deadline ile sinirlanir ve kuyrugu bo
   assert.equal(thirdEntered, true);
 });
 
-test("AGY-PERM-09: canlı eski lock silinmez ve iki süreç ayarları geri yükler", async (t) => {
+test("AGY-PERM-09: mevcut command allow read-only deny ile bastırılır ve iki süreç ayarları geri yükler", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agy-cross-process-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const settingsDirectory = path.join(root, ".gemini", "antigravity-cli");
   fs.mkdirSync(settingsDirectory, { recursive: true });
   const settingsPath = path.join(settingsDirectory, "settings.json");
-  fs.writeFileSync(settingsPath, "{}", "utf8");
+  const originalSettings = JSON.stringify({ permissions: { allow: ["command(specific)"] } });
+  fs.writeFileSync(settingsPath, originalSettings, "utf8");
   const sleeperPath = path.join(root, "sleeper.js");
-  fs.writeFileSync(sleeperPath, "if (process.argv.includes('mcp')) { console.log('No MCP servers configured.'); process.exit(0); } setTimeout(() => process.exit(0), 1000);", "utf8");
+  const observedPath = path.join(root, "observed.json");
+  const providerSource = `import fs from 'node:fs'; import path from 'node:path'; if (process.argv.includes('mcp')) { console.log('No MCP servers configured.'); process.exit(0); } const settingsPath = path.join(process.env.HOME, '.gemini', 'antigravity-cli', 'settings.json'); const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); fs.writeFileSync(${JSON.stringify(observedPath)}, JSON.stringify({ allowPreserved: settings.permissions.allow.includes('command(specific)'), commandDenied: settings.permissions.deny.includes('command(*)'), unsandboxedDenied: settings.permissions.deny.includes('unsandboxed(*)'), writeDenied: settings.permissions.deny.includes('write_file(*)'), mcpDenied: settings.permissions.deny.includes('mcp(*)'), executeUrlDenied: settings.permissions.deny.includes('execute_url(*)') })); setTimeout(() => process.exit(0), 1000);`;
+  fs.writeFileSync(sleeperPath, providerSource, "utf8");
   const adapterModule = pathToFileURL(path.resolve("subagent-bridge/src/adapters/antigravity-adapter.js")).href;
   const source = `import { createAntigravityAdapter } from ${JSON.stringify(adapterModule)}; const adapter = createAntigravityAdapter({ antigravity: { executable: process.execPath, execArgs: [${JSON.stringify(sleeperPath)}], defaultSandbox: false } }); await adapter.execute({ executionId: process.argv[1], backend: "antigravity", prompt: "inspect", model: "gemini_pro", mode: "read_only", workspace: process.cwd(), delegationDepth: 0, caller: "test", timeoutMs: 1500 });`;
   const launch = (executionId) => new Promise((resolve, reject) => {
@@ -459,8 +470,17 @@ test("AGY-PERM-09: canlı eski lock silinmez ve iki süreç ayarları geri yükl
   const second = launch("second");
   await Promise.all([first, second]);
 
+  const observedSettings = JSON.parse(fs.readFileSync(observedPath, "utf8"));
+  assert.deepEqual(observedSettings, {
+    allowPreserved: true,
+    commandDenied: true,
+    unsandboxedDenied: true,
+    writeDenied: true,
+    mcpDenied: true,
+    executeUrlDenied: true
+  });
   const settings = fs.readFileSync(settingsPath, "utf8");
-  assert.equal(settings, "{}");
+  assert.equal(settings, originalSettings);
 });
 
 test("AGY-PERM-09a: processler arasi lock beklemesi request timeout ile sinirlanir", async (t) => {

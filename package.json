@@ -27,6 +27,7 @@
     "routing:classify": "node scripts/classify-routing-feedback.js",
     "hook:feedback": "node scripts/record-memory-hook-feedback.js",
     "hook:classify": "node scripts/classify-memory-hook.js",
+    "hook:attribute-history": "node scripts/attribute-memory-hook-history.js",
     "memory:review": "node scripts/review-memory.js",
     "memory:doctor": "node scripts/doctor-memory.js",
     "memory:repair": "node scripts/repair-memory.js",

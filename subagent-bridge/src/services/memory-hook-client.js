@@ -1,4 +1,5 @@
 import { createMemoryHook } from "./memory-hook.js";
+import { resolveMemoryHookProjectCohort } from "./memory-hook-cohort.js";
 import { normalizeMemoryHookSessionId } from "./memory-hook-identity.js";
 
 export const memoryHookClientNames = Object.freeze(["generic", "claude", "codex"]);
@@ -28,6 +29,16 @@ export function parseSessionIdFromHookInput(rawInput) {
     if (sessionId) return sessionId;
   }
   return "";
+}
+
+export function parseWorkingDirectoryFromHookInput(rawInput) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(rawInput || ""));
+  } catch {
+    return "";
+  }
+  return typeof parsed?.cwd === "string" && parsed.cwd.length > 0 && parsed.cwd.length <= 4096 ? parsed.cwd : "";
 }
 
 export function formatMemoryHookClientOutput(client, context) {
@@ -95,12 +106,13 @@ function notifyContextInjected(onContextInjected, payload) {
   });
 }
 
-export async function runMemoryHookClient({ client = "generic", input = process.stdin, output = process.stdout, hook, onContextInjected, now = () => performance.now() } = {}) {
+export async function runMemoryHookClient({ client = "generic", input = process.stdin, output = process.stdout, hook, onContextInjected, requestedCohort, registryPath, now = () => performance.now() } = {}) {
   if (!memoryHookClientNames.includes(client)) return { delivered: false };
   try {
     const rawInput = await readStreamLimited(input);
     const query = parsePromptFromHookInput(rawInput);
     const sessionId = parseSessionIdFromHookInput(rawInput);
+    const workingDirectory = parseWorkingDirectoryFromHookInput(rawInput);
     if (!query) return { delivered: false };
     const runHook = hook || createMemoryHook();
     const startedAt = now();
@@ -109,8 +121,11 @@ export async function runMemoryHookClient({ client = "generic", input = process.
     const formatted = formatMemoryHookClientOutput(client, typeof context === "string" ? context : "");
     if (!formatted) return { delivered: false };
     await writeOutput(output, formatted);
-    if (sessionId) notifyContextInjected(onContextInjected, { sessionId, durationMs });
-    return { delivered: true };
+    const cohort = requestedCohort === "unassigned"
+      ? { projectCohort: "unassigned", status: "unassigned" }
+      : resolveMemoryHookProjectCohort({ projectRoots: [workingDirectory], requestedCohort, registryPath });
+    if (sessionId) notifyContextInjected(onContextInjected, { sessionId, durationMs, projectCohort: cohort.projectCohort, cohortStatus: cohort.status });
+    return { delivered: true, projectCohort: cohort.projectCohort, cohortStatus: cohort.status };
   } catch {
     return { delivered: false };
   }
