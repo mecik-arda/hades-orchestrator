@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   expectedMemoryHookProjectTarget,
+  canonicalizeMemoryHookPath,
   memoryHookCohortRegistryMaxBytes,
   memoryHookCohortRegistryPath,
   parseMemoryHookCohortRegistry,
@@ -66,6 +67,20 @@ test("HOOK-COHORT-01: registry exact root eşleşmesi ve proje hedefi doğrulan�
     targetPath: path.join(fixture.root, "elsewhere.js"),
     registryPath: fixture.registryPath
   }).status, "target_scope_invalid");
+  const aliasedRoot = path.join(fixture.root, "project_alpha-alias");
+  fs.symlinkSync(fixture.project_alpha, aliasedRoot, process.platform === "win32" ? "junction" : "dir");
+  const aliasedTarget = path.join(aliasedRoot, ".opencode", "plugins", "second-brain-memory.js");
+  assert.equal(
+    canonicalizeMemoryHookPath(aliasedTarget),
+    canonicalizeMemoryHookPath(expectedMemoryHookProjectTarget(fixture.project_alpha, "opencode"))
+  );
+  assert.equal(validateMemoryHookProjectInstallation({
+    projectRoot: fixture.project_alpha,
+    cohort: "project_alpha",
+    client: "opencode",
+    targetPath: aliasedTarget,
+    registryPath: fixture.registryPath
+  }).valid, true);
 });
 
 test("HOOK-COHORT-02: alias kayıtları explicit olmalı ve ambiguous cohort reddedilmeli", (context) => {

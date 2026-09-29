@@ -15,17 +15,21 @@ const sessionId = argumentsByName.get("session-id");
 const confirmationSessionId = argumentsByName.get("confirm-session-id");
 const projectCohort = argumentsByName.get("cohort");
 const attributionBasis = argumentsByName.get("basis");
+const expectedSessionIdHash = process.env.SUBAGENT_MEMORY_HOOK_EXPECTED_SESSION_HASH;
 
 if (process.argv.slice(2).length !== 4 || !sessionId || !confirmationSessionId || !projectCohort || !attributionBasis) {
   process.exitCode = 1;
   console.log(JSON.stringify({ recorded: false, reason: "session_confirmation_required" }));
+} else if (typeof expectedSessionIdHash !== "string" || !/^[a-f0-9]{64}$/.test(expectedSessionIdHash)) {
+  process.exitCode = 1;
+  console.log(JSON.stringify({ recorded: false, reason: "historical attribution authorization unavailable" }));
 } else {
   try {
     const result = await recordMemoryHookHistoricalAttribution(loadConfiguration(), {
       client: "opencode",
       sessionId,
       confirmationSessionId,
-      expectedSessionIdHash: process.env.SUBAGENT_MEMORY_HOOK_EXPECTED_SESSION_HASH,
+      expectedSessionIdHash,
       projectCohort,
       attributionBasis
     });

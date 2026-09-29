@@ -128,7 +128,7 @@ test("HOOK-05: OpenCode installer mevcut farklı hedefi --force ile de ezmez", (
   assert.equal(fs.readFileSync(target, "utf8"), "existing");
   fs.rmSync(target);
   const applied = childProcess.spawnSync(process.execPath, [installerPath, "--apply", `--project-root=${targetDirectory}`, `--target=${target}`], { encoding: "utf8" });
-  assert.equal(applied.status, 0);
+  assert.equal(applied.status, 0, applied.stderr || applied.stdout);
   const written = fs.readFileSync(target, "utf8");
   assert.match(written, /createSecondBrainMemoryPlugin/);
   assert.match(written, /resolveOpenCodeProjectCohort/);

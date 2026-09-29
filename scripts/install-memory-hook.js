@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   expectedMemoryHookProjectTarget,
+  canonicalizeMemoryHookPath,
   memoryHookCohortRegistryPath,
   memoryHookNamedCohorts,
   validateMemoryHookProjectInstallation
@@ -46,8 +47,8 @@ function quoteWindows(value) {
 }
 
 function normalizedPath(value) {
-  const resolved = path.resolve(value);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  const canonicalPath = canonicalizeMemoryHookPath(value);
+  return canonicalPath && process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath;
 }
 
 function isPlainObject(value) {

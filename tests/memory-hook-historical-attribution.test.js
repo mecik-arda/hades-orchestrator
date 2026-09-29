@@ -197,10 +197,17 @@ test("HOOK-HISTORY-04: historical attribution CLI requires exact session confirm
   const unknown = childProcess.spawnSync(process.execPath, [scriptPath, "--session-id=opaque", "--confirm-session-id=opaque", "--cohort=project_alpha"], { encoding: "utf8" });
   assert.equal(unknown.status, 1);
   assert.deepEqual(JSON.parse(unknown.stdout), { recorded: false, reason: "session_confirmation_required" });
-  const missingExpectedHash = childProcess.spawnSync(process.execPath, [scriptPath, "--session-id=opaque", "--confirm-session-id=opaque", "--cohort=project_beta", "--basis=user_confirmed"], { encoding: "utf8" });
+  const environmentWithoutExpectedHash = { ...process.env };
+  delete environmentWithoutExpectedHash.SUBAGENT_MEMORY_HOOK_EXPECTED_SESSION_HASH;
+  const authorizedArguments = [scriptPath, "--session-id=opaque", "--confirm-session-id=opaque", "--cohort=project_beta", "--basis=user_confirmed"];
+  const missingExpectedHash = childProcess.spawnSync(process.execPath, authorizedArguments, { encoding: "utf8", env: environmentWithoutExpectedHash });
   assert.equal(missingExpectedHash.status, 1);
   assert.deepEqual(JSON.parse(missingExpectedHash.stdout), { recorded: false, reason: "historical attribution authorization unavailable" });
+  const invalidExpectedHash = childProcess.spawnSync(process.execPath, authorizedArguments, { encoding: "utf8", env: { ...environmentWithoutExpectedHash, SUBAGENT_MEMORY_HOOK_EXPECTED_SESSION_HASH: "invalid" } });
+  assert.equal(invalidExpectedHash.status, 1);
+  assert.deepEqual(JSON.parse(invalidExpectedHash.stdout), { recorded: false, reason: "historical attribution authorization unavailable" });
   assert.equal(missing.stdout.includes("opaque"), false);
   assert.equal(unknown.stdout.includes("opaque"), false);
   assert.equal(missingExpectedHash.stdout.includes("opaque"), false);
+  assert.equal(invalidExpectedHash.stdout.includes("opaque"), false);
 });

@@ -16,8 +16,27 @@ const projectHookTargets = Object.freeze({
   claude: path.join(".claude", "settings.local.json")
 });
 
+export function canonicalizeMemoryHookPath(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 4096) return null;
+  let current = path.resolve(value);
+  const missingSegments = [];
+  while (true) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...missingSegments);
+    } catch (error) {
+      if (!["ENOENT", "ENOTDIR"].includes(error.code)) return null;
+      const parent = path.dirname(current);
+      if (parent === current) return null;
+      missingSegments.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
 function canonicalPathKey(value) {
-  return process.platform === "win32" ? value.toLowerCase() : value;
+  const canonicalPath = canonicalizeMemoryHookPath(value);
+  if (!canonicalPath) return null;
+  return process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath;
 }
 
 function canonicalDirectory(value) {
@@ -143,7 +162,7 @@ export function validateMemoryHookProjectInstallation({ projectRoot, cohort, cli
   if (!expectedTargetPath || typeof targetPath !== "string" || !path.isAbsolute(targetPath)) {
     return { valid: false, status: "target_scope_invalid" };
   }
-  if (canonicalPathKey(path.resolve(targetPath)) !== canonicalPathKey(expectedTargetPath)) {
+  if (canonicalPathKey(targetPath) !== canonicalPathKey(expectedTargetPath)) {
     return { valid: false, status: "target_scope_invalid" };
   }
   const result = resolveMemoryHookProjectCohort({ projectRoots: [projectRoot], requestedCohort: cohort, registryPath });

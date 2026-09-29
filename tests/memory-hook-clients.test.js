@@ -299,7 +299,7 @@ test("CLIENT-10: Claude project snippet sabit cohort taşır ve global omission 
   assert.equal(project.status, 0, project.stderr || project.stdout);
   const projectResult = JSON.parse(project.stdout);
   const projectHook = projectResult.snippet.hooks.UserPromptSubmit[0].hooks[0];
-  assert.equal(projectResult.targetExpected, path.join(fixture.projectRoot, ".claude", "settings.local.json"));
+  assert.equal(projectResult.targetExpected, path.join(fs.realpathSync.native(fixture.projectRoot), ".claude", "settings.local.json"));
   assert.deepEqual(projectHook.args, [path.resolve("scripts/memory-hook-client.js"), "--client=claude", "--cohort=project_beta"]);
   const global = childProcess.spawnSync(process.execPath, [installerPath, "--client=claude", "--global"], { encoding: "utf8", env });
   assert.equal(global.status, 0);
