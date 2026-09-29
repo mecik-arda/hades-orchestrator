@@ -60,10 +60,11 @@ Bu projede ana orkestratör ve son karar verici, OpenCode oturumunda aktif kulla
 
 ## Dokümantasyon düzeni
 
-- `docs/plans` altındaki planlar tarihsel kayıttır. Denetlenen planların başında tarihli durum notu bulunur ve güncel durum bu nottan izlenir.
+- Mimari dokümanlar tarihsel karar bağlamını korur; güncel davranış README ve doğrulama komutlarıyla açıklanır.
+- Public belgelerdeki mimari bağlantılar dağıtımda bulunan dosyalara yönlendirilir.
 - Planda sabit test veya araç sayısı verme; güncel doğrulamaya (`npm test`, `npm run verify:ci`) atıf yap. Sabit sayılar zamanla bayatlar.
-- Uygulama denetimleri `docs/reports` altında tutulur ve planları geriye dönük değiştirmez; açık maddeler `karar kapısı`, `dış-bağımlı`, `reddedildi` veya `opt-in` olarak etiketlenir.
-- Public dışa aktarımda `docs/plans` yalnız seçili mimari dokümanları `docs/architecture` altına taşır; private rapor referansları temizlenir.
+- Denetim bulguları uygulamadan ayrı belgelenir; açık maddeler için karar durumu belirtilir.
+- Public mimari dokümanları `docs/architecture` altında tutulur.
 
 ## Güvenilirlik ve gözlemlenebilirlik
 

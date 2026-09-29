@@ -17,9 +17,14 @@
                                    "dogrulama-kapisi",
                                    "mcp-sozlesme-denetimi",
                                    "hafiza-vault-bakimi",
-                                   "maliyet-ve-butce-denetimi",
-                                   "bagimlilik-guvenligi"
-                               ]
+                                    "maliyet-ve-butce-denetimi",
+                                    "bagimlilik-guvenligi",
+                                    "m2-hook-oturum-uygunlugu",
+                                    "m2-hook-sonuc-geri-bildirimi",
+                                    "m2-hook-proje-kohortu",
+                                    "m2-hook-tarihsel-atif",
+                                    "m2-hook-metrik-incelemesi"
+                                ]
                },
     "deepseek":  {
                      "openCodeModel":  "deepseek/deepseek-v4-pro",

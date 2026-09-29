@@ -32,7 +32,7 @@ Orkestrasyon köprüsünün maliyet, güvenilirlik ve hizmet seviyesi telemetris
 ## Aşım davranışı
 
 - Enforcement açıkken limit aşımında fail-closed davran; yeni isteği bütçe dışına taşırma.
-- Bilgilendirme modunda aşımı raporla; yeni ücretli çalışma için açık kullanıcı onayı iste ve kaydı `docs/reports/UCRETLI_CALISMA_ONAY_KAYDI.md` içine işle.
+- Bilgilendirme modunda aşımı raporla; yeni ücretli çalışma için açık kullanıcı onayı iste ve onay kaydını yerel çalışma ortamında tut.
 - Circuit açıkken fallback yapma veya yalnız policy'de tanımlı hedeflere yönlendir.
 - Bozuk metrik satırlarını harcama olarak sayma; `droppedMetricRecords` ile raporla.
 

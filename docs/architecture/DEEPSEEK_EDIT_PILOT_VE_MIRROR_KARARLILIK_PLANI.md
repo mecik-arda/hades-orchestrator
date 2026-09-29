@@ -1,6 +1,6 @@
 # DeepSeek Edit Pilotu Ve Mirror Kararlılık Planı
 
-> Durum notu (2026-09-18): Bu belge tarihsel plandır; uygulama denetimi `ayrintili denetim kaydi (ozel depo, docs/reports)` içindedir. Plandaki test ve araç sayıları oluşturulma tarihine aittir; güncel doğrulama için `npm test`. Denetim sonucu: tamamlandı; operasyonel kabul 2026-09-18 tarihli canlı pilot ve kabul çalıştırması ile alındı.
+> Durum notu (2026-09-18): Bu belge tarihsel plandır; uygulama denetimi `ayrıntılı denetim kaydı ayrı tutulur` içindedir. Plandaki test ve araç sayıları oluşturulma tarihine aittir; güncel doğrulama için `npm test`. Denetim sonucu: tamamlandı; operasyonel kabul 2026-09-18 tarihli canlı pilot ve kabul çalıştırması ile alındı.
 
 ## Amaç
 

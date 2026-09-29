@@ -5,9 +5,9 @@
 - Kapsam: Obsidian Vault tabanli kalici hafizanin, buyuk ve cok adimli calismalarda context toplama, karar verme ve devir teslim sureclerini iyilestirmesi
 - Kaynaklar: https://github.com/avenoxai/avenoxbeyin, https://github.com/umutyalcin-pen/second-brainbro, https://www.youtube.com/watch?v=4vWlWHDol-g, https://www.linkedin.com/posts/umutyalcinsec_yapayzeka-siberg%C3%BCvenlik-obsidian-activity-7494480266766479360-V2rI
 
-> Durum notu (2026-09-21): Aşama 1 tamamlandı (`docs/reports/kalici-hafiza-piyasa-arastirma-2026-08-21.md` referans raporu ve SHA-256 kontrollü Vault özeti yayımlandı). Aşama 2-5 açıktır; gerçek çok oturumlu iş doğduğunda ele alınır. Üstteki "uygulanmadı" ifadesi planın ilk yazım anına aittir.
+> Durum notu (2026-09-21): Aşama 1 tamamlandı (kaynaklı piyasa araştırması raporu referans raporu ve SHA-256 kontrollü Vault özeti yayımlandı). Aşama 2-5 açıktır; gerçek çok oturumlu iş doğduğunda ele alınır. Üstteki "uygulanmadı" ifadesi planın ilk yazım anına aittir.
 
-> Uygunluk notu (2026-09-21): Fayda-zarar analizi `docs/reports/VIDEO_KAYNAKLI_PLANLAR_UYGUNLUK_ANALIZI_2026-09-21.md` (Sol APPROVED) Aşama 2-5'i koşullu/açık olarak teyit etti; Aşama 4-5 resmi kapanışı da açık maddeler arasındadır. Statü değişmedi.
+> Uygunluk notu (2026-09-21): Fayda-zarar analizi video kaynaklı uygunluk değerlendirmesi (Sol APPROVED) Aşama 2-5'i koşullu/açık olarak teyit etti; Aşama 4-5 resmi kapanışı da açık maddeler arasındadır. Statü değişmedi.
 
 ## Yurutme Ozeti
 
@@ -68,12 +68,12 @@
 
 ### Asama 1: Arastirma Raporu Sozlesmesi
 
-Durum: Rapor sozlesmesi ve ilk kaynakli referans rapor `docs/reports/kalici-hafiza-piyasa-arastirma-2026-08-21.md` ile tamamlandi. Kaynakli Vault ozeti tekrar ve celiski analizi, draft incelemesi ve SHA-256 kontrollu promote sonrasinda published olarak yayimlandi.
+Durum: Rapor sozlesmesi ve ilk kaynakli referans rapor kaynaklı piyasa araştırması raporu ile tamamlandi. Kaynakli Vault ozeti tekrar ve celiski analizi, draft incelemesi ve SHA-256 kontrollu promote sonrasinda published olarak yayimlandi.
 
-- `docs/reports` icin rapor dosyasi adlandirma, zorunlu metadata ve kaynak formatini tanimla.
+- Raporlar icin dosya adlandirma, zorunlu metadata ve kaynak formatini tanimla.
 - Raporlarda hedef, kapsam, bulgular, kanit, celiskiler, riskler, oneriler ve acik sorular bolumlerini zorunlu kil.
 - Raporu karar kaydi veya kalici hafiza olarak kabul etme; bunlar ayri insan/ana orkestrator degerlendirmesi gerektirir.
-- Ilk referans raporu olarak `docs/plans/yapilanlar/KALICI_HAFIZA_PIYASA_ARASTIRMASI_2026-08-21.md` bulgularini kaynakli rapor sozlesmesine aktar. Bu, mevcut planlar arasinda rapor formatini gercek bir ornekle dogrular.
+- Ilk referans raporu olarak kaynaklı piyasa araştırması raporu bulgularini kaynakli rapor sozlesmesine aktar. Bu, mevcut planlar arasinda rapor formatini gercek bir ornekle dogrular.
 - Bu raporun ana orkestrator tarafindan onaylanan, secret ve injection taramasindan gecen kisa sonucunu `00_Inbox` altinda semantic draft olarak Vault'a yaz. Tekrar ve celiski analizinden, SHA-256 dogrulamasindan ve bilincli promote kararindan once yayinlama yapma.
 - Kabul kriteri: En az bir mevcut arastirma raporu yeni sozlesmeye gore eksiksiz ve kaynakli olmalidir.
 - Kabul kriteri: Ilk referans raporunun Vault ozeti yalniz promote sonrasinda published aramada gorunur; audit kaydi icerik, yol, gorev kimligi veya kaynak URL icermez.
@@ -88,7 +88,7 @@ Durum: Rapor sozlesmesi ve ilk kaynakli referans rapor `docs/reports/kalici-hafi
 
 ### Asama 3: Mini-Spec Sozlesmesi
 
-- `docs/plans` altinda uygulama oncesi spec sablonu tanimla.
+- Uygulama oncesi kullanilacak mini-spec sablonunu tanimla.
 - Zorunlu alanlar: amac, mevcut davranis, hedef davranis, degisecek dosyalar, kapsam disi alanlar, guvenlik sinirlari, kabul kriterleri ve test komutlari.
 - Implementer subagent'a yalniz bu spec, secili dosyalar ve gerekli kisa baglam verilir.
 - Ana orkestrator, subagent sonucunu kanit olarak degil danismanlik olarak degerlendirir ve testleri kendisi calistirir.

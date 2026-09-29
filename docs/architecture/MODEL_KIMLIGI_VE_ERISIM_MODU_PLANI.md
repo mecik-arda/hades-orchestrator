@@ -1,6 +1,6 @@
 SUBAGENT MODEL KİMLİĞİ VE İKİLİ YETKİ MODU HEDEFİ
 
-> Durum notu (2026-09-18): Bu belge tarihsel plandır; uygulama denetimi `ayrintili denetim kaydi (ozel depo, docs/reports)` içindedir. Plandaki test ve araç sayıları oluşturulma tarihine aittir; güncel doğrulama için `npm test`. Denetim sonucu: Faz 1-3 uygulandı; Faz 4 native Claude edit kabulü kimlik doğrulaması nedeniyle dış-bağımlı.
+> Durum notu (2026-09-18): Bu belge tarihsel plandır; uygulama denetimi `ayrıntılı denetim kaydı ayrı tutulur` içindedir. Plandaki test ve araç sayıları oluşturulma tarihine aittir; güncel doğrulama için `npm test`. Denetim sonucu: Faz 1-3 uygulandı; Faz 4 native Claude edit kabulü kimlik doğrulaması nedeniyle dış-bağımlı.
 
 > İkinci durum notu (2026-09-18, akşam): Kullanıcının Claude Code aboneliği yoktur. Faz 4 native Claude edit acceptance bu nedenle `reddedildi` olarak kapatılmıştır; native Claude edit yetkisi açılmayacak ve bu ortamda Claude tabanlı ikinci görüş Antigravity Claude Sonnet ile karşılanacaktır. Faz 1-3 desteği ve `claude_code` read-only adapter kodu, aboneliği olan bir ortamda çalışacak biçimde korunur; bu kurulumda çağrı yapılmaz.
 
