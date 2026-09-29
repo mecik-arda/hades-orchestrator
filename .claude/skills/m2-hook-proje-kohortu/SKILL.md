@@ -33,6 +33,13 @@ Bu skill yeni memory-hook session'larında cohort metadata'sının nasıl çöz�
 5. Session anındaki gerçek plugin/kurulum girdisi artık yoksa hangi yolun `unassigned` ürettiğini kesinleştirme; kanıtlanan session sonucu ile olası kurulum nedenlerini ayrı yaz.
 6. Düzeltme varsa gelecekteki session'ların kurulum/registry ayarını ele alır. Mevcut `memory_hook_session` event'ini değiştirme; `hook:feedback` veya historical attribution cohort onarma aracı değildir.
 
+## Kurulum sonrası doğrulama
+
+- Registry eklemek veya OpenCode'u yeniden başlatmak tek başına yeni session'a bağlam enjekte edildiğini kanıtlamaz. Yeni gerçek `client + sessionIdHash` kaydını ve ölçülmüş süreyi doğrula; cohort'un yapılandırılan named değer olduğunu session metriğinden kontrol et.
+- Cohort yalnız yeni session kaydına yazılır. Önceki session `unassigned` ise olduğu gibi kalır; registry değişikliği veya restart ile geriye dönük düzeltme yapma.
+- OpenCode'da `recordMemoryHookSession` çağrısı `projectCohort` almıyorsa köprü varsayılanı `unassigned` olur. Düzeltmede hem eklentiye resolved project cohort'u verildiğini hem de callback'te `projectCohort` değerinin session kayıt fonksiyonuna geçirildiğini doğrula.
+- Kurulum izni verildiğinde bile mevcut hedef eklenti dosyasını `--force` ile ezme. Installer mevcut farklı eklentiyi reddeder; mevcut içeriği incele ve yalnız onaylanan cohort değişikliğini kontrollü biçimde birleştir.
+
 ## Kurulum
 
 Yalnız kullanıcı açıkça kurulum istediğinde kurulum komutunu kullan. `--apply` kalıcı hook/config yazımı yapar; açık yazma isteği ve doğru proje/global kapsamı olmadan ekleme. Project named install örneği:

@@ -14,7 +14,9 @@ Bu skill, kullanıcının belirli bir gerçek memory-hook session'ı için açı
 
 ## Kayıt akışı
 
-1. Outcome'un kullanıcı tarafından o session için açıkça seçildiğini doğrula. Yalnız şu değerler kabul edilir: `useful`, `partial`, `not_useful`.
+Önce aynı session için var olan feedback'i salt-okunur kontrol et; aynı outcome varsa no-op yap, farklı outcome varsa dur. Bu kontrol disposition yazımı veya feedback yazımından önce gelir.
+
+1. Outcome'un kullanıcı tarafından bu session için açıkça seçildiğini doğrula. `useful`, `partial` veya `not_useful` değerini açıkça seçip “etiketle/kaydet” dediğinde kayıt isteği de açıktır. Yalnız hangisini seçmesi gerektiğini soruyorsa outcome çıkarma.
 2. Gerçek `memory_hook_session` kaydını, aynı istemciyi ve tam gerçek session ID'yi doğrula. Host ID'yi sağlamasa bile kullanıcı tam gerçek ID'yi verdiyse aktif canonical Orkestrasyon bridge metrik kaynağında normalize edilmiş ID'nin SHA-256 değeri ve istemciyle salt-okunur eşleştirme yap; raw ID/hash'i çıktı veya loga yazma. Host ve bu konuşma ID sağlamıyorsa, kullanıcı oturum-özel kayıt isteğinde bulunduğunda ID'yi bir kez iste. ID başka konuşmada verilmişse bu konuşmanın geçmişini göremediğini açıkla. ID hâlâ yoksa `doğrulanamadı` bildir ve feedback yazmadan dur; tekrar isteme.
 3. Aynı `client + session-id` çifti için `eligible_real_user` disposition'ını doğrula. Uygunluk henüz sınıflandırılmamışsa ve kullanıcı sınıflandırma/kayıt zinciri istediyse önce:
 
@@ -31,6 +33,13 @@ npm run hook:feedback -- <useful|partial|not_useful> --client=<opencode|codex|cl
 
 `--session-id` zorunludur. Gerçek istemciyi belirt; `generic` yalnız kaynak gerçekten generic ise kullan.
 5. Komut dönüşünün kaydı kabul ettiğini doğrula. Hata, duplicate veya çelişki halinde tekrar tekrar yazma; redakte hata sınıfını bildir ve dur.
+
+## Mevcut session ve tekrar kontrolü
+
+- Outcome'u kaydetme isteği, eksik disposition'ı kanıta göre doğrulamak için gereken eligibility adımını da kapsar; aynı kayıt iznini tekrar sorma. Bu, outcome seçme veya kanıtsız `eligible_real_user` verme izni değildir.
+- Yazmadan önce aynı session için var olan `memory_hook_feedback` kaydını kontrol et. Outcome aynıysa “zaten kayıtlı” diye bildir ve ikinci kayıt oluşturma; farklıysa çelişkiyi bildirip dur, mevcut sonucu değiştirme.
+- Kullanıcının bu konuşmada önce verdiği session ID'yi kullan; tekrar isteme. OpenCode restart'i tek başına yeni ID anlamına gelmez. Verilen ID ile `memory_hook_session` kaydı bulunamazsa bunu açıkça bildir; yeni oturum için ID yalnız gerekliyse bir kez sor.
+- Gerçek session kaydı ve measured süre yoksa `useful` seçilmiş olsa bile feedback yazma. Mevcut feedback'in bulunması tek başına bu session'da hook bağlamı enjekte edildiğini kanıtlamaz.
 
 ## Sınırlar
 
