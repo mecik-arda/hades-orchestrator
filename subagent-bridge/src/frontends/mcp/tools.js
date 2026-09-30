@@ -64,6 +64,32 @@ export const publicToolSchemas = {
     mode: readOnlyModeSchema,
     timeout_seconds: timeoutSecondsSchema
   }).strict(),
+  runSpaceBunny: z.object({
+    taskId: z.string().min(1).max(120),
+    role: z.enum(["analyst", "researcher", "reviewer", "planner", "implementer"]),
+    mode: modeSchema,
+    webResearch: z.boolean().default(false),
+    objective: z.string().min(1).max(12000),
+    files: z.array(z.string().min(1).max(500)).max(100).default([]),
+    contextFiles: z.array(z.string().min(1).max(500)).max(100).default([]),
+    acceptanceCriteria: z.array(z.string().min(1).max(4000)).max(50).default([]),
+    timeout_seconds: timeoutSecondsSchema
+  }).strict().superRefine((value, context) => {
+    if (value.mode === "edit" && value.role !== "implementer") context.addIssue({ code: z.ZodIssueCode.custom, path: ["role"], message: "edit mode requires implementer role" });
+    if (value.mode === "edit" && value.files.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ["files"], message: "edit mode requires selected target files" });
+    if (value.mode === "edit" && value.acceptanceCriteria.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ["acceptanceCriteria"], message: "edit mode requires acceptance criteria" });
+    if (value.webResearch && (value.mode !== "read_only" || value.role !== "researcher")) context.addIssue({ code: z.ZodIssueCode.custom, path: ["webResearch"], message: "web research requires read-only researcher role" });
+    if (value.role === "researcher" && !value.webResearch) context.addIssue({ code: z.ZodIssueCode.custom, path: ["webResearch"], message: "researcher role requires explicit webResearch opt-in" });
+  }),
+  runSpaceBunnyEditPilot: z.object({
+    taskId: z.string().min(1).max(120),
+    role: z.literal("implementer"),
+    objective: z.string().min(1).max(12000),
+    files: z.array(z.string().min(1).max(500)).min(1).max(100),
+    contextFiles: z.array(z.string().min(1).max(500)).max(100).default([]),
+    acceptanceCriteria: z.array(z.string().min(1).max(4000)).min(1).max(50),
+    timeout_seconds: timeoutSecondsSchema
+  }).strict(),
   runCodex: z.object({
     prompt: z.string().min(1).max(60000),
     model: z.string().min(1).max(120).default("gpt-6-sol"),
@@ -218,6 +244,17 @@ export function createMcpToolHandlers({ runtime, trustedWorkspace, caller = "ope
     async runOpenCode(input, context = {}) {
       const parsed = parse(publicToolSchemas.runOpenCode, input);
       return toMcpResult(await runtime.run(createRuntimeRequest(parsed, "opencode", trustedWorkspace, caller, context.signal)));
+    },
+    async runSpaceBunny(input, context = {}) {
+      const parsed = parse(publicToolSchemas.runSpaceBunny, input);
+      requireImplementerEdit(parsed);
+      const result = await runtime.runSpaceBunny(parsed, trustedWorkspace, context.signal);
+      return { isError: result.status ? result.status !== "completed" : result.ok === false, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result };
+    },
+    async runSpaceBunnyEditPilot(input, context = {}) {
+      const parsed = parse(publicToolSchemas.runSpaceBunnyEditPilot, input);
+      const result = await runtime.runSpaceBunnyEditPilot(parsed, trustedWorkspace, context.signal);
+      return { isError: result.status !== "completed", content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result };
     },
     async runCodex(input, context = {}) {
       const parsed = parse(publicToolSchemas.runCodex, input);

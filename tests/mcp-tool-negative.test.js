@@ -6,6 +6,8 @@ const wrongTypePayloads = {
   runAntigravity: { prompt: 42, model: "gemini_pro", mode: "read_only" },
   runClaudeCode: { prompt: 42, mode: "read_only" },
   runOpenCode: { prompt: "soru", model: 42, mode: "read_only" },
+  runSpaceBunny: { taskId: 42, role: "analyst", mode: "read_only", objective: "hedef" },
+  runSpaceBunnyEditPilot: { taskId: "t1", objective: "hedef", files: "dosya", acceptanceCriteria: ["kriter"] },
   runCodex: { prompt: false, mode: "read_only" },
   runProfile: { prompt: "soru", profile: 42 },
   runDeepSeek: { taskId: 1, role: "analyst", mode: "read_only", objective: "hedef", workspace: "ws", acceptanceCriteria: ["kriter"] },

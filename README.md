@@ -73,7 +73,7 @@ OpenCode Host
      ├─ Bridge Runtime       → canonical router, capability, lock, retry, cancellation
      ├─ AntigravityAdapter   → AGY (Gemini Pro/Flash, Claude Sonnet via Antigravity)
      ├─ ClaudeCodeAdapter    → native Claude Code
-     ├─ OpenCodeAdapter      → DeepSeek, GLM, independent OpenCode providers/models
+      ├─ OpenCodeAdapter      → DeepSeek, GLM, independent OpenCode providers/models including gated Space Bunny Free
      ├─ CodexAdapter         → official OpenAI Codex CLI
      └─ Observability        → global redacted metrics + opt-in .hades mirror
 ```
@@ -112,9 +112,18 @@ Native Claude Code      → ClaudeCodeAdapter
 DeepSeek V4 Pro / Flash → OpenCodeAdapter → deepseek/deepseek-v4-pro or deepseek/deepseek-flash (DeepSeek-V4.1-Flash)
 GLM 5.2/5.3 (+Flash)    → OpenCodeAdapter → zai-coding-plan/glm-5.2, -highspeed, -5.3, -5.3-flash
 Independent OpenCode    → OpenCodeAdapter (only explicitly requested identities)
+Space Bunny Free         → OpenCodeAdapter → opencode/space-bunny-free (explicit opt-in, zero-price preflight)
 ```
 
 Gemini is not routed to OpenCodeAdapter. Results carry `requestedModel`, nullable `resolvedModel` and `accessMode`.
+
+### Space Bunny Free
+
+Space Bunny Free is available only by explicit selection. `check_space_bunny_subagent` refreshes the OpenCode models.dev catalog and reports exact-model status and price metadata; it does not verify auth or live endpoint access. Every provider call repeats the exact-model zero-price gate and fails before `opencode run` if the refreshed catalog is missing, invalid, inactive or nonzero. The official Zen price page currently lists it as free for a limited time; this can change.
+
+Calls use `--pure`, disable project-local OpenCode config, and receive a Bridge-generated per-invocation `OPENCODE_CONFIG_CONTENT`: `small_model` is pinned to Space Bunny, and the primary agent's effective permissions deny all tools by default except the explicitly allowed read tools (or edit tool in the disposable edit worker). Inherited config overrides are not trusted, personal OpenCode configuration is not changed, and configured task-profile fallback never routes to Space Bunny. OS-managed settings still take precedence and effective permissions must pass canary checks. Catalog health does not establish model access.
+
+`run_space_bunny_subagent` supports restricted read-only tasks and selected-file controlled edits. Explicit web research uses `webResearch: true`, `role: researcher`, and `mode: read_only`; that route creates an empty OS-temp workspace and allows only `websearch` and `webfetch`, with local file access denied. Every edit promotion, including low-impact single-file changes, returns a stored pending request bound to exact model, source class, files and workspace state; only `approve_prepared_edit` can apply it. `run_space_bunny_edit_pilot` edits a disposable copy and never promotes. A separate synthetic read-only canary on 2026-09-30 confirmed model access, marker reading, no workspace mutation, and a reported denial for write/outside-directory attempts. An initial canary nested inside the Git worktree was invalid because OpenCode selected the repository root; the isolated canary was rerun from an OS-temp directory outside the worktree. Edit pilot remains opt-in and unrun. The anonymous provider's privacy claims are OpenCode's published statement, not an independent audit.
 
 ### Task profiles
 

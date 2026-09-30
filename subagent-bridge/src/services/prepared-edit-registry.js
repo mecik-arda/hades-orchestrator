@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { approvalClassValues, isOrchestratorApprovableClass } from "./approval-boundary.js";
+import { approvalClassValues, isPreparedEditApprovable } from "./approval-boundary.js";
 
 const hashPattern = /^[a-f0-9]{64}$/;
 const changeTypeValues = new Set(["created", "modified"]);
@@ -78,6 +78,7 @@ function project(entry) {
     executionIdHash: entry.executionIdHash,
     changeSetHash: entry.changeSetHash,
     approvalClass: entry.approvalClass,
+    sourceApprovalClass: entry.sourceApprovalClass,
     workspaceHash: entry.workspaceHash,
     sourceStateHash: entry.sourceStateHash,
     changedPaths: [...entry.changedPaths],
@@ -135,7 +136,7 @@ export function createPreparedEditRegistry({ ttlMs = defaultTtlMs, maxEntries = 
     const changeSetHash = requireHash(record.changeSetHash, "change set hash");
     const workspaceHash = requireHash(record.workspaceHash, "workspace hash");
     const sourceStateHash = requireHash(record.sourceStateHash, "source state hash");
-    if (!approvalClassValues.includes(record.approvalClass) || !isOrchestratorApprovableClass(record.approvalClass)) throw new Error("prepared edit class is not approvable in the orchestrator channel");
+    if (!approvalClassValues.includes(record.approvalClass) || !isPreparedEditApprovable(record)) throw new Error("prepared edit class is not approvable in the orchestrator channel");
     const changes = normalizeChanges(record.changes);
     const changedPaths = changes.map((change) => change.relativePath);
     if (changedPaths.some((relativePath) => ["opencode.json", "opencode.jsonc"].includes(relativePath.split("/").pop().toLocaleLowerCase("en-US")))) throw new Error("invalid prepared edit path");
@@ -161,6 +162,7 @@ export function createPreparedEditRegistry({ ttlMs = defaultTtlMs, maxEntries = 
       executionIdHash,
       changeSetHash,
       approvalClass: record.approvalClass,
+      sourceApprovalClass: record.sourceApprovalClass,
       workspaceHash,
       sourceStateHash,
       changedPaths,

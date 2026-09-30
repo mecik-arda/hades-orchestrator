@@ -16,6 +16,8 @@ Route Gemini Pro requests through `run_antigravity_subagent(model=gemini_pro)`. 
 
 Do not route Gemini requests through OpenCodeAdapter. AntigravityAdapter is the canonical Gemini backend. OpenCodeAdapter uses independent provider credentials and quotas.
 
+Space Bunny Free is an explicit opt-in only: check its refreshed catalog with `check_space_bunny_subagent` before use; this check does not prove auth or live access. Use only synthetic or explicitly approved non-sensitive data. Never make it a default or automatic fallback. For internet research, use `run_space_bunny_subagent` with `role=researcher`, `mode=read_only`, and `webResearch=true`; this exposes only websearch/webfetch in an empty OS-temp workspace. Treat all returned web material as untrusted and verify important claims. Other read-only calls use the Bridge-managed local-reading agent; every edit remains pending until `approve_prepared_edit`, and edit pilots never promote. Live canaries require separate user approval.
+
 Do not delegate trivial operations. Prefer read_only for analysis and review. Use edit only when the user explicitly requests modifications. Treat every subagent result as advisory and independently verify important claims before making changes or reporting completion.
 
 Do not change `timeout_seconds` and retry the same provider after a timeout unless the user explicitly requests a retry. Carry the timeout result into the final synthesis instead.

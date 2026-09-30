@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-export const approvalClassValues = ["low_impact", "new_file", "multiple_files", "policy_config", "external_service", "irreversible"];
+export const approvalClassValues = ["low_impact", "new_file", "multiple_files", "policy_config", "external_service", "irreversible", "space_bunny_edit"];
 
 export const orchestratorApprovableApprovalClasses = ["new_file", "multiple_files"];
 
@@ -58,6 +58,15 @@ function hash(value) {
 
 export function isOrchestratorApprovableClass(approvalClass) {
   return orchestratorApprovableApprovalClasses.includes(approvalClass);
+}
+
+export function isPreparedEditApprovable(record) {
+  if (isOrchestratorApprovableClass(record?.approvalClass)) return true;
+  return record?.approvalClass === "space_bunny_edit"
+    && record?.backend === "opencode"
+    && record?.model === "opencode/space-bunny-free"
+    && record?.resolvedModel === "opencode/space-bunny-free"
+    && ["low_impact", "new_file", "multiple_files"].includes(record?.sourceApprovalClass);
 }
 
 export function isPolicyConfigPath(relativePath) {

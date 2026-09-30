@@ -325,6 +325,30 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
     annotations: executionAnnotations
   }, safe(handlers.runOpenCode));
 
+  server.registerTool("check_space_bunny_subagent", {
+    title: "Space Bunny Free kataloğunu kontrol et",
+    description: "OpenCode models.dev kataloğunu yenileyip yalnız opencode/space-bunny-free durumunu ve sıfır fiyat metadata'sını doğrular; auth veya canlı model erişimini kanıtlamaz.",
+    inputSchema: {},
+    annotations: externalReadOnlyExecutionAnnotations
+  }, safe(async () => {
+    const result = await runtime.checkSpaceBunny();
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result };
+  }));
+
+  server.registerTool("run_space_bunny_subagent", {
+    title: "Space Bunny Free subagent çalıştır",
+    description: "Sabit opencode/space-bunny-free kimliğiyle read-only görev veya seçilmiş dosyalarda kontrollü edit yürütür. `webResearch: true` yalnız read-only researcher rolünde, OS temp çalışma alanında websearch/webfetch araçlarını açar. Edit sonucu yalnız açık approve_prepared_edit onayıyla trusted workspace'e terfi eder.",
+    inputSchema: publicToolSchemas.runSpaceBunny.shape,
+    annotations: executionAnnotations
+  }, safe(handlers.runSpaceBunny));
+
+  server.registerTool("run_space_bunny_edit_pilot", {
+    title: "Space Bunny disposable edit pilotu çalıştır",
+    description: "Space Bunny Free'yi yalnız seçilmiş dosyaların bridge-owned disposable kopyasında dener; ana workspace'e hiçbir değişiklik terfi ettirmez.",
+    inputSchema: publicToolSchemas.runSpaceBunnyEditPilot.shape,
+    annotations: executionAnnotations
+  }, safe(handlers.runSpaceBunnyEditPilot));
+
   server.registerTool("run_codex_subagent", {
     title: "OpenAI Codex subagent çalıştır",
     description: "OpenAI Codex CLI üzerinden salt okunur veya düzenleme modunda görev devreder.",
