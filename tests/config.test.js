@@ -84,9 +84,16 @@ test("provider rol profilleri exact model kullanır ve edit fallback policy ile 
   assert.deepEqual({ target: profiles.quick_read.target, model: profiles.quick_read.model }, { target: "codex", model: "gpt-5.6-luna" });
   assert.deepEqual({ target: profiles.review.target, model: profiles.review.model }, { target: "codex", model: "gpt-5.6-terra" });
   assert.deepEqual({ target: profiles.critical_review.target, model: profiles.critical_review.model }, { target: "codex", model: "gpt-5.6-sol" });
+  assert.deepEqual({ target: profiles.sol61_review.target, model: profiles.sol61_review.model, mode: profiles.sol61_review.mode, priority: profiles.sol61_review.priority, cacheable: profiles.sol61_review.cacheable }, { target: "codex", model: "gpt-6.1-sol", mode: "read_only", priority: 13, cacheable: true });
   assert.deepEqual({ target: profiles.luna_implementation.target, model: profiles.luna_implementation.model, mode: profiles.luna_implementation.mode }, { target: "codex", model: "gpt-5.6-luna", mode: "edit" });
   assert.deepEqual({ target: profiles.implementation.target, model: profiles.implementation.model, mode: profiles.implementation.mode }, { target: "codex", model: "gpt-5.6-terra", mode: "edit" });
   assert.deepEqual({ target: profiles.critical_implementation.target, model: profiles.critical_implementation.model, mode: profiles.critical_implementation.mode }, { target: "codex", model: "gpt-5.6-sol", mode: "edit" });
+  assert.deepEqual({ target: profiles.sol61_implementation.target, model: profiles.sol61_implementation.model, mode: profiles.sol61_implementation.mode, priority: profiles.sol61_implementation.priority, cacheable: profiles.sol61_implementation.cacheable }, { target: "codex", model: "gpt-6.1-sol", mode: "edit", priority: 4, cacheable: false });
+  assert.deepEqual(profiles.sol61_implementation.fallbackTargets, [
+    { target: "codex", model: "gpt-6-sol" },
+    { target: "codex", model: "gpt-5.6-sol" },
+    { target: "opencode", model: "deepseek/deepseek-v4-pro" }
+  ]);
   assert.deepEqual({ target: profiles.astra_review.target, model: profiles.astra_review.model, mode: profiles.astra_review.mode, priority: profiles.astra_review.priority, cacheable: profiles.astra_review.cacheable }, { target: "codex", model: "gpt-6-astra", mode: "read_only", priority: 14, cacheable: true });
   assert.deepEqual({ target: profiles.astra_implementation.target, model: profiles.astra_implementation.model, mode: profiles.astra_implementation.mode, priority: profiles.astra_implementation.priority, cacheable: profiles.astra_implementation.cacheable }, { target: "codex", model: "gpt-6-astra", mode: "edit", priority: 4, cacheable: false });
   assert.deepEqual(profiles.astra_implementation.fallbackTargets, [

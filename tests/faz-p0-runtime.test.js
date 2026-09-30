@@ -774,7 +774,7 @@ test("P0-MCP-PARITY: MCP handler and direct runtime preserve canonical result fi
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const codex = createFakeAdapter("codex", async (request) => successResult("codex", request.model, request.workspace));
   const runtime = createBridgeRuntime({ configuration: createConfiguration(root, root), adapters: { codex } });
-  const direct = await runtime.run({ target: "codex", prompt: "inspect", model: "gpt-6-sol", mode: "read_only", trustedWorkspace: root, caller: "openCode", delegationDepth: 0 });
+  const direct = await runtime.run({ target: "codex", prompt: "inspect", model: "gpt-6.1-sol", mode: "read_only", trustedWorkspace: root, caller: "openCode", delegationDepth: 0 });
   const handlers = createMcpToolHandlers({ runtime, trustedWorkspace: root, caller: "openCode" });
   const mcp = await handlers.runCodex({ prompt: "inspect", mode: "read_only" });
   const fields = ["backend", "model", "ok", "retryable", "timedOut", "reason", "result"];
@@ -782,10 +782,10 @@ test("P0-MCP-PARITY: MCP handler and direct runtime preserve canonical result fi
   assert.equal(mcp.structuredContent.metrics.retries, direct.metrics.retries);
 });
 
-test("P0-CODEX-DEFAULT: run_codex_subagent varsayilan modeli gpt-6-sol olarak sabitlenir", () => {
+test("P0-CODEX-DEFAULT: run_codex_subagent varsayilan modeli gpt-6.1-sol olarak sabitlenir", () => {
   const parsed = publicToolSchemas.runCodex.safeParse({ prompt: "inspect", mode: "read_only" });
   assert.equal(parsed.success, true);
-  assert.equal(parsed.data.model, "gpt-6-sol");
+  assert.equal(parsed.data.model, "gpt-6.1-sol");
   const explicit = publicToolSchemas.runCodex.safeParse({ prompt: "inspect", model: "gpt-5.6-terra", mode: "read_only" });
   assert.equal(explicit.success, true);
   assert.equal(explicit.data.model, "gpt-5.6-terra");

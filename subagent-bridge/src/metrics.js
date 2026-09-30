@@ -1370,14 +1370,21 @@ export async function getCostBudgetSnapshot(configuration, now = new Date()) {
     const monthlyBreakdown = periodCostBreakdown(records, periods.month, nowMs);
     const dailySpentUsd = normalizeCost(dailyBreakdown.total);
     const monthlySpentUsd = normalizeCost(monthlyBreakdown.total);
+    const limitMode = !enforced
+      ? "advisory_only"
+      : dailyLimit === null && monthlyLimit === null
+        ? "no_limit_configured"
+        : "admission_blocking";
     const dailyUsagePercent = dailyLimit === null ? null : normalizeCost((dailySpentUsd / dailyLimit) * 100);
     const monthlyUsagePercent = monthlyLimit === null ? null : normalizeCost((monthlySpentUsd / monthlyLimit) * 100);
     return {
       dailyLimitUsd: dailyLimit,
       dailySpentUsd,
+      dailyAccountedUsd: dailySpentUsd,
       dailyRemainingUsd: dailyLimit === null ? null : normalizeCost(Math.max(0, dailyLimit - dailySpentUsd)),
       monthlyLimitUsd: monthlyLimit,
       monthlySpentUsd,
+      monthlyAccountedUsd: monthlySpentUsd,
       monthlyRemainingUsd: monthlyLimit === null ? null : normalizeCost(Math.max(0, monthlyLimit - monthlySpentUsd)),
       dailyOverageUsd: dailyLimit === null ? null : normalizeCost(Math.max(0, dailySpentUsd - dailyLimit)),
       monthlyOverageUsd: monthlyLimit === null ? null : normalizeCost(Math.max(0, monthlySpentUsd - monthlyLimit)),
@@ -1387,6 +1394,13 @@ export async function getCostBudgetSnapshot(configuration, now = new Date()) {
       dailyWarning: dailyUsagePercent !== null && dailyUsagePercent >= warningThresholdPercent,
       monthlyWarning: monthlyUsagePercent !== null && monthlyUsagePercent >= warningThresholdPercent,
       warningThresholdPercent,
+      costAccounting: {
+        totalUsdBasis: "observed_plus_estimated",
+        estimatedIncludesActiveReservations: true,
+        unknownCostRunsCountedSeparately: true,
+        reportedAmountIsProviderInvoice: false,
+        limitMode
+      },
       activeReservations: activeReservationCount(records, nowMs),
       droppedMetricRecords: invalidRecordCount,
       costMeasurement: {

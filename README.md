@@ -101,7 +101,7 @@ The result is an untrusted observation with `sourceClass: "mcp_resource"`. `work
 
 ### Personal configuration
 
-It passes `configVersion: 2` schema validation; unknown or missing fields are rejected. Providers are constrained by `defaultMode`/`allowedModes`. `reliability.monthlyCostLimitUsd: 100` and `warningThresholdPercent: 80` are advisory references; admission-time budget enforcement is off by default (`costBudgetEnforced: false`) and can be enabled explicitly. `npm run budget` shows the snapshot, separating observed cost, estimated/reserved cost, run counts and cost coverage; unknown cost is reported as `not_observable` and is never counted as zero. When enforcement is enabled, the limit is checked atomically at reservation time against active reservations and recorded spend; a late settlement after an expired reservation is still counted, and any exceedance is surfaced as `dailyOverageUsd`/`monthlyOverageUsd`. Codex `allowNonGitWorkspace` is enabled only through the personal machine config; DeepSeek preserves denied-root and Zod validation without requiring a Git repository.
+It passes `configVersion: 2` schema validation; unknown or missing fields are rejected. Providers are constrained by `defaultMode`/`allowedModes`. `reliability.monthlyCostLimitUsd: 100` and `warningThresholdPercent: 80` are advisory references; admission-time budget enforcement is off by default (`costBudgetEnforced: false`) and can be enabled explicitly. `npm run budget` and `check_subagent_bridge` expose `dailyAccountedUsd`/`monthlyAccountedUsd` (legacy aliases: `dailySpentUsd`/`monthlySpentUsd`). These totals are observed plus estimated costs; estimates include active reservations, and runs without an actual cost or estimate are counted separately, not asserted to cost zero. They are **not provider invoices**. `costAccounting.limitMode` distinguishes `advisory_only`, `admission_blocking` and `no_limit_configured`; with `costBudgetEnforced: false`, remaining/overage/warning fields are informational and do not reject a new request. `measurementStatus: not_observable` means at least one run's actual cost is unknown; the observed/estimated breakdown and cost coverage must be read alongside the aggregate. When enforcement is enabled, the limit is checked atomically at reservation time; a late settlement after an expired reservation is still counted. Codex `allowNonGitWorkspace` is enabled only through the personal machine config; DeepSeek preserves denied-root and Zod validation without requiring a Git repository.
 
 ### Canonical routing
 
@@ -142,16 +142,18 @@ web_research / file_audit → Gemini Pro, read_only, 20, cache enabled
 review                  → Codex Terra, read_only, 20, cache enabled
 critical_review         → Codex Sol, read_only, 15, cache enabled
 sol6_review             → GPT-6 Sol, read_only, 13, cache enabled
+sol61_review            → GPT-6.1 Sol, read_only, 13, cache enabled
 luna6_review            → GPT-6 Luna, read_only, 13, cache enabled
 luna_implementation     → Codex Luna, edit, 12, cache disabled, no fallback
 implementation          → Codex Terra, edit, 10, fallback: GLM 5.2 → DeepSeek Pro → Gemini Pro
 glm_implementation      → GLM 5.2, edit, 8, fallback: DeepSeek Pro → Codex Terra → Gemini Pro
 critical_implementation → Codex Sol, edit, 5, fallback: GLM 5.2 → DeepSeek Pro
 sol6_implementation     → GPT-6 Sol, edit, 4, fallback: Codex Sol (5.6) → DeepSeek Pro
+sol61_implementation    → GPT-6.1 Sol, edit, 4, fallback: GPT-6 Sol → Codex Sol (5.6) → DeepSeek Pro
 luna6_implementation    → GPT-6 Luna, edit, 11, no fallback
 ```
 
-Profiles live under `orchestration.taskProfiles` in `~/.config/subagent-bridge/config.json`. Codex subagent calls without an explicit model default to `gpt-6-sol` at the tool layer (`run_codex_subagent` and the global `codex` tool); an explicit model overrides this default.
+Profiles live under `orchestration.taskProfiles` in `~/.config/subagent-bridge/config.json`. Codex subagent calls without an explicit model default to `gpt-6.1-sol` at the tool layer (`run_codex_subagent` and the global `codex` tool); an explicit model overrides this default. Model access depends on the account and rollout status.
 
 ```powershell
 npm run config:apply-routing
@@ -264,7 +266,7 @@ npm run accept:edit:deepseek  DeepSeek Pro controlled promotion acceptance (temp
 npm run accept:edit:glm       GLM 5.2 controlled promotion acceptance (temporary workspace)
 npm run accept:read:glm       GLM 5.2 read-only acceptance (temporary workspace)
 npm run smoke                 MCP tool schema and runtime health smoke test
-npm run budget                Advisory budget, observed/estimated cost and coverage snapshot
+npm run budget                Budget accounting totals (not invoice), observed/estimated cost, coverage and enforcement mode
 npm run p0:e2e                Trusted workspace portability acceptance
 npm run p2b:e2e               Personal global integration acceptance
 npm test                      All Node.js regression tests
@@ -456,7 +458,7 @@ Sonuç `sourceClass: "mcp_resource"` ile güvenilmeyen bir gözlemdir. `workspac
 
 ### Kişisel yapılandırma
 
-`configVersion: 2` şema doğrulamasından geçer; bilinmeyen veya eksik alan reddedilir. Provider’lar `defaultMode`/`allowedModes` ile sınırlıdır. `reliability.monthlyCostLimitUsd: 100` ve `warningThresholdPercent: 80` bilgilendirme referansıdır; admission-time bütçe uygulaması varsayılan olarak kapalıdır (`costBudgetEnforced: false`) ve açıkça etkinleştirilebilir. `npm run budget` gözlenen maliyeti, tahmini/rezerv maliyeti, çalıştırma sayılarını ve maliyet kapsama oranını ayrı gösterir; bilinmeyen maliyet `not_observable` olarak raporlanır ve asla sıfır sayılmaz. Uygulama etkinken limit, rezervasyon anında aktif rezervasyonlar ve kayıtlı harcamaya göre atomik kontrol edilir; süresi dolmuş rezervasyondan sonra gelen geç settlement yine sayılır ve aşım `dailyOverageUsd`/`monthlyOverageUsd` olarak raporlanır. Codex `allowNonGitWorkspace` yalnız kişisel machine config ile açılır; DeepSeek Git repository zorunluluğu olmadan denied-root ve Zod doğrulamasını korur.
+`configVersion: 2` şema doğrulamasından geçer; bilinmeyen veya eksik alan reddedilir. Provider’lar `defaultMode`/`allowedModes` ile sınırlıdır. `reliability.monthlyCostLimitUsd: 100` ve `warningThresholdPercent: 80` bilgilendirme referansıdır; admission-time bütçe uygulaması varsayılan olarak kapalıdır (`costBudgetEnforced: false`) ve açıkça etkinleştirilebilir. `npm run budget` ve `check_subagent_bridge`, `dailyAccountedUsd`/`monthlyAccountedUsd` alanlarını döndürür (`dailySpentUsd`/`monthlySpentUsd` geriye uyumluluk alias'larıdır). Bu toplam gözlenen ve tahmini maliyetlerden oluşur; tahminler aktif rezervasyonları kapsar, gerçek maliyeti/rezervi bilinmeyen işler ayrı sayılır ve sıfır maliyet diye varsayılmaz. Bu tutarlar **sağlayıcı faturası değildir**. `costAccounting.limitMode`, `advisory_only`, `admission_blocking` veya `no_limit_configured` durumunu belirtir; `costBudgetEnforced: false` iken kalan/aşım/uyarı alanları bilgilendirme amaçlıdır ve yeni isteği reddetmez. `measurementStatus: not_observable`, en az bir çalışmanın gerçek maliyetinin bilinmediğini gösterir; aggregate tutarı observed/estimated ayrımı ve kapsama oranıyla birlikte yorumlayın. Enforcement açıkken limit rezervasyon anında atomik kontrol edilir; süresi dolmuş rezervasyondan sonra gelen geç settlement yine hesaba katılır. Codex `allowNonGitWorkspace` yalnız kişisel machine config ile açılır; DeepSeek Git repository zorunluluğu olmadan denied-root ve Zod doğrulamasını korur.
 
 ### Kanonik yönlendirme
 
@@ -488,16 +490,18 @@ web_research / file_audit → Gemini Pro, read_only, 20, cache açık
 review                  → Codex Terra, read_only, 20, cache açık
 critical_review         → Codex Sol, read_only, 15, cache açık
 sol6_review             → GPT-6 Sol, read_only, 13, cache açık
+sol61_review            → GPT-6.1 Sol, read_only, 13, cache açık
 luna6_review            → GPT-6 Luna, read_only, 13, cache açık
 luna_implementation     → Codex Luna, edit, 12, cache kapalı, fallback yok
 implementation          → Codex Terra, edit, 10, fallback: GLM 5.2 → DeepSeek Pro → Gemini Pro
 glm_implementation      → GLM 5.2, edit, 8, fallback: DeepSeek Pro → Codex Terra → Gemini Pro
 critical_implementation → Codex Sol, edit, 5, fallback: GLM 5.2 → DeepSeek Pro
 sol6_implementation     → GPT-6 Sol, edit, 4, fallback: Codex Sol (5.6) → DeepSeek Pro
+sol61_implementation    → GPT-6.1 Sol, edit, 4, fallback: GPT-6 Sol → Codex Sol (5.6) → DeepSeek Pro
 luna6_implementation    → GPT-6 Luna, edit, 11, fallback yok
 ```
 
-Profiller `~/.config/subagent-bridge/config.json` içindeki `orchestration.taskProfiles` alanındadır. Model belirtilmeyen Codex subagent çağrıları araç katmanında `gpt-6-sol` ile sabitlenir (`run_codex_subagent` ve global `codex` aracı); açıkça verilen model bu varsayılanı geçersiz kılar.
+Profiller `~/.config/subagent-bridge/config.json` içindeki `orchestration.taskProfiles` alanındadır. Model belirtilmeyen Codex subagent çağrıları araç katmanında `gpt-6.1-sol` ile sabitlenir (`run_codex_subagent` ve global `codex` aracı); açıkça verilen model bu varsayılanı geçersiz kılar. Model erişimi hesap ve rollout durumuna bağlıdır.
 
 ```powershell
 npm run config:apply-routing
@@ -610,7 +614,7 @@ npm run accept:edit:deepseek  DeepSeek Pro kontrollü promotion kabulü (geçici
 npm run accept:edit:glm       GLM 5.2 kontrollü promotion kabulü (geçici workspace)
 npm run accept:read:glm       GLM 5.2 salt-okunur kabulü (geçici workspace)
 npm run smoke                 MCP araç şeması ve runtime health smoke testi
-npm run budget                Bilgilendirme amaçlı bütçe, gözlenen/tahmini maliyet ve kapsama görünümü
+npm run budget                Fatura olmayan muhasebe toplamı, gözlenen/tahmini maliyet, kapsama ve uygulama modu
 npm run p0:e2e                Trusted workspace portability kabulü
 npm run p2b:e2e               Kişisel global entegrasyon kabulü
 npm test                      Tüm Node.js regresyon testleri

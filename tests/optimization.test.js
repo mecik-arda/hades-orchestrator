@@ -836,8 +836,12 @@ test("OPT-06j: costBudgetEnforced false butce limitini devre disi birakir", asyn
   assert.deepEqual(await reserveCostBudget(configuration, "second", 0.5), { allowed: true });
   const snapshot = await getCostBudgetSnapshot(configuration);
   assert.equal(snapshot.enforced, false);
+  assert.equal(snapshot.costAccounting.limitMode, "advisory_only");
+  assert.equal(snapshot.costAccounting.reportedAmountIsProviderInvoice, false);
+  assert.equal(snapshot.costAccounting.totalUsdBasis, "observed_plus_estimated");
   assert.equal(snapshot.monthlyLimitUsd, 0.2);
   assert.equal(snapshot.monthlySpentUsd, 0.65);
+  assert.equal(snapshot.monthlyAccountedUsd, snapshot.monthlySpentUsd);
   configuration.reliability.costBudgetEnforced = true;
   assert.deepEqual(await reserveCostBudget(configuration, "third", 0.5), {
     allowed: false,
@@ -863,6 +867,8 @@ test("OPT-06t: bütçe ölçümü gözlenen ve tahmini maliyeti kapsamayla ayır
   });
   const unknownSnapshot = await getCostBudgetSnapshot(configuration);
   assert.equal(unknownSnapshot.monthlySpentUsd, 0);
+  assert.equal(unknownSnapshot.dailyAccountedUsd, unknownSnapshot.dailySpentUsd);
+  assert.equal(unknownSnapshot.costAccounting.unknownCostRunsCountedSeparately, true);
   assert.equal(unknownSnapshot.costMeasurement.measurementStatus, "not_observable");
   assert.equal(unknownSnapshot.costMeasurement.observedCostUsd, 0);
   assert.equal(unknownSnapshot.costMeasurement.unknownCostRuns, 1);
@@ -880,6 +886,7 @@ test("OPT-06t: bütçe ölçümü gözlenen ve tahmini maliyeti kapsamayla ayır
   await settleCostBudget(configuration, "estimated-run");
   const snapshot = await getCostBudgetSnapshot(configuration);
   assert.equal(snapshot.monthlySpentUsd, 0.35);
+  assert.equal(snapshot.costAccounting.estimatedIncludesActiveReservations, true);
   assert.equal(snapshot.costMeasurement.observedCostUsd, 0.05);
   assert.equal(snapshot.costMeasurement.estimatedCostUsd, 0.3);
   assert.equal(snapshot.costMeasurement.knownCostRuns, 1);
@@ -962,6 +969,7 @@ test("OPT-06f: bütçe snapshot harcama kalan tutar ve aktif rezervleri raporlar
   await reserveCostBudget(configuration, "completed", 0.3);
   await settleCostBudget(configuration, "completed", 0.1);
   const snapshot = await getCostBudgetSnapshot(configuration);
+  assert.equal(snapshot.costAccounting.limitMode, "admission_blocking");
   assert.equal(snapshot.dailySpentUsd, 0.3);
   assert.equal(snapshot.monthlySpentUsd, 0.3);
   assert.equal(snapshot.dailyRemainingUsd, 0.7);

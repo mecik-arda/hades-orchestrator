@@ -50,6 +50,7 @@ test("CX-AC-02: production adapter uses codex executable", () => {
 test("CX-AC-03: Codex model contract external provider IDs içermez", () => {
   assert.equal(resolveCodexModel("gpt-5").valid, true);
   assert.equal(resolveCodexModel("gpt-5").model, "gpt-5");
+  assert.deepEqual(resolveCodexModel("gpt-6.1-sol"), { valid: true, model: "gpt-6.1-sol" });
   assert.equal(resolveCodexModel("default").model, null);
   assert.equal(resolveCodexModel("google/gemini-3.1-pro").valid, false);
   assert.equal(resolveCodexModel("deepseek/deepseek-v4-pro").valid, false);
@@ -111,6 +112,8 @@ test("CODEX-DIAG-04/05/06: canonical argv sandbox modunu seçer ve danger flag i
   assert.equal(readOnly.args.some((value) => /danger-full-access|bypass-approvals/i.test(value)), false);
   const providerDefault = buildCodexArgs({ ...request, model: "default" }, { codex: { executable: "codex" } });
   assert.equal(providerDefault.args.includes("--model"), false);
+  const sol61 = buildCodexArgs({ ...request, model: "gpt-6.1-sol" }, { codex: { executable: "codex" } });
+  assert.deepEqual(sol61.args.slice(1, 4), ["--model", "gpt-6.1-sol", "--sandbox"]);
 });
 
 test("CODEX-CLEANUP-01: edit ortamı pytest ve bytecode artefaktlarını engeller", () => {

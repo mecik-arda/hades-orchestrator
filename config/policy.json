@@ -348,17 +348,24 @@
                                                    "priority":  13,
                                                    "cacheable":  true
                                                },
-                                               "sol6_review":  {
-                                                   "target":  "codex",
-                                                   "model":  "gpt-6-sol",
-                                                   "mode":  "read_only",
-                                                   "priority":  13,
-                                                   "cacheable":  true
-                                               },
-                                               "luna6_implementation":  {
-                                                   "target":  "codex",
-                                                   "model":  "gpt-6-luna",
-                                                   "mode":  "edit",
+                                                "sol6_review":  {
+                                                    "target":  "codex",
+                                                    "model":  "gpt-6-sol",
+                                                    "mode":  "read_only",
+                                                    "priority":  13,
+                                                    "cacheable":  true
+                                                },
+                                                "sol61_review":  {
+                                                    "target":  "codex",
+                                                    "model":  "gpt-6.1-sol",
+                                                    "mode":  "read_only",
+                                                    "priority":  13,
+                                                    "cacheable":  true
+                                                },
+                                                "luna6_implementation":  {
+                                                    "target":  "codex",
+                                                    "model":  "gpt-6-luna",
+                                                    "mode":  "edit",
                                                    "priority":  11,
                                                    "cacheable":  false
                                                },
@@ -376,10 +383,31 @@
                                                        {
                                                            "target":  "opencode",
                                                            "model":  "deepseek/deepseek-v4-pro"
-                                                       }
-                                                   ]
-                                               },
-                                               "astra_implementation":  {
+                                                        }
+                                                    ]
+                                                },
+                                                "sol61_implementation":  {
+                                                    "target":  "codex",
+                                                    "model":  "gpt-6.1-sol",
+                                                    "mode":  "edit",
+                                                    "priority":  4,
+                                                    "cacheable":  false,
+                                                    "fallbackTargets":  [
+                                                        {
+                                                            "target":  "codex",
+                                                            "model":  "gpt-6-sol"
+                                                        },
+                                                        {
+                                                            "target":  "codex",
+                                                            "model":  "gpt-5.6-sol"
+                                                        },
+                                                        {
+                                                            "target":  "opencode",
+                                                            "model":  "deepseek/deepseek-v4-pro"
+                                                        }
+                                                    ]
+                                                },
+                                                "astra_implementation":  {
                                                                             "target":  "codex",
                                                                             "model":  "gpt-6-astra",
                                                                             "mode":  "edit",

@@ -365,7 +365,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
 
   server.registerTool("check_subagent_bridge", {
     title: "Subagent bridge runtime bağlantısını kontrol et",
-    description: "Runtime servislerini ve tüm provider adapter health durumlarını doğrular.",
+    description: "Runtime servislerini ve tüm provider adapter health durumlarını doğrular. dailySpentUsd/monthlySpentUsd are compatibility aliases for observed-plus-estimated accounting totals, not provider invoices; costBudget.costAccounting.limitMode distinguishes advisory from admission-blocking behavior.",
     inputSchema: {},
     annotations: readOnlyAnnotations
   }, safeHealth(async () => {

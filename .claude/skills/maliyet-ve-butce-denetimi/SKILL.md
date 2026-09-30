@@ -24,6 +24,7 @@ Orkestrasyon köprüsünün maliyet, güvenilirlik ve hizmet seviyesi telemetris
 - Günlük ve aylık limitler; toplam harcama, kalan tutar ve aktif rezervler tutarlı mı.
 - `costBudgetEnforced` ile admission davranışı örtüşüyor mu; varsayılan bilgilendirme modunda hard-cap uygulanmaz, aşım yalnız raporlanır.
 - Gözlenen ve tahmini maliyet ayrı mı; kapsama oranı ve bilinmeyen çalıştırma sayısı raporlanıyor mu.
+- `dailySpentUsd`/`monthlySpentUsd` legacy alanları ve `dailyAccountedUsd`/`monthlyAccountedUsd` muhasebe toplamları provider invoice değildir; toplam observed+estimated'dır, estimated aktif rezervasyonları kapsar. Bilinmeyen fiyatlı ve tahminsiz çalışmalar sayılır ama sıfır maliyet diye sunulmaz. `costAccounting.limitMode` `advisory_only`, `admission_blocking` veya `no_limit_configured` değerlerinden hangisi?
 - Retry maliyet rezervi ve bilinmeyen maliyet sınırı uygulanıyor mu; rezerv açık settlement ile uzlaşıyor mu.
 - Circuit breaker sağlayıcı ve gerekiyorsa model bazında doğru açılıyor mu; half-open tek probe davranışı korunuyor mu.
 - SLO penceresinde availability ve gecikme p95 eşikleri; `minimumRuns` altında `insufficient_data` dönüyor mu.
@@ -41,6 +42,7 @@ Orkestrasyon köprüsünün maliyet, güvenilirlik ve hizmet seviyesi telemetris
 - Metrik ve bütçe çıktısında görev kimliği, workspace yolu, prompt veya secret bulunmaz; yalnız redakte alanlar raporlanır.
 - Rakamları yorumla, karar öner; geri alınamaz işlem yapma.
 - Doğrulanamayan maliyet `not_observable` olarak işaretlenir; kapsama oranı olmadan toplam harcama karar dayanağı sayılmaz.
+- Kullanıcıya `monthlySpentUsd` veya `monthlyAccountedUsd` değerini fatura/gerçek harcama olarak sunma; observed, estimated/reserved, unknown count ve limit enforcement modunu birlikte açıkla.
 
 ## Bitirme koşulu
 
