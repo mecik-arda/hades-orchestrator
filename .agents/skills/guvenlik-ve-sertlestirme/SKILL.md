@@ -1,6 +1,6 @@
 ---
 name: guvenlik-ve-sertlestirme
-description: Kod tabanındaki OWASP Top 10, path traversal, hardcoded secret, shell injection, güvensiz nesne çözümleme ve benzeri güvenlik risklerini denetler; kullanıcı düzeltme istediğinde kodu sertleştirir.
+description: Kullanıcı odaklı güvenlik denetimi, tehdit analizi veya güvenli kod sertleştirmesi istediğinde OWASP, path traversal, secret ve injection risklerini kanıtla inceler. Genel kod incelemesi için kod-denetleyicisi skill'ini kullan.
 ---
 
 # Güvenlik ve Sertleştirme

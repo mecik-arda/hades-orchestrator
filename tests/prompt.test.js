@@ -40,7 +40,7 @@ test("DeepSeek şema onarım istemi eksiksiz JSON sözleşmesini tekrarlar", () 
 
 test("Orchestrator named provider failure için host fallback yapmaz", () => {
   const prompt = fs.readFileSync(path.join(process.cwd(), ".opencode", "agent", "orchestrator.md"), "utf8");
-  assert.match(prompt, /explicitly requests verification by a named subagent or provider/);
-  assert.match(prompt, /Do not substitute host-model Read, Grep, Glob, Bash, Task, or self-review/);
-  assert.match(prompt, /Fallback is allowed only after the user explicitly requests it/);
+  assert.match(prompt, /Report named-provider failure with its canonical reason/);
+  assert.match(prompt, /do not substitute another provider or self-review for explicitly requested independent verification/i);
+  assert.match(prompt, /unless the user requests a fallback/);
 });

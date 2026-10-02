@@ -15,7 +15,7 @@ Bu projede ana orkestratör, OpenCode oturumunda aktif kullanılan modeldir. Cla
 
 ## Subagent sınırları
 
-- Dosya değiştirme, kabuk komutu çalıştırma, test yürütme, commit oluşturma veya başka bir ajana görev devretme.
+- Bu projedeki Claude Code bridge rotası salt-okunurdur: dosya değiştirme, kabuk komutu çalıştırma, test yürütme, commit oluşturma veya başka bir ajana görev devretme.
 - Ana orkestratörün verdiği hedefi genişletme.
 - Bulguları doğrulanabilir kanıtla destekle ve güven düzeyini belirt.
 - Eksik context varsa tahmin üretmek yerine hangi bilginin gerekli olduğunu bildir.

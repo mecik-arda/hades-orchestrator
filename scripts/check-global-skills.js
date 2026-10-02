@@ -1,8 +1,8 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { compareSkillDirectories } from "./skill-directory-sync.js";
 
 const skillRootDefinitions = [
   { label: "config/opencode", relativePath: path.join(".config", "opencode", "skills") },
@@ -11,26 +11,26 @@ const skillRootDefinitions = [
   { label: "agents", relativePath: path.join(".agents", "skills") }
 ];
 
-function calculateFileSha256(filePath) {
-  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
-}
-
 export function buildGlobalSkillReport({ projectRoot, homeDirectory, allowedSkills }) {
   const canonicalRoot = path.join(projectRoot, ".agents", "skills");
   const skills = allowedSkills.map((skillName) => {
-    const canonicalPath = path.join(canonicalRoot, skillName, "SKILL.md");
-    const canonicalExists = fs.existsSync(canonicalPath);
-    const canonicalSha256 = canonicalExists ? calculateFileSha256(canonicalPath) : null;
+    const canonicalDirectory = path.join(canonicalRoot, skillName);
+    const canonicalPath = path.join(canonicalDirectory, "SKILL.md");
+    const canonicalExists = fs.existsSync(canonicalPath) && fs.statSync(canonicalPath).isFile();
     const roots = {};
+    const differences = {};
     for (const definition of skillRootDefinitions) {
-      const candidatePath = path.join(homeDirectory, definition.relativePath, skillName, "SKILL.md");
+      const candidateDirectory = path.join(homeDirectory, definition.relativePath, skillName);
+      const candidatePath = path.join(candidateDirectory, "SKILL.md");
       if (!canonicalExists || !fs.existsSync(candidatePath)) {
         roots[definition.label] = "MISSING";
         continue;
       }
-      roots[definition.label] = calculateFileSha256(candidatePath) === canonicalSha256 ? "EQUAL" : "DIFF";
+      const comparison = compareSkillDirectories(canonicalDirectory, candidateDirectory);
+      roots[definition.label] = comparison.equal ? "EQUAL" : "DIFF";
+      if (!comparison.equal) differences[definition.label] = comparison;
     }
-    return { skill: skillName, canonicalExists, roots };
+    return { skill: skillName, canonicalExists, roots, differences };
   });
   const statuses = skills.flatMap((entry) => Object.values(entry.roots));
   return {

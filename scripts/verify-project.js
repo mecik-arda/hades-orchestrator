@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -6,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { loadRuntimeConfiguration } from "../subagent-bridge/src/config.js";
 import { checkDeepSeek } from "../subagent-bridge/src/deepseek.js";
 import { checkPersistentMemory } from "../subagent-bridge/src/memory.js";
+import { compareSkillDirectories } from "./skill-directory-sync.js";
 
 export function buildCodexCheck(configuration) {
   return configuration.codex
@@ -86,21 +86,18 @@ export async function runVerification() {
   }));
 
   const skillChecks = configuration.skills.allowed.map((skillName) => {
-    const codexSkillPath = path.join(projectRoot, ".agents", "skills", skillName, "SKILL.md");
-    const claudeSkillPath = path.join(projectRoot, ".claude", "skills", skillName, "SKILL.md");
+    const codexSkillDirectory = path.join(projectRoot, ".agents", "skills", skillName);
+    const claudeSkillDirectory = path.join(projectRoot, ".claude", "skills", skillName);
+    const codexSkillPath = path.join(codexSkillDirectory, "SKILL.md");
+    const claudeSkillPath = path.join(claudeSkillDirectory, "SKILL.md");
     const codexExists = fs.existsSync(codexSkillPath);
     const claudeExists = fs.existsSync(claudeSkillPath);
-    const codexHash = codexExists
-      ? crypto.createHash("sha256").update(fs.readFileSync(codexSkillPath)).digest("hex")
-      : null;
-    const claudeHash = claudeExists
-      ? crypto.createHash("sha256").update(fs.readFileSync(claudeSkillPath)).digest("hex")
-      : null;
+    const comparison = compareSkillDirectories(codexSkillDirectory, claudeSkillDirectory);
     return {
       skill: skillName,
       codexExists,
       claudeExists,
-      synchronized: codexHash !== null && codexHash === claudeHash
+      synchronized: codexExists && claudeExists && comparison.equal
     };
   });
 

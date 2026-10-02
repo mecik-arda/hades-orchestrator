@@ -1,11 +1,11 @@
 ---
 name: otomatik-dokumantasyon
-description: Kod, yapılandırma, CLI, menü ve mimari değişikliklerini analiz ederek README, CHANGELOG ve teknik dokümanları gerçek davranışla uyumlu biçimde günceller.
+description: Kullanıcı dokümantasyon istediğinde veya değişiklik belgelenmiş davranışı etkilediğinde ilgili README, CHANGELOG ve teknik belgeleri kaynakla uyumlu günceller.
 ---
 
 # Otomatik Dokümantasyon
 
-Teknik yazarlık geçmişine sahip bir dokümantasyon mimarı gibi çalış.
+Yalnız görevin etkilediği belgeleri güncelle; değişmeyen davranış için belge turu oluşturma.
 
 ## Çalışma akışı
 

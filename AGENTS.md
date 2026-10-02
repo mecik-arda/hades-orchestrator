@@ -23,6 +23,8 @@ Bu projede ana orkestratör ve son karar verici, OpenCode oturumunda aktif kulla
 - Astra'yı rutin iş, ilk denetim veya Sol'a verilmemiş sorunlar için seçme. Astra çağrısından önce Sol'un yetersiz kaldığını ya da Astra'nın neden gerekli olduğunu açıkça gerekçelendir.
 - Küçük ve açık görevleri, doğrudan uygulanabilecek değişiklikleri veya yalnızca ana orkestratörün sahip olduğu araçlarla doğrulanabilecek işleri gereksiz yere devretme.
 - DeepSeek'e tek çağrıda dar bir rol, açık hedef, ilgili dosyalar ve kabul kriterleri ver.
+- Görev tarifinde hedef ve gerekçe, gerekli bağlam, izinli kapsam ve bitiş ölçütünü belirt; zorunlu doğruluk koşulları dışında çözüm adımlarını modele bırak. Mevcut kanıt yeterliyse web araştırması veya model turunu tekrarlama.
+- Aktif orkestratör GPT-6.1 Sol ise yalnız Sol rolü için ikinci Sol çağrısı zorunlu değildir. Kullanıcının istediği bağımsız inceleme ayrıca yapılır; kendi incelemeni bağımsız denetim gibi sunma.
 - Bağımsız alt problemler varsa ayrı çağrılar yap; aynı işi iki modele tekrar ettirme.
 - DeepSeek `needs_context` döndürürse eksik bilgiyi tamamla veya görevi küçült. Aynı başarısız promptu tekrar gönderme.
 - DeepSeek'e secret, kabuk erişimi, subagent delegasyonu, commit, push veya geri alınamaz işlem verme. Yazma yalnız `mode: edit`, `role: implementer` ve seçilmiş hedef dosyalarla kontrollü promotion üzerinden yapılır.

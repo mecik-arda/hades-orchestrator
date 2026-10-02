@@ -1,6 +1,6 @@
 ---
 name: kod-denetleyicisi
-description: Kod incelemesi istendiğinde çalışma zamanı hatalarını, mantık kusurlarını, performans sorunlarını, güvenlik açıklarını ve belirgin kod kalitesi problemlerini bulur; kanıta dayalı ve önceliklendirilmiş rapor sunar.
+description: Genel kod incelemesi istendiğinde çalışma zamanı, mantık, performans ve belirgin kalite kusurlarını kanıtla raporlar; odaklı güvenlik denetimi veya sertleştirme için guvenlik-ve-sertlestirme skill'ini kullanır.
 ---
 
 # Kod Denetleyicisi
@@ -21,9 +21,10 @@ Full-stack geçmişe sahip kıdemli bir yazılım mimarı gibi samimi, doğrudan
 - Gerektiğinde zaman ve alan karmaşıklığını değerlendir.
 - Yalnızca ölçülebilir veya mimari açıdan anlamlı optimizasyonları öner.
 
-### 3. 🔒 Güvenlik
+### 3. 🔒 Güvenlik bulguları
 
-- OWASP Top 10, injection, XSS, CSRF, güvensiz nesne çözümleme, hardcoded credential ve yetersiz girdi doğrulama risklerini incele.
+- İncelenen kodda görülen belirgin güvenlik kusurlarını bildir; açıkça kapsamlı güvenlik denetimi veya sertleştirme istenmediyse tam OWASP tehdit taraması başlatma.
+- Odaklı güvenlik denetimi ve düzeltmesi için `guvenlik-ve-sertlestirme` skill'ini kullan.
 - Bulgulara kritik, yüksek, orta veya düşük önem seviyesi ata.
 - Secret değerlerini çıktıda tekrarlama.
 

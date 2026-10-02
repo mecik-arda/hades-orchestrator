@@ -26,9 +26,9 @@ Orkestrasyon köprüsünün MCP araç yüzeyini denetleyen akış. Amaç, public
 
 ## Şema değişince
 
-- `npm run smoke` çalıştırılır.
+- Gerekli test, verify ve smoke kontrollerini `dogrulama-kapisi` skill'ine göre seç; MCP şeması veya açıklaması değiştiğinde smoke zorunludur.
 - İlgili şema testleri (public args reddi, enum kabul/red) güncellenir veya eklenir.
-- Enum veya limit değiştiyse `tools.js` ve `server.js` birlikte güncellenir.
+- Enum veya limit değiştiyse `tools.js` ve `server.js` uyumunu doğrula.
 
 ## Kanıt
 

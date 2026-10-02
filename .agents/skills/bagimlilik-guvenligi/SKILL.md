@@ -24,8 +24,7 @@ Proje bağımlılıklarının güvenlik ve sürüm durumunu denetleyen akış. A
 ## Güncelleme
 
 - Güncellemeyi küçük ve geri alınabilir tut; kırıcı değişiklik riskini önceden değerlendir.
-- Güncelleme sonrası `dogrulama-kapisi` skill'indeki temel kapıyı (`npm test`, `npm run verify`, `npm run verify:ci`, `git diff --check`) çalıştır.
-- Davranış değişikliği şüphesinde `dogrulama-kapisi` içindeki koşullu kapıları (`npm run smoke`, drill veya pilot) ekle.
+- Güncelleme sonrası gerekli kontrolleri `dogrulama-kapisi` skill'ine göre seç; değişikliğe ait kurulum/lockfile ve paket davranışı kontrollerini ayrıca koru.
 - Bilinmeyen veya doğrulanmamış paket ekleme; gerekliyse gerekçesini ve kaynağını belirt.
 
 ## Kanıt

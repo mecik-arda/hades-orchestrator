@@ -5,10 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { buildGlobalSkillReport, resolveGlobalSkillExitCode } from "../scripts/check-global-skills.js";
 
+function writeSkillFile(skillsRoot, skillName, relativePath, content) {
+  const filePath = path.join(skillsRoot, skillName, relativePath);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, "utf8");
+}
+
 function writeSkill(skillsRoot, skillName, content) {
-  const directory = path.join(skillsRoot, skillName);
-  fs.mkdirSync(directory, { recursive: true });
-  fs.writeFileSync(path.join(directory, "SKILL.md"), content, "utf8");
+  writeSkillFile(skillsRoot, skillName, "SKILL.md", content);
 }
 
 function createTemporaryRoots(context) {
@@ -56,4 +60,32 @@ test("GLOBAL-SKILLS-03: kanonik skill yoksa tüm kökler eksik raporlanır", (co
   assert.deepEqual(Object.values(report.skills[0].roots), ["MISSING", "MISSING", "MISSING", "MISSING"]);
   assert.equal(report.missingCount, 4);
   assert.equal(resolveGlobalSkillExitCode(report), 0);
+});
+
+test("GLOBAL-SKILLS-04: destek dosyası envanter ve içerik farkları skill kopyasını DIFF yapar", (context) => {
+  const { projectRoot, homeDirectory } = createTemporaryRoots(context);
+  const canonicalRoot = path.join(projectRoot, ".agents", "skills");
+  const opencodeRoot = path.join(homeDirectory, ".config", "opencode", "skills");
+  writeSkill(canonicalRoot, "delta", "skill body");
+  writeSkill(opencodeRoot, "delta", "skill body");
+  writeSkillFile(canonicalRoot, "delta", "references/workflow.md", "canonical reference");
+
+  const missingReferenceReport = buildGlobalSkillReport({ projectRoot, homeDirectory, allowedSkills: ["delta"] });
+  assert.equal(missingReferenceReport.skills[0].roots["config/opencode"], "DIFF");
+  assert.deepEqual(missingReferenceReport.skills[0].differences["config/opencode"].missingFiles, ["references/workflow.md"]);
+
+  writeSkillFile(opencodeRoot, "delta", "references/workflow.md", "canonical reference");
+  const matchingReferenceReport = buildGlobalSkillReport({ projectRoot, homeDirectory, allowedSkills: ["delta"] });
+  assert.equal(matchingReferenceReport.skills[0].roots["config/opencode"], "EQUAL");
+
+  writeSkillFile(opencodeRoot, "delta", "references/workflow.md", "stale reference");
+  const changedReferenceReport = buildGlobalSkillReport({ projectRoot, homeDirectory, allowedSkills: ["delta"] });
+  assert.equal(changedReferenceReport.skills[0].roots["config/opencode"], "DIFF");
+  assert.deepEqual(changedReferenceReport.skills[0].differences["config/opencode"].differentFiles, ["references/workflow.md"]);
+
+  writeSkillFile(opencodeRoot, "delta", "references/workflow.md", "canonical reference");
+  writeSkillFile(opencodeRoot, "delta", "references/extra.md", "unexpected reference");
+  const extraReferenceReport = buildGlobalSkillReport({ projectRoot, homeDirectory, allowedSkills: ["delta"] });
+  assert.equal(extraReferenceReport.skills[0].roots["config/opencode"], "DIFF");
+  assert.deepEqual(extraReferenceReport.skills[0].differences["config/opencode"].extraFiles, ["references/extra.md"]);
 });
