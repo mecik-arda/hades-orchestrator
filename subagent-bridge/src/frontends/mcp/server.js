@@ -338,7 +338,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
   server.registerTool("run_space_bunny_subagent", {
     title: "Space Bunny Free subagent çalıştır",
     description: "Sabit opencode/space-bunny-free kimliğiyle read-only görev veya seçilmiş dosyalarda kontrollü edit yürütür. `webResearch: true` yalnız read-only researcher rolünde, OS temp çalışma alanında websearch/webfetch araçlarını açar. Edit sonucu yalnız açık approve_prepared_edit onayıyla trusted workspace'e terfi eder.",
-    inputSchema: publicToolSchemas.runSpaceBunny.shape,
+    inputSchema: publicToolSchemas.runSpaceBunny.innerType().shape,
     annotations: executionAnnotations
   }, safe(handlers.runSpaceBunny));
 
