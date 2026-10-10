@@ -7,7 +7,13 @@ import { execFileSync, spawnSync } from "node:child_process";
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-p2a-e2e-"));
 const model = process.env.P2A_OPENCODE_MODEL || "openai/gpt-5.6-terra";
 const opencodeExecutable = process.platform === "win32"
-  ? execFileSync("where.exe", ["opencode.cmd"], { encoding: "utf8" }).trim().split(/\r?\n/)[0]
+  ? path.join(
+    path.dirname(execFileSync("where.exe", ["opencode.cmd"], { encoding: "utf8" }).trim().split(/\r?\n/)[0]),
+    "node_modules",
+    "opencode-ai",
+    "bin",
+    "opencode.exe"
+  )
   : "opencode";
 
 function initializeWorkspace(directory, marker, gitRepository) {
@@ -53,13 +59,7 @@ function runOpenCode(workspace, fixture) {
       "Pass this exact tool prompt: Read TEST_MARKER.txt and return only its exact contents.",
       "After the tool completes, return only the tool result."
     ].join(" ");
-  const invocation = process.platform === "win32"
-    ? {
-      executable: "powershell.exe",
-      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", opencodeExecutable.replace(/\.cmd$/i, ".ps1"), "run", "--dir", workspace, "--format", "json", "--model", model, prompt]
-    }
-    : { executable: opencodeExecutable, args: ["run", "--dir", workspace, "--format", "json", "--model", model, prompt] };
-  const result = spawnSync(invocation.executable, invocation.args, {
+  const result = spawnSync(opencodeExecutable, ["run", "--dir", workspace, "--format", "json", "--model", model, prompt], {
     cwd: workspace,
     encoding: "utf8",
     timeout: 1200000,
