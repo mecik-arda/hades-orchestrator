@@ -1,6 +1,6 @@
 import { createProviderEnvironment, runProcess, createExecutionHandle, killProcessTree } from "../services/execution-service.js";
 import { createAdapter } from "./agent-adapter-base.js";
-import { createFailureSubagentResult, createSuccessSubagentResult, capabilityFailureClassValues } from "../schemas/core-schemas.js";
+import { createFailureSubagentResult, createSuccessSubagentResult, capabilityFailureClassValues, operatingSystemErrorCodeValues } from "../schemas/core-schemas.js";
 import { prependExecutionMetadata } from "../services/execution-metadata.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -28,7 +28,7 @@ If asked to write or modify files, decline and explain that you are in read-only
 `;
 
 const WEB_EVIDENCE_OUTPUT_INSTRUCTION = `
-For every read-only response, return exactly a JSON object with a result field. When read_url was not used, set webEvidence to null or omit the field; the host normalizes absent evidence to null. When read_url was used, add a webEvidence object containing only sourceUrl, retrievedAt, excerpts, confidence, and verificationStatus, and excerpts must be non-empty. Never place URLs or citation links inside result or excerpts; when read_url was used, put the source URL only in webEvidence.sourceUrl and keep excerpts free of URLs, headers, cookies, and credentials. Do not put URLs, headers, cookies, credentials, or tool, model, permission, fallback, or edit fields in result or excerpts.
+For public web research, use the read_url_content tool. Its permission action is read_url(domain). For every read-only response, return exactly one JSON object shaped as {"result":"...","webEvidence":null}. When read_url_content was not used, keep webEvidence null or omit it. When read_url_content was used, webEvidence must be an object shaped as {"sourceUrl":"the exact fetched page URL","excerpts":["short URL-free text from that page"],"confidence":"low","verificationStatus":"unverified"}. Keep the worker result as a string; never put the worker's fields beside result. Never put URLs or citation links inside result or excerpts; put the fetched URL only in webEvidence.sourceUrl. Keep excerpts free of URLs, headers, cookies, and credentials. Do not put URLs, headers, cookies, credentials, or tool, model, permission, fallback, or edit fields in result or excerpts.
 `;
 
 const READ_ONLY_PERMISSION_RULES = {
@@ -47,10 +47,27 @@ const READ_ONLY_PERMISSION_RULES = {
 const CARRIER_OUTPUT_SCHEMA = JSON.stringify({
   type: "object",
   properties: {
-    result: { type: "string" },
-    webEvidence: {}
+    result: { type: "string", minLength: 1 },
+    webEvidence: {
+      anyOf: [
+        { type: "null" },
+        {
+          type: "object",
+          properties: {
+            sourceUrl: { type: "string", minLength: 1 },
+            retrievedAt: { type: "string", format: "date-time" },
+            excerpts: { type: "array", items: { type: "string", minLength: 1, maxLength: 500 }, minItems: 1, maxItems: 5 },
+            confidence: { type: "string", enum: ["low"] },
+            verificationStatus: { type: "string", enum: ["unverified"] }
+          },
+          required: ["sourceUrl", "excerpts"],
+          additionalProperties: false
+        }
+      ]
+    }
   },
-  required: ["result"]
+  required: ["result"],
+  additionalProperties: false
 });
 
 function writeCarrierSchemaFile(writeFileSync = fs.writeFileSync) {
@@ -363,7 +380,7 @@ function buildAntigravityArgs(request, config) {
 
   const args = [
     ...execArgs,
-    "--output-format", "json",
+    "--output-format", request.webReadTrace === true && request.mode === "read_only" ? "stream-json" : "json",
     "--model", resolved.model,
     "--add-dir", request.workspace
   ];
@@ -388,6 +405,19 @@ function buildAntigravityArgs(request, config) {
 function classifyAntigravityError(error, exitCode, stdout, stderr, signal = null) {
   const errorMessage = error ? String(error.message || error).toLocaleLowerCase("en-US") : "";
   const output = `${stderr || ""} ${exitCode !== 0 ? stdout || "" : ""}`.toLocaleLowerCase("en-US");
+  const combinedFailureText = `${errorMessage} ${output}`;
+
+  if (/sandbox (?:setup|startup|initiali[sz]ation|helper)|failed to (?:start|initialize|initiali[sz]e).*sandbox|kernel (?:refresh|reset|initiali[sz]ation)/i.test(combinedFailureText)) {
+    return { valid: false, errorClass: "sandbox_setup", providerCode: "process_error", reason: "Windows sandbox setup failed" };
+  }
+
+  if (/workspace (?:read|access) (?:failed|denied)|failed to read (?:the )?(?:workspace|file)|could not read (?:the )?(?:workspace|file)/i.test(combinedFailureText)) {
+    return { valid: false, errorClass: "workspace_read", providerCode: "permission_denied", reason: "workspace read failed" };
+  }
+
+  if (error?.failureClass === "prompt_transport_limit" || ["E2BIG", "ENAMETOOLONG"].includes(error?.code)) {
+    return { valid: false, errorClass: "prompt_transport_limit", providerCode: "prompt_transport_limit", reason: "prompt transport limit exceeded" };
+  }
 
   if (/timed out|timeout|zaman aşımı/i.test(errorMessage)) {
     return { valid: false, errorClass: "timeout", providerCode: "timeout", reason: "execution timed out" };
@@ -451,7 +481,7 @@ function classifyAntigravityError(error, exitCode, stdout, stderr, signal = null
   }
 
   if (error) {
-    return { valid: false, errorClass: "process_error", providerCode: "process_error", reason: errorMessage || "process error" };
+    return { valid: false, errorClass: "process_error", providerCode: "process_error", reason: "antigravity process failed" };
   }
 
   return { valid: true, providerCode: null };
@@ -461,11 +491,22 @@ function createAttemptDiagnostics(failureStage, providerCode = null, timings = {
   return {
     failureStage: failureStage || null,
     providerCode: providerCode || null,
+    ...(operatingSystemErrorCodeValues.includes(timings.osErrorCode) ? { osErrorCode: timings.osErrorCode } : {}),
+    ...(timings.webEvidenceFailureCode ? { webEvidenceFailureCode: timings.webEvidenceFailureCode } : {}),
     settingsLockWaitMs: Number.isInteger(timings.settingsLockWaitMs) ? timings.settingsLockWaitMs : null,
     providerExecutionMs: Number.isInteger(timings.providerExecutionMs) ? timings.providerExecutionMs : null,
     stdoutBytes: Number.isInteger(timings.stdoutBytes) ? timings.stdoutBytes : null,
     stderrBytes: Number.isInteger(timings.stderrBytes) ? timings.stderrBytes : null
   };
+}
+
+function failureStageForClassification(errorClass, fallback = "provider_execution") {
+  if (["sandbox_setup", "workspace_read", "provider_auth", "provider_rate_limit", "provider_process_exit", "evidence_invalid", "cancelled"].includes(errorClass)) return errorClass;
+  if (errorClass === "authentication_failure" || errorClass === "auth_invalid") return "provider_auth";
+  if (errorClass === "rate_limited") return "provider_rate_limit";
+  if (errorClass === "process_exit") return "provider_process_exit";
+  if (errorClass === "prompt_transport_limit" || errorClass === "executable_missing") return "process_spawn";
+  return fallback;
 }
 
 function extractAntigravityResult(stdout) {
@@ -484,6 +525,71 @@ function extractAntigravityResult(stdout) {
   } catch {
     return trimmed;
   }
+}
+
+function readUrlErrorIsPermissionDenied(error) {
+  const errorText = typeof error === "string"
+    ? error
+    : [error?.type, error?.message].filter((value) => typeof value === "string").join(" ");
+  return /permission denied|permission_denied|tool required the ["']read_url["'] permission|headless mode cannot prompt|auto-denied/i.test(errorText);
+}
+
+function isReadUrlToolName(value) {
+  return value === "read_url" || value === "read_url_content";
+}
+
+export function extractAntigravityStreamTrace(stdout, stderr = "") {
+  let terminalResult = null;
+  let readUrlToolAvailable = null;
+  let readUrlObserved = false;
+  let readUrlSucceeded = false;
+  let readUrlPermissionDenied = false;
+  let readUrlFailed = false;
+  const lines = String(stdout || "").split(/\r?\n/u).filter((line) => line.trim().length > 0);
+  for (const line of lines) {
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event?.event === "init" && Array.isArray(event.init?.tools)) {
+      readUrlToolAvailable = event.init.tools.some(isReadUrlToolName);
+    }
+    if (event?.event === "result" && event.result && typeof event.result === "object") {
+      terminalResult = event.result;
+      continue;
+    }
+    if (event?.event !== "step_update" || event.step_update?.step_type !== "tool") continue;
+    const step = event.step_update;
+    if (!isReadUrlToolName(step.tool_name || step.tool_info?.name) || step.state !== "DONE") continue;
+    readUrlObserved = true;
+    const toolError = step.tool_info?.error;
+    if (toolError) {
+      if (readUrlErrorIsPermissionDenied(toolError)) readUrlPermissionDenied = true;
+      else readUrlFailed = true;
+    } else {
+      readUrlSucceeded = true;
+    }
+  }
+  if (/(?:read_url_content|\bread_url\b)/i.test(String(stderr)) && /soft[- ]denied|permission denied|permission_denied|requires? approval|approval required|cannot prompt|auto-denied/i.test(String(stderr))) {
+    readUrlPermissionDenied = true;
+  }
+  const webReadStatus = readUrlSucceeded
+    ? "used"
+      : readUrlPermissionDenied
+        ? "permission_denied"
+        : readUrlObserved && readUrlFailed
+          ? "failed"
+          : readUrlToolAvailable === false
+            ? "unavailable"
+            : readUrlToolAvailable === true
+              ? "not_invoked"
+              : "not_observed";
+  return {
+    resultText: terminalResult ? extractAntigravityResult(JSON.stringify(terminalResult)) : null,
+    webReadStatus
+  };
 }
 
 function mapCategoryToSubagentError(errorClass, error, backend, model, durationMs, retries, exitCode = null, signal = null, diagnostics = null) {
@@ -525,7 +631,7 @@ function mapCategoryToSubagentError(errorClass, error, backend, model, durationM
   }
 }
 
-const PROBE_CAPABILITIES = ["modelAccess", "toolFreeResponse", "workspaceRead", "webRead"];
+const PROBE_CAPABILITIES = ["modelAccess", "toolFreeResponse", "workspaceRead", "webRead", "sandboxStartup"];
 const DEFAULT_PROBE_TIMEOUT_MS = 300000;
 const WEB_READ_PROBE_URL = "https://example.com";
 const WEB_READ_PROBE_MARKER = /example domain/i;
@@ -592,6 +698,7 @@ export function createAntigravityAdapter(configuration) {
             modelAccess: "not_probed",
             toolFreeResponse: "not_probed",
             workspaceRead: "not_probed",
+            sandboxStartup: "not_probed",
             webRead: "not_probed"
           }
         };
@@ -606,6 +713,7 @@ export function createAntigravityAdapter(configuration) {
             modelAccess: "not_probed",
             toolFreeResponse: "not_probed",
             workspaceRead: "not_probed",
+            sandboxStartup: "not_probed",
             webRead: "not_probed"
           },
           error: error.message
@@ -613,12 +721,15 @@ export function createAntigravityAdapter(configuration) {
       }
     },
 
-    async probeCapabilities({ model, capabilities, timeoutMs } = {}) {
+    async probeCapabilities({ model, capabilities, timeoutMs, workspaceReadTarget = "temp_workspace", trustedWorkspace } = {}) {
       const requested = Array.isArray(capabilities) ? PROBE_CAPABILITIES.filter((capability) => capabilities.includes(capability)) : [];
+      const normalizedWorkspaceReadTarget = workspaceReadTarget === "trusted_workspace" ? "trusted_workspace" : "temp_workspace";
       const result = {
         modelAccess: "not_probed",
         toolFreeResponse: "not_probed",
         workspaceRead: "not_probed",
+        sandboxStartup: "not_probed",
+        workspaceReadTarget: requested.includes("workspaceRead") ? normalizedWorkspaceReadTarget : null,
         webRead: "not_probed",
         failureClass: null,
         checkedAt: new Date().toISOString()
@@ -638,7 +749,8 @@ export function createAntigravityAdapter(configuration) {
         ? timeoutMs
         : (configuration?.antigravity?.probeTimeoutMs || DEFAULT_PROBE_TIMEOUT_MS);
       const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "agy-capability-probe-"));
-      const runProbe = async (prompt) => probeResponse(await runCapabilityProbeProcess(executable, execArgs, { workspace, model: resolved.model, prompt, timeoutMs: probeTimeoutMs }));
+      let trustedProbeWorkspace = null;
+      const runProbe = async (prompt, probeWorkspace = workspace) => probeResponse(await runCapabilityProbeProcess(executable, execArgs, { workspace: probeWorkspace, model: resolved.model, prompt, timeoutMs: probeTimeoutMs }));
       const applyOutcome = (capability, outcome, expected) => {
         if (outcome.failureClass) {
           const status = probeFailureStatus(outcome.failureClass);
@@ -651,24 +763,55 @@ export function createAntigravityAdapter(configuration) {
           return;
         }
         result[capability] = "unavailable";
-        recordFailure("unclassified");
+        recordFailure(capability === "sandboxStartup" ? "sandbox_setup" : capability === "workspaceRead" ? "workspace_read" : "unclassified");
       };
       try {
-        if (requested.includes("modelAccess") || requested.includes("toolFreeResponse")) {
+        if (requested.includes("modelAccess") || requested.includes("toolFreeResponse") || requested.includes("sandboxStartup")) {
           const outcome = await runProbe("Reply with exactly READY and nothing else.");
           for (const capability of ["modelAccess", "toolFreeResponse"]) {
             if (!requested.includes(capability)) continue;
             applyOutcome(capability, outcome, outcome.text.includes("READY"));
           }
+          if (requested.includes("sandboxStartup") && outcome.failureClass === "sandbox_setup") {
+            result.sandboxStartup = "unavailable";
+            recordFailure("sandbox_setup");
+          }
         }
         if (requested.includes("workspaceRead")) {
           const marker = `PROBE-${crypto.randomUUID()}`;
-          fs.writeFileSync(path.join(workspace, "probe.txt"), marker, "utf8");
-          const outcome = await runProbe("Read the file probe.txt in the workspace and reply with its exact contents and nothing else.");
-          applyOutcome("workspaceRead", outcome, outcome.text.includes(marker));
+          let probeWorkspace = workspace;
+          if (normalizedWorkspaceReadTarget === "trusted_workspace") {
+            if (typeof trustedWorkspace !== "string" || !path.isAbsolute(trustedWorkspace)) {
+              result.workspaceRead = "unavailable";
+              recordFailure("policy_violation");
+            } else {
+              try {
+                const trustedRoot = fs.realpathSync(trustedWorkspace);
+                trustedProbeWorkspace = fs.mkdtempSync(path.join(trustedRoot, ".bridge-read-probe-"));
+                probeWorkspace = trustedProbeWorkspace;
+              } catch {
+                result.workspaceRead = "unavailable";
+                recordFailure("workspace_read");
+              }
+            }
+          }
+          if (result.workspaceRead === "not_probed") {
+            const markerPath = path.join(probeWorkspace, "probe.txt");
+            fs.writeFileSync(markerPath, marker, { encoding: "utf8", flag: "wx", mode: 384 });
+            const outcome = await runProbe(`Read the file ${markerPath} and reply with its exact contents and nothing else.`, probeWorkspace);
+            const failureClass = outcome.failureClass === "permission_denied"
+              ? "workspace_read"
+              : outcome.failureClass;
+            if (failureClass) {
+              result.workspaceRead = probeFailureStatus(failureClass);
+              recordFailure(failureClass);
+            } else {
+              applyOutcome("workspaceRead", outcome, outcome.text.includes(marker));
+            }
+          }
         }
         if (requested.includes("webRead")) {
-          const outcome = await runProbe(`Fetch ${WEB_READ_PROBE_URL} with the read_url tool and reply with the page heading and nothing else.`);
+          const outcome = await runProbe(`Use the read_url_content tool to fetch ${WEB_READ_PROBE_URL} and reply with the page heading and nothing else. The required permission action is read_url.`);
           applyOutcome("webRead", outcome, WEB_READ_PROBE_MARKER.test(outcome.text));
         }
       } catch (error) {
@@ -681,6 +824,7 @@ export function createAntigravityAdapter(configuration) {
         }
       } finally {
         fs.rmSync(workspace, { recursive: true, force: true });
+        if (trustedProbeWorkspace) fs.rmSync(trustedProbeWorkspace, { recursive: true, force: true });
       }
       return result;
     },
@@ -706,6 +850,7 @@ export function createAntigravityAdapter(configuration) {
       const sandbox = configuration?.antigravity?.defaultSandbox !== false;
 
       const isReadOnly = request.mode === "read_only";
+      const webReadTrace = isReadOnly && request.webReadTrace === true;
       let readOnlyEnforcement = null;
       let carrierSchemaHandle = null;
       let releaseSettingsLock = null;
@@ -781,7 +926,7 @@ export function createAntigravityAdapter(configuration) {
             classification.errorClass, classification.reason || error.message,
             "antigravity", model.model,
             Date.now() - startedAt, 0, null, null,
-            createAttemptDiagnostics(readOnlyStage, classification.providerCode, { settingsLockWaitMs })
+            createAttemptDiagnostics(readOnlyStage === "mcp_preflight" ? failureStageForClassification(classification.errorClass, readOnlyStage) : readOnlyStage, classification.providerCode, { settingsLockWaitMs, osErrorCode: error?.code })
           );
         }
       }
@@ -789,7 +934,7 @@ export function createAntigravityAdapter(configuration) {
       try {
         const args = [
           ...execArgs,
-          "--output-format", "json",
+          "--output-format", webReadTrace ? "stream-json" : "json",
           "--model", model.model,
           "--add-dir", request.workspace
         ];
@@ -825,7 +970,7 @@ export function createAntigravityAdapter(configuration) {
             {
               cwd: request.workspace,
               timeoutMs: providerTimeoutMs,
-              maxOutputBytes: configuration?.antigravity?.maxOutputBytes || 8388608,
+              maxOutputBytes: request.maxOutputBytes || configuration?.antigravity?.maxOutputBytes || 8388608,
               env: createProviderEnvironment("antigravity"),
               abortController: handle.abortController,
               onSpawn: (child) => handle.attachChild(child)
@@ -837,22 +982,57 @@ export function createAntigravityAdapter(configuration) {
 
           const classification = classifyAntigravityError(null, processResult.code, processResult.stdout, processResult.stderr, processResult.signal);
           if (!classification.valid) {
-            return mapCategoryToSubagentError(
+            const failure = mapCategoryToSubagentError(
               classification.errorClass, classification.reason,
               "antigravity", model.model,
               Date.now() - startedAt, 0, processResult.code, processResult.signal,
-              createAttemptDiagnostics("provider_execution", classification.providerCode, {
+              createAttemptDiagnostics(failureStageForClassification(classification.errorClass), classification.providerCode, {
                 settingsLockWaitMs,
                 providerExecutionMs,
                 stdoutBytes: Buffer.byteLength(processResult.stdout, "utf8"),
                 stderrBytes: Buffer.byteLength(processResult.stderr, "utf8")
               })
             );
+            if (webReadTrace) failure.metrics.webReadStatus = classification.errorClass === "permission_denied" ? "permission_denied" : "failed";
+            return failure;
           }
 
-          const resultText = extractAntigravityResult(processResult.stdout);
+          const streamTrace = webReadTrace ? extractAntigravityStreamTrace(processResult.stdout, processResult.stderr) : null;
+          const webReadStatus = streamTrace?.webReadStatus;
+          if (webReadStatus === "permission_denied") {
+            const failure = mapCategoryToSubagentError(
+              "permission_denied", "read_url tool permission denied",
+              "antigravity", model.model,
+              Date.now() - startedAt, 0, processResult.code, processResult.signal,
+              createAttemptDiagnostics("provider_execution", "permission_denied", {
+                settingsLockWaitMs,
+                providerExecutionMs,
+                stdoutBytes: Buffer.byteLength(processResult.stdout, "utf8"),
+                stderrBytes: Buffer.byteLength(processResult.stderr, "utf8")
+              })
+            );
+            failure.metrics.webReadStatus = webReadStatus;
+            return failure;
+          }
+          if (webReadStatus === "failed") {
+            const failure = mapCategoryToSubagentError(
+              "process_error", "read_url tool failed",
+              "antigravity", model.model,
+              Date.now() - startedAt, 0, processResult.code, processResult.signal,
+              createAttemptDiagnostics("provider_execution", "process_error", {
+                settingsLockWaitMs,
+                providerExecutionMs,
+                stdoutBytes: Buffer.byteLength(processResult.stdout, "utf8"),
+                stderrBytes: Buffer.byteLength(processResult.stderr, "utf8")
+              })
+            );
+            failure.metrics.webReadStatus = webReadStatus;
+            return failure;
+          }
+
+          const resultText = webReadTrace ? streamTrace.resultText : extractAntigravityResult(processResult.stdout);
           if (!resultText) {
-            return mapCategoryToSubagentError(
+            const failure = mapCategoryToSubagentError(
               "empty_output", "provider returned an empty result",
               "antigravity", model.model,
               Date.now() - startedAt, 0, 0, null,
@@ -863,12 +1043,15 @@ export function createAntigravityAdapter(configuration) {
                 stderrBytes: Buffer.byteLength(processResult.stderr, "utf8")
               })
             );
+            if (webReadTrace) failure.metrics.webReadStatus = webReadStatus || "not_observed";
+            return failure;
           }
 
           return createSuccessSubagentResult("antigravity", model.model, {
             result: resultText,
             durationMs: Date.now() - startedAt,
             metrics: {
+              ...(webReadTrace ? { webReadStatus: webReadStatus || "not_observed" } : {}),
               diagnostics: createAttemptDiagnostics(null, null, {
                 settingsLockWaitMs,
                 providerExecutionMs,
@@ -896,6 +1079,24 @@ export function createAntigravityAdapter(configuration) {
 
           const isTimeout = /timed out|timeout/i.test(error.message || "");
           if (isTimeout) {
+            const streamTrace = webReadTrace ? extractAntigravityStreamTrace(error.stdout, error.stderr) : null;
+            if (streamTrace?.webReadStatus === "permission_denied") {
+              const failure = createFailureSubagentResult("antigravity", model.model, {
+                error: "read_url tool permission denied",
+                retryable: false,
+                timedOut: false,
+                exitCode: null,
+                durationMs: Date.now() - startedAt,
+                reason: "permission_denied",
+                metrics: { webReadStatus: "permission_denied", diagnostics: createAttemptDiagnostics("provider_execution", "permission_denied", {
+                  settingsLockWaitMs,
+                  providerExecutionMs,
+                  stdoutBytes: Buffer.byteLength(error.stdout || "", "utf8"),
+                  stderrBytes: Buffer.byteLength(error.stderr || "", "utf8")
+                }) }
+              });
+              return failure;
+            }
             return createFailureSubagentResult("antigravity", model.model, {
               error: `execution timed out${isReadOnly ? READ_ONLY_PROBE_HINT : ""}`,
               retryable: false,
@@ -903,7 +1104,15 @@ export function createAntigravityAdapter(configuration) {
               exitCode: null,
               durationMs: Date.now() - startedAt,
               reason: "timeout",
-              metrics: { diagnostics: createAttemptDiagnostics("provider_execution", "timeout", { settingsLockWaitMs, providerExecutionMs }) }
+              metrics: {
+                ...(webReadTrace ? { webReadStatus: streamTrace?.webReadStatus || "not_observed" } : {}),
+                diagnostics: createAttemptDiagnostics("provider_execution", "timeout", {
+                  settingsLockWaitMs,
+                  providerExecutionMs,
+                  stdoutBytes: Buffer.byteLength(error.stdout || "", "utf8"),
+                  stderrBytes: Buffer.byteLength(error.stderr || "", "utf8")
+                })
+              }
             });
           }
 
@@ -912,7 +1121,7 @@ export function createAntigravityAdapter(configuration) {
             classification.errorClass, classification.reason || error.message,
             "antigravity", model.model,
             Date.now() - startedAt, 0, null, null,
-            createAttemptDiagnostics("provider_execution", classification.providerCode, { settingsLockWaitMs, providerExecutionMs })
+            createAttemptDiagnostics(failureStageForClassification(classification.errorClass), classification.providerCode, { settingsLockWaitMs, providerExecutionMs, osErrorCode: error?.code })
           );
         }
       } finally {

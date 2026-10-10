@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createProviderEnvironment, runProcess, createExecutionHandle } from "../services/execution-service.js";
+import { createProviderEnvironment, createProcessFailureDiagnostics, runProcess, createExecutionHandle } from "../services/execution-service.js";
 import { createAdapter } from "./agent-adapter-base.js";
 import { createSuccessSubagentResult, createFailureSubagentResult } from "../schemas/core-schemas.js";
 import { prependExecutionMetadata } from "../services/execution-metadata.js";
@@ -27,6 +27,13 @@ function resolveCodexModel(alias) {
 
 function classifyCodexError(error, exitCode, stdout, stderr, signal = null) {
   if (error) {
+    if (error.failureClass === "prompt_transport_limit" || ["E2BIG", "ENAMETOOLONG"].includes(error.code)) {
+      return { valid: false, errorClass: "prompt_transport_limit", reason: "prompt transport limit exceeded", providerCode: "prompt_transport_limit" };
+    }
+    if (["EACCES", "EPERM"].includes(error.code)) return { valid: false, errorClass: "permission_denied", reason: "process spawn permission denied", providerCode: "permission_denied" };
+    if (error.code === "ETIMEDOUT") return { valid: false, errorClass: "timeout", reason: "execution timed out", providerCode: "timeout" };
+    if (["ECONNRESET", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND", "EAI_AGAIN"].includes(error.code)) return { valid: false, errorClass: "network", reason: "process network failure", providerCode: error.code === "ECONNRESET" ? "connection_reset" : error.code === "ENOTFOUND" || error.code === "EAI_AGAIN" ? "dns_failure" : "network_error" };
+    if (["ETIMEDOUT"].includes(error.code)) return { valid: false, errorClass: "timeout", reason: "execution timed out", providerCode: "timeout" };
     const message = String(error.message || error).toLocaleLowerCase("en-US");
     if (/timed out|timeout|zaman aşımı/i.test(message)) {
       return { valid: false, errorClass: "timeout", reason: "execution timed out" };
@@ -34,7 +41,10 @@ function classifyCodexError(error, exitCode, stdout, stderr, signal = null) {
     if (/enoent|not found|does not exist|command not found/i.test(message)) {
       return { valid: false, errorClass: "executable_missing", reason: "codex executable not found" };
     }
-    return { valid: false, errorClass: "process_error", reason: message || "process error" };
+    if (["ECONNRESET", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND", "EAI_AGAIN"].includes(error.code)) {
+      return { valid: false, errorClass: "network", reason: "provider network failure" };
+    }
+    return { valid: false, errorClass: "process_error", reason: "codex process failed" };
   }
 
   if (signal || exitCode === null) {
@@ -43,11 +53,24 @@ function classifyCodexError(error, exitCode, stdout, stderr, signal = null) {
 
   if (exitCode !== null && exitCode !== 0) {
     const output = `${stderr || ""} ${stdout || ""}`.toLocaleLowerCase("en-US");
-    if (/auth|login|credential|unauthorized|api.key/i.test(output)) {
+    if (/sandbox (?:setup|startup|helper)|failed to (?:start|initialize).*sandbox|kernel (?:refresh|reset|initialization)/i.test(output)) {
+      return { valid: false, errorClass: "sandbox_setup", reason: "sandbox setup failed", providerCode: "process_error" };
+    }
+    if (/workspace (?:read|access) (?:failed|denied)|failed to read (?:the )?(?:workspace|file)|could not read (?:the )?(?:workspace|file)/i.test(output)) {
+      return { valid: false, errorClass: "workspace_read", reason: "workspace read failed", providerCode: "permission_denied" };
+    }
+    const authenticationFailure = /\bauthentication\s+(?:failed|failure|required|error)\b|\bfailed\s+to\s+authenticate\b|\bnot\s+authenticated\b|\b(?:login|sign[\s-]?in)\s+required\b|\bnot\s+(?:logged|signed)\s+in\b|\bplease\s+(?:log\s+in|sign\s+in)\b|\b(?:invalid|expired|revoked|missing)\s+(?:api[- ]?key|access\s+token|authentication\s+token|authorization\s+token|credentials?)\b|\b(?:api[- ]?key|access\s+token|authentication\s+token|authorization\s+token|credentials?)\s+(?:(?:is|was|are|were)\s+)?(?:invalid|expired|revoked|missing)\b|\bhttp(?:\/\d(?:\.\d)?)?\s+401\s+unauthorized\b|\b401\s+unauthorized\b/i.test(output);
+    if (authenticationFailure) {
       return { valid: false, errorClass: "auth_invalid", reason: "authentication failure" };
     }
     if (/rate.limit|429|quota/i.test(output)) {
       return { valid: false, errorClass: "rate_limited", reason: "provider rate limited" };
+    }
+    if (/\b5\d\d\b|internal server error|service unavailable|bad gateway|gateway timeout/i.test(output)) {
+      return { valid: false, errorClass: "server", reason: "provider service unavailable" };
+    }
+    if (/econn|enotfound|eai_again|socket|network|fetch failed|connection reset/i.test(output)) {
+      return { valid: false, errorClass: "network", reason: "provider network failure" };
     }
     if (/invalid.*model|model.*not supported/i.test(output)) {
       return { valid: false, errorClass: "invalid_model", reason: "invalid model" };
@@ -78,7 +101,7 @@ function buildCodexArgs(request, configuration) {
   }
   const executable = configuration?.codex?.executable || "codex";
   const execArgs = configuration?.codex?.execArgs || [];
-  const allowNonGitWorkspace = request.caller === "codex_edit" || configuration?.codex?.allowNonGitWorkspace === true;
+  const allowNonGitWorkspace = request.caller === "codex_edit" || request.caller === "parallel_batch" || configuration?.codex?.allowNonGitWorkspace === true;
   const isGitWorkspace = typeof request.workspace === "string" && fs.existsSync(path.join(request.workspace, ".git"));
   return {
     executable,
@@ -89,12 +112,8 @@ function buildCodexArgs(request, configuration) {
       ...(allowNonGitWorkspace && !isGitWorkspace ? ["--skip-git-repo-check"] : []),
       ...(model.model ? ["--model", model.model] : []),
       "--sandbox", request.mode === "read_only" ? "read-only" : "workspace-write",
-      prependExecutionMetadata(request.prompt, {
-        backend: "codex",
-        requestedModel: request.model || "default",
-        resolvedModel: model.model,
-        mode: request.mode
-      })
+      ...(request.caller === "parallel_batch_edit" ? ["-c", "sandbox_workspace_write.network_access=false"] : []),
+      "-"
     ]
   };
 }
@@ -184,8 +203,25 @@ export function createCodexAdapter(configuration) {
           {
             cwd: request.workspace,
             timeoutMs,
-            maxOutputBytes: configuration?.codex?.maxOutputBytes || 8388608,
+            maxOutputBytes: request.maxOutputBytes || configuration?.codex?.maxOutputBytes || 8388608,
             env: createCodexEnvironment(request.mode),
+            stdin: request.reviewSourcePayload
+              ? JSON.stringify({
+                prompt: prependExecutionMetadata(request.prompt, {
+                  backend: "codex",
+                  requestedModel: request.model || "default",
+                  resolvedModel: model.model,
+                  mode: request.mode
+                }),
+                sourceBundle: request.reviewSourcePayload
+              })
+              : prependExecutionMetadata(request.prompt, {
+                backend: "codex",
+                requestedModel: request.model || "default",
+                resolvedModel: model.model,
+                mode: request.mode
+              }),
+            requireStdinDelivery: true,
             abortController: handle.abortController,
             onSpawn: (child) => handle.attachChild(child)
           }
@@ -202,7 +238,7 @@ export function createCodexAdapter(configuration) {
             exitCode: processResult.code,
             durationMs: Date.now() - startedAt,
             reason: classification.errorClass,
-            metrics: { signal: processResult.signal ?? null }
+            metrics: { signal: processResult.signal ?? null, ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {}) }
           });
         }
 
@@ -211,13 +247,15 @@ export function createCodexAdapter(configuration) {
           return createFailureSubagentResult("codex", resultModel, {
             error: parsed.error,
             durationMs: Date.now() - startedAt,
-            exitCode: processResult.code || 1
+            exitCode: processResult.code || 1,
+            metrics: { ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {}) }
           });
         }
 
         return createSuccessSubagentResult("codex", resultModel, {
           result: parsed.text || "",
-          durationMs: Date.now() - startedAt
+          durationMs: Date.now() - startedAt,
+          metrics: { ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {}) }
         });
       } catch (error) {
         activeExecutionHandles.delete(request.executionId);
@@ -230,7 +268,8 @@ export function createCodexAdapter(configuration) {
             timedOut: false,
             exitCode: null,
             durationMs: Date.now() - startedAt,
-            reason: "cancelled"
+            reason: "cancelled",
+            metrics: { diagnostics: createProcessFailureDiagnostics(error, { failureStage: "cancelled" }) }
           });
         }
 
@@ -241,7 +280,9 @@ export function createCodexAdapter(configuration) {
             retryable: false,
             timedOut: true,
             exitCode: null,
-            durationMs: Date.now() - startedAt
+            durationMs: Date.now() - startedAt,
+            reason: "timeout",
+            metrics: { diagnostics: createProcessFailureDiagnostics(error, { providerCode: "timeout" }) }
           });
         }
 
@@ -251,7 +292,9 @@ export function createCodexAdapter(configuration) {
           retryable: classification.errorClass === "rate_limited" || classification.errorClass === "provider_temporary_error",
           timedOut: false,
           exitCode: 1,
-          durationMs: Date.now() - startedAt
+          durationMs: Date.now() - startedAt,
+          reason: classification.errorClass,
+          metrics: { diagnostics: createProcessFailureDiagnostics(error, { providerCode: classification.providerCode || null }) }
         });
       }
     },

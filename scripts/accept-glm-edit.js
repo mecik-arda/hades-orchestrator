@@ -12,6 +12,7 @@ fs.writeFileSync(sourcePath, "export function sum(left, right) {\n  return left 
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [path.join(projectRoot, "subagent-bridge", "src", "server.js")],
+  cwd: workspace,
   env: { ...process.env, SUBAGENT_BRIDGE_TRUSTED_WORKSPACE: workspace }
 });
 const client = new Client({ name: "glm-edit-acceptance", version: "2.1.0" });

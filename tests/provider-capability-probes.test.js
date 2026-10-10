@@ -53,11 +53,13 @@ test("CAP-PROBE-01: codex probe model erisimini ve araçsız yanıtı kaydeder",
   const probe = await runtime.probeCapability({ target: "codex", model: "gpt-5.6-sol", trustedWorkspace: root });
   assert.equal(probe.capabilities.modelAccess, "available");
   assert.equal(probe.capabilities.toolFreeResponse, "available");
+  assert.equal(probe.capabilities.sandboxStartup, "not_probed");
   assert.equal(probe.failureClass, null);
   const record = readLiveObservation(root);
   assert.notEqual(record, null);
   assert.equal(record.capabilities.modelAccess, "available");
   assert.equal(record.capabilities.toolFreeResponse, "available");
+  assert.equal(record.capabilities.sandboxStartup, "not_probed");
 });
 
 test("CAP-PROBE-02: basarisiz probe unavailable durumunu ve hata sinifini kaydeder", async (t) => {
@@ -77,8 +79,12 @@ test("CAP-PROBE-02: basarisiz probe unavailable durumunu ve hata sinifini kayded
 test("CAP-PROBE-03: MCP araci model zorunlulugunu ve saglayici eslemesini uygular", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cap-probe-handler-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const observedRequests = [];
   const handler = createMcpToolHandlers({
-    runtime: { probeCapability: async ({ target, model }) => ({ provider: target, model: model || null, capabilities: {}, failureClass: null }) },
+    runtime: { probeCapability: async (input) => {
+      observedRequests.push(input);
+      return { provider: input.target, model: input.model || null, capabilities: {}, failureClass: null };
+    } },
     trustedWorkspace: root
   });
   await assert.rejects(() => handler.checkProviderCapability({ provider: "antigravity" }), /requires a model/);
@@ -87,8 +93,53 @@ test("CAP-PROBE-03: MCP araci model zorunlulugunu ve saglayici eslemesini uygula
   const codexProbe = await handler.checkProviderCapability({ provider: "codex", model: "gpt-5.6-sol" });
   assert.equal(codexProbe.structuredContent.provider, "codex");
   assert.equal(codexProbe.structuredContent.model, "gpt-5.6-sol");
+  assert.equal(observedRequests.at(-1).probeWorkspaceRead, false);
+  await handler.checkProviderCapability({ provider: "codex", model: "gpt-5.6-sol", probeWorkspaceRead: true });
+  assert.equal(observedRequests.at(-1).probeWorkspaceRead, true);
   const claudeProbe = await handler.checkProviderCapability({ provider: "claude_code" });
   assert.equal(claudeProbe.structuredContent.provider, "claude_code");
+});
+
+test("CAP-PROBE-06: trusted workspace read probe is explicit, scoped to a host sentinel directory, and cleaned", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cap-probe-workspace-read-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let observedProbeWorkspace = null;
+  const adapter = createFakeAdapter("codex", async (request) => {
+    if (request.prompt.includes("Read only the file")) {
+      observedProbeWorkspace = request.workspace;
+      const markerPath = path.join(request.workspace, "probe.txt");
+      return createSuccessSubagentResult("codex", request.model || "gpt-5.6-sol", { result: fs.readFileSync(markerPath, "utf8"), durationMs: 5 });
+    }
+    return createSuccessSubagentResult("codex", request.model || "gpt-5.6-sol", { result: "BRIDGE-PROBE-OK", durationMs: 5 });
+  });
+  const runtime = createBridgeRuntime({ configuration: configuration(root), adapters: { codex: adapter }, sleep: async () => {} });
+  const probe = await runtime.probeCapability({ target: "codex", model: "gpt-5.6-sol", trustedWorkspace: root, probeWorkspaceRead: true });
+
+  assert.equal(probe.capabilities.modelAccess, "available");
+  assert.equal(probe.capabilities.toolFreeResponse, "available");
+  assert.equal(probe.capabilities.workspaceRead, "available");
+  assert.equal(probe.capabilities.workspaceReadTarget, "trusted_workspace");
+  assert.ok(path.relative(root, observedProbeWorkspace).startsWith(".bridge-capability-read-"));
+  assert.equal(fs.readdirSync(root).some((entry) => entry.startsWith(".bridge-capability-read-")), false);
+  assert.equal(JSON.stringify(probe).includes(root), false);
+  const record = readLiveObservation(root);
+  assert.equal(record.capabilities.workspaceRead, "available");
+  assert.equal(record.capabilities.workspaceReadTarget, "trusted_workspace");
+});
+
+test("CAP-PROBE-07: sandbox startup failure is separate from auth and workspace-read status", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cap-probe-sandbox-failure-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const adapter = createFakeAdapter("codex", async (request) => createFailureSubagentResult("codex", request.model || "gpt-5.6-sol", {
+    error: "sandbox startup failed",
+    reason: "sandbox_setup",
+    durationMs: 5
+  }));
+  const runtime = createBridgeRuntime({ configuration: configuration(root), adapters: { codex: adapter }, sleep: async () => {} });
+  const probe = await runtime.probeCapability({ target: "codex", model: "gpt-5.6-sol", trustedWorkspace: root });
+  assert.equal(probe.capabilities.sandboxStartup, "unavailable");
+  assert.equal(probe.capabilities.workspaceRead, "not_probed");
+  assert.equal(probe.failureClass, "sandbox_setup");
 });
 
 test("CAP-PROBE-04: noktali ve egik cizgili model adlari live_observation kaydinda korunur", async (t) => {

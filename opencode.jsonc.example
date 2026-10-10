@@ -87,12 +87,12 @@
       "type": "local",
       "command": [
         "node",
-        "<repo-root>\\subagent-bridge\\src\\server.js"
+        "subagent-bridge/src/server.js"
       ],
-      "cwd": "<repo-root>",
+      "cwd": ".",
       "environment": {
         "ORCHESTRATOR_CONFIG": "~/.config/subagent-bridge/config.json",
-        "SUBAGENT_BRIDGE_TRUSTED_WORKSPACE": "<repo-root>",
+        "SUBAGENT_BRIDGE_TRUSTED_WORKSPACE": "",
         "SUBAGENT_BRIDGE_ORCHESTRATOR_APPROVAL": "1"
       },
       "enabled": true,

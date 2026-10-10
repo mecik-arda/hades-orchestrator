@@ -9,6 +9,7 @@ const workspace = fs.mkdtempSync(path.join(path.join(projectRoot, "pilot-workspa
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [path.join(projectRoot, "subagent-bridge", "src", "server.js")],
+  cwd: workspace,
   env: { ...process.env, SUBAGENT_BRIDGE_TRUSTED_WORKSPACE: workspace }
 });
 const client = new Client({ name: "glm-read-only-acceptance", version: "2.1.0" });

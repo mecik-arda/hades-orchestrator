@@ -111,6 +111,36 @@ test("OPT-01aa: etkin lease staleLockMs aşılırken silinmez", async (t) => {
   second.release("lease-waiter");
 });
 
+test("OPT-01aa1: stale mtime cannot steal a lock from a live process", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-live-owner-lock-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const options = { lockDirectory: path.join(root, "locks"), staleLockMs: 1000, leaseHeartbeatMs: 60000, maxWaitAttempts: 0 };
+  const first = createWorkspaceCoordinator(options);
+  const second = createWorkspaceCoordinator(options);
+  assert.ok(await first.acquire(root, "edit", "live-owner"));
+  const workspaceHash = crypto.createHash("sha256").update(root).digest("hex");
+  const writeLockPath = path.join(root, "locks", workspaceHash, "write.lock");
+  const staleAt = new Date(Date.now() - 2000);
+  fs.utimesSync(writeLockPath, staleAt, staleAt);
+  assert.equal(await second.acquire(root, "edit", "live-waiter"), null);
+  assert.equal(fs.existsSync(writeLockPath), true);
+  first.release("live-owner");
+});
+
+test("OPT-01aa2: lock ownership assertion fences a replaced lease", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-lock-fencing-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const coordinator = createWorkspaceCoordinator({ lockDirectory: path.join(root, "locks") });
+  assert.ok(await coordinator.acquire(root, "edit", "owner-one"));
+  assert.equal(coordinator.assertOwner(root, "owner-one"), true);
+  const workspaceHash = crypto.createHash("sha256").update(root).digest("hex");
+  const writeLockPath = path.join(root, "locks", workspaceHash, "write.lock");
+  fs.writeFileSync(writeLockPath, JSON.stringify({ ownerId: "owner-two", pid: process.pid, createdAt: new Date().toISOString() }), "utf8");
+  assert.equal(coordinator.assertOwner(root, "owner-one"), false);
+  coordinator.release("owner-one");
+  assert.equal(fs.existsSync(writeLockPath), true);
+});
+
 test("OPT-01aaa: coordinator sınırlı bekleme sonrası isteği fail-closed reddeder", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-coordinator-wait-limit-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

@@ -20,6 +20,7 @@ Hades Orchestrator is a provider-neutral orchestration system in which the OpenC
 - [Architecture](#architecture)
 - [MCP rule attestation](#mcp-rule-attestation)
 - [Personal configuration](#personal-configuration)
+- [Orchestration V2 parallel batches](#orchestration-v2-parallel-batches)
 - [Canonical routing](#canonical-routing)
 - [Task profiles](#task-profiles)
 - [Verified provider matrix](#verified-provider-matrix)
@@ -46,11 +47,11 @@ Hades Orchestrator is a provider-neutral orchestration system in which the OpenC
 
 ## Usage
 
-The runtime policy is loaded from `~/.config/subagent-bridge/config.json`; executable and adapter settings are loaded from `~/.config/subagent-bridge/agents.json`. `ORCHESTRATOR_CONFIG` and `SUBAGENT_BRIDGE_AGENTS_CONFIG` override the locations; `config/policy.json` and `config/agents.json` are distribution templates. The host MCP definition is adapted from `opencode.jsonc.example`; the server runs as `subagent-bridge/src/server.js` with `SUBAGENT_BRIDGE_TRUSTED_WORKSPACE`. Read-only tasks run through global tools, while controlled edits run with selected files and acceptance criteria. Verification: `npm test`, `npm run verify:ci`, `npm run budget`, `npm run metrics`.
+The runtime policy is loaded from `~/.config/subagent-bridge/config.json`; executable and adapter settings are loaded from `~/.config/subagent-bridge/agents.json`. `ORCHESTRATOR_CONFIG` and `SUBAGENT_BRIDGE_AGENTS_CONFIG` override the locations; `config/policy.json` and `config/agents.json` are distribution templates. The local MCP server uses a workspace-relative command and `cwd`; its trusted workspace uses a non-empty `SUBAGENT_BRIDGE_TRUSTED_WORKSPACE` override when supplied, otherwise the MCP process working directory. Either path is validated against `allowedRoots` and denied roots. Read-only tasks run through global tools, while controlled edits run with selected files and acceptance criteria. Verification: `npm test`, `npm run verify:ci`, `npm run budget`, `npm run metrics`.
 
 ## Verified baseline
 
-The package is `hades-orchestrator@2.2.0`, the runtime is Node.js 20.9+ and ESM; CI uses Node.js 22/24. The canonical record lives under `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, with the optional view at `<workspace>/.hades/runs.jsonl`. Run `npm test` for the current regression; `npm run verify`, `npm run verify:ci` and `npm run smoke` succeed.
+The package is `hades-orchestrator@2.2.0`, the runtime is Node.js 20.9+ and ESM; CI uses Node.js 22/24. The canonical record lives under `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, with the optional view at `<workspace>/.hades/runs.jsonl`. Last full validation: 2026-10-03. Run `npm test` for the current regression; `npm run verify`, `npm run verify:ci` and `npm run smoke` succeed.
 
 ## Quick start
 
@@ -83,7 +84,7 @@ HOST / ORCHESTRATOR MODEL != SUBAGENT BACKEND
 PACKAGE LOCATION != ACTIVE WORKSPACE
 ```
 
-The active workspace is not derived from the package location, configuration or runtime CWD; `SUBAGENT_BRIDGE_TRUSTED_WORKSPACE` is canonicalized.
+The MCP trusted workspace is not inferred from the package location: it uses a non-empty explicit startup environment override when supplied, otherwise the host-provided MCP process working directory. The selected path is canonicalized and checked against allowed and denied roots.
 
 ### MCP rule attestation
 
@@ -102,6 +103,49 @@ The result is an untrusted observation with `sourceClass: "mcp_resource"`. `work
 ### Personal configuration
 
 It passes `configVersion: 2` schema validation; unknown or missing fields are rejected. Providers are constrained by `defaultMode`/`allowedModes`. `reliability.monthlyCostLimitUsd: 100` and `warningThresholdPercent: 80` are advisory references; admission-time budget enforcement is off by default (`costBudgetEnforced: false`) and can be enabled explicitly. `npm run budget` and `check_subagent_bridge` expose `dailyAccountedUsd`/`monthlyAccountedUsd` (legacy aliases: `dailySpentUsd`/`monthlySpentUsd`). These totals are observed plus estimated costs; estimates include active reservations, and runs without an actual cost or estimate are counted separately, not asserted to cost zero. They are **not provider invoices**. `costAccounting.limitMode` distinguishes `advisory_only`, `admission_blocking` and `no_limit_configured`; with `costBudgetEnforced: false`, remaining/overage/warning fields are informational and do not reject a new request. `measurementStatus: not_observable` means at least one run's actual cost is unknown; the observed/estimated breakdown and cost coverage must be read alongside the aggregate. When enforcement is enabled, the limit is checked atomically at reservation time; a late settlement after an expired reservation is still counted. Codex `allowNonGitWorkspace` is enabled only through the personal machine config; DeepSeek preserves denied-root and Zod validation without requiring a Git repository.
+
+### Orchestration V2 parallel batches
+
+Orchestration V2 is an additive host-owned scheduler in the existing Node bridge; it does not replace single-subagent tools or add an agent framework. “V2” is the feature name, not the package version or `configVersion`. Read-only batches support independent tasks and sequential dependency waves. Workers return bounded JSON summaries; full details are available only through an opaque, caller/workspace/batch/task-bound reference. Edit batches use isolated Git worktrees and remain single-wave. Each edit task uses a private task repository with its own refs and no inherited remote; the host verifies source refs before accepting the task diff. Host-side promotion verification is restricted to the non-executing `git diff --check` check; arbitrary project commands are rejected until an OS-isolated verification runner exists. Run project tests separately before approving integration. `stopConditions` guide the worker and `resourceClaims` serialize tasks that share a named resource. Per-task input/output byte, file-count and diff-byte bounds cannot exceed host ceilings. Input-token limits fail closed where no host-enforced tokenizer limit exists; output-token limits require a route whose provider cap passed its canary.
+
+The MCP workflow is deliberately two-step:
+
+1. `prepare_parallel_batch` validates the task DAG, readable paths, provider route and batch-local admission estimate. It starts no workers and returns `planId`, `planHash` and a bounded preview. Edit tasks may select only the safe host verification command `git diff --check` and may declare bounded input/diff limits, stop conditions and shared-resource claims.
+2. The lead orchestrator shows that preview to the user. Only a separate, explicit user approval turn permits `start_parallel_batch` with the exact plan ID and hash.
+3. `start_parallel_batch` returns a `batchId`; each `get_parallel_batch` poll returns structured progress percentage and per-task states. The percentage counts resolved tasks; `unknown` is not counted as complete, and no token/work percentage is invented for a running task. OpenCode does not currently render MCP progress notifications as a persistent TUI view. `get_parallel_task_detail` reads a bounded artifact page, and `cancel_parallel_batch` is the explicit cancellation path. A client disconnect does not cancel an accepted batch.
+4. Before approving edit integration, fetch the bounded combined diff through `get_parallel_task_detail` with `taskId: "integration"` and the approval's `detailRef`. The separate approval binds the diff hash, source HEAD/ref state and changed-file hashes and applies under the source workspace write lock. Task verification runs in each isolated task worktree, followed by integration verification. A changed source file invalidates the preview. Promotion writes a durable per-workspace recovery journal before replacing files; startup restores a partial promotion or reconciles a committed promotion with the batch manifest. Conflicting external file changes or failed recovery keep the journal and block further edit work. Files are replaced individually, so readers outside the bridge lock can observe an in-progress multi-file promotion. Cancelling a ready diff revokes its approval; once promotion has entered `integrating`, cancellation is refused. Integration does not commit or push.
+
+Example `prepare_parallel_batch` arguments:
+
+```json
+{
+  "objective": "Review the user-facing documentation",
+  "batchMaxReservedCostUsd": 0.5,
+  "maxWorkers": 2,
+  "tasks": [
+    {
+      "taskId": "readme-review",
+      "role": "reviewer",
+      "mode": "read_only",
+      "target": "codex",
+      "model": "gpt-5.6-luna",
+      "objective": "Find factual inconsistencies in the README.",
+      "readablePaths": ["README.md"],
+      "acceptanceCriteria": ["Return a concise evidence-based review."]
+    }
+  ]
+}
+```
+
+The returned plan ID/hash are not start permission by themselves; display the preview and wait for a separate user approval turn.
+
+Enable the feature in the personal `parallelBatch` config section with `enabled: true`; the distribution template stays disabled. `editEnabled` is a separate opt-in and requires a clean Git workspace and a provider capability that passed its canary. The current host verification allowlist supports only `git diff --check`; other commands fail closed because verification currently has no OS-enforced sandbox. Run project tests separately before approving integration. `batchMaxReservedCostUsd` is a ceiling on internal admission estimates, not a provider invoice or actual-spend guarantee. The estimate sums the configured unknown-attempt cost times the retry allowance for the primary route and, only for read-only tasks, the resolved fallback routes the runtime actually executes; edit tasks do not reserve fallback routes. It is not a provider-enforced output-token or spend cap. A route requiring an actual provider-cost ceiling remains unsupported unless that ceiling is enforced by the provider. Batch reservations are separate from global per-execution cost accounting; queued/running allocation, unknown attempts and unused allocation are reflected separately.
+
+For a persistent live view, set personal `parallelBatch.autoOpenTerminalDashboard: true`; on Windows with Windows Terminal installed, batch start opens a small independent window at the primary display's right edge. This setting is off in the distribution template. It does not split or add a tab to the OpenCode session window. If auto-open is disabled or unavailable, open a second terminal and run `npm run parallel:watch -- <batchId>`. The watcher reads only the atomic batch manifest from the configured bridge state directory; it does not start another bridge/runtime or provider task. It refreshes task-resolution percentage, statuses and admission estimates once per second, and stops when the worker phase is terminal. `Ctrl+C` stops only the display, not the batch. This is a separate terminal view, not an embedded OpenCode panel.
+
+Current route evidence (2026-10-08): Codex network-off and task-ref isolation canaries passed on disposable workspaces. A disposable local file-remote push canary remained unproven; this does not enable the Codex edit route. A later OpenCode probe with DeepSeek Flash observed the output-token cap and `steps=1`, with no Bash tool completion; this is a host-specific observation, not a guarantee for other installations. The checked-in distribution policy keeps `opencodeOutputCapability` unavailable and V2 OpenCode tasks fail closed by default. The current personal configuration was not independently verified. Restart the MCP host after changing configuration so the new tools are registered. `npm run canary:parallel` reruns the route checks; `npm run canary:parallel:codex-ref` and `npm run canary:parallel:codex-remote` run isolated Codex sandbox probes. These live canaries may consume provider usage.
+
+The OpenCode batch-progress plugin source is `templates/opencode/parallel-batch-progress.js`. Copy it to `.opencode/plugins/parallel-batch-progress.js` to enable deduplicated transient TUI toasts for completed batch start, poll, cancellation and integration-approval tool events. It is not a persistent panel and updates only when the orchestrator polls or a batch action returns; restart OpenCode after changing the plugin. Public exports include the template and omit the project-local generated plugin directory.
 
 ### Canonical routing
 
@@ -153,7 +197,9 @@ sol61_implementation    → GPT-6.1 Sol, edit, 4, fallback: GPT-6 Sol → Codex 
 luna6_implementation    → GPT-6 Luna, edit, 11, no fallback
 ```
 
-Profiles live under `orchestration.taskProfiles` in `~/.config/subagent-bridge/config.json`. Codex subagent calls without an explicit model default to `gpt-6.1-sol` at the tool layer (`run_codex_subagent` and the global `codex` tool); an explicit model overrides this default. Model access depends on the account and rollout status.
+Profiles live under `orchestration.taskProfiles` in `~/.config/subagent-bridge/config.json`. Codex subagent calls without an explicit model default to `gpt-6.1-sol` at the tool layer (`run_codex_subagent` and the global `codex` tool); an explicit model overrides this default. The global read-only `codexSol61` tool selects GPT-6.1 Sol explicitly, while `codexSol6` remains mapped to GPT-6 Sol. These user-global OpenCode tool changes take effect in newly started OpenCode sessions. Model access depends on the account and rollout status.
+
+The canonical global OpenCode tool wrapper is tracked in `templates/opencode/subagent-bridge.js`. Render/install it for the current checkout with `npm run opencode-tools:install`; verify the installed copy with `npm run opencode-tools:check`. Restart OpenCode after installing so the updated tools load.
 
 ```powershell
 npm run config:apply-routing
@@ -180,7 +226,9 @@ claude_sonnet     → claude-sonnet-4-6
 
 Read-only calls are constrained with `--add-dir`, `deny write_file(*)` and `no command(*)` policies. The `agy mcp list` output must be `No MCP servers configured.`; external MCP, permanently broad permissions, mutation and network probing are rejected. Settings are serialized with a PID lock and restored afterwards.
 
-Read-only calls choose the evidence mode from the prompt: web-intent prompts stay in strict mode with the JSON carrier and the single carrier repair attempt, while local analysis prompts run in repair mode where a plain, URL-free result is accepted without web evidence. URLs are allowed only inside `webEvidence.sourceUrl`; `result` and `excerpts` must stay URL-free.
+Read-only calls choose the evidence mode from the prompt: web-intent prompts stay in strict mode with the JSON carrier and the single carrier repair attempt, while local analysis prompts run in repair mode where a plain, URL-free result is accepted without web evidence. Antigravity's canonical web tool is `read_url_content`; its permission action is `read_url(domain)`. During read-only execution, the bridge temporarily allows `read_url(*)`, denies command, write, MCP and interactive browser actions, and restores settings afterwards. URLs are allowed only inside `webEvidence.sourceUrl`; `result` and `excerpts` must stay URL-free.
+
+Web-intent Antigravity calls use `stream-json` to observe the canonical web-tool step. If the CLI times out, partial stdout/stderr is inspected in memory to retain only the web-read status; raw provider output is not added to metrics. `used` means the tool step was observed, while the host still validates and quarantines the evidence carrier before accepting a web-research result. Headless CLI permission requests that cannot be approved are soft-denied by Antigravity; see [Permissions](https://antigravity.google/docs/permissions/) and [Headless mode](https://antigravity.google/docs/cli/headless/).
 
 Canonical error classes are `rate_limited`, `authentication_failure`, `permission_denied`, `timeout`, `server`, `network`, `process_exit`, `process_error` and `output_limit`; the real `exitCode` and `signal` are preserved. The provider circuit key is model-scoped for Antigravity (`antigravity:<model>`), so a transient failure in one model does not open the circuit for other Gemini models.
 
@@ -235,7 +283,7 @@ Codex defines scope and architecture, runs code and tests, and verifies results.
 
 ## Skills
 
-Canonical skills live under `.agents/skills` and Claude-compatible copies under `.claude/skills`: `commit-at`, `guvenlik-ve-sertlestirme`, `kod-denetleyicisi`, `otomatik-dokumantasyon`, `veri-seti-analizcisi`, `proje-kesif-planlama`, `model-saglayici-ekleme`, `dogrulama-kapisi`, `mcp-sozlesme-denetimi`, `hafiza-vault-bakimi`, `maliyet-ve-butce-denetimi`, `bagimlilik-guvenligi`, `m2-hook-oturum-uygunlugu`, `m2-hook-sonuc-geri-bildirimi`, `m2-hook-proje-kohortu`, `m2-hook-tarihsel-atif`, `m2-hook-metrik-incelemesi`. The five `m2-hook-*` skills separately cover M2 session eligibility, explicit user outcomes, new-session cohort metadata, narrowly approved historical attribution and read-only metrics; none writes Vault notes or classifies YOLO/COCO datasets. Synchronize with `npm run skills:sync`. Global installs copy the same folders into `~/.config/opencode/skills`, `~/.codex/skills`, `~/.claude/skills` and `~/.agents/skills` so the skills are available outside the project; `npm run verify` checks the `.agents` ↔ `.claude` synchronization, while global copies are installed manually and are outside that gate. `npm run skills:check-global` compares the four global copies against the canonical `.agents` source and reports equal, missing and different roots; `--strict` treats missing copies as failures.
+Canonical skills live under `.agents/skills` and Claude-compatible copies under `.claude/skills`: `commit-at`, `guvenlik-ve-sertlestirme`, `kod-denetleyicisi`, `otomatik-dokumantasyon`, `veri-seti-analizcisi`, `proje-kesif-planlama`, `subagent-orkestrasyonu`, `model-saglayici-ekleme`, `dogrulama-kapisi`, `mcp-sozlesme-denetimi`, `hafiza-vault-bakimi`, `maliyet-ve-butce-denetimi`, `bagimlilik-guvenligi`, `m2-hook-oturum-uygunlugu`, `m2-hook-sonuc-geri-bildirimi`, `m2-hook-proje-kohortu`, `m2-hook-tarihsel-atif`, `m2-hook-metrik-incelemesi`. The `subagent-orkestrasyonu` skill covers task/provider/model routing, exact-model verification, read-only versus controlled-edit dispatch and explicit multi-agent batch approval. The five `m2-hook-*` skills separately cover M2 session eligibility, explicit user outcomes, new-session cohort metadata, narrowly approved historical attribution and read-only metrics; none writes Vault notes or classifies YOLO/COCO datasets. Synchronize with `npm run skills:sync`. Global installs copy the same folders into `~/.config/opencode/skills`, `~/.codex/skills`, `~/.claude/skills` and `~/.agents/skills` so the skills are available outside the project; `npm run verify` checks the `.agents` ↔ `.claude` synchronization, while global copies are installed manually and are outside that gate. `npm run skills:check-global` compares the four global copies against the canonical `.agents` source and reports equal, missing and different roots; `--strict` treats missing copies as failures.
 
 Planning selects web research and delegation only when needed. The orchestrator may write an authorized plan directly; delegated edits use a selected plan file. Provider-specific limits load from supporting skill references only for the chosen route. GPT-6.1 Sol self-review does not require a second Sol call and is not independent review. Verification selects checks by change type. Copy complete skill folders, including supporting references, when installing them globally.
 
@@ -379,6 +427,7 @@ Hades Orchestrator, OpenCode host ve ana orkestratörün yerel MCP üzerinden ba
 - [Mimari](#mimari)
 - [MCP kural attestation](#mcp-kural-attestation)
 - [Kişisel yapılandırma](#kişisel-yapılandırma)
+- [Orkestrasyon V2 paralel batch'leri](#orkestrasyon-v2-paralel-batchleri)
 - [Kanonik yönlendirme](#kanonik-yönlendirme)
 - [Görev profilleri](#görev-profilleri)
 - [Doğrulanmış sağlayıcı matrisi](#doğrulanmış-sağlayıcı-matrisi)
@@ -405,11 +454,11 @@ Hades Orchestrator, OpenCode host ve ana orkestratörün yerel MCP üzerinden ba
 
 ## Kullanım
 
-Runtime policy’si `~/.config/subagent-bridge/config.json`, executable ve adapter ayarları `~/.config/subagent-bridge/agents.json` dosyasından yüklenir. `ORCHESTRATOR_CONFIG` ve `SUBAGENT_BRIDGE_AGENTS_CONFIG` konumları değiştirir; `config/policy.json` ve `config/agents.json` dağıtım şablonudur. Host MCP tanımı `opencode.jsonc.example` ile uyarlanır; server `subagent-bridge/src/server.js` ve `SUBAGENT_BRIDGE_TRUSTED_WORKSPACE` ile çalışır. Salt-okunur görevler global araçlarla, kontrollü edit ise seçili dosya ve kabul kriterleriyle yürütülür. Doğrulama: `npm test`, `npm run verify:ci`, `npm run budget`, `npm run metrics`.
+Runtime policy’si `~/.config/subagent-bridge/config.json`, executable ve adapter ayarları `~/.config/subagent-bridge/agents.json` dosyasından yüklenir. `ORCHESTRATOR_CONFIG` ve `SUBAGENT_BRIDGE_AGENTS_CONFIG` konumları değiştirir; `config/policy.json` ve `config/agents.json` dağıtım şablonudur. Yerel MCP server workspace'e göreli komut ve `cwd` kullanır; dolu `SUBAGENT_BRIDGE_TRUSTED_WORKSPACE` override'ı varsa o, yoksa MCP sürecinin çalışma dizini kullanılır. Her iki yol da `allowedRoots` ve yasaklı köklere göre doğrulanır. Salt-okunur görevler global araçlarla, kontrollü edit ise seçili dosya ve kabul kriterleriyle yürütülür. Doğrulama: `npm test`, `npm run verify:ci`, `npm run budget`, `npm run metrics`.
 
 ## Doğrulanmış taban
 
-Paket `hades-orchestrator@2.2.0`, çalışma zamanı Node.js 20.9+ ve ESM’dir; CI Node.js 22/24 kullanır. Kanonik kayıt `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, isteğe bağlı görünüm `<workspace>/.hades/runs.jsonl` altındadır. Güncel regresyon için `npm test` çalıştırılır; `npm run verify`, `npm run verify:ci` ve `npm run smoke` başarılıdır.
+Paket `hades-orchestrator@2.2.0`, çalışma zamanı Node.js 20.9+ ve ESM’dir; CI Node.js 22/24 kullanır. Kanonik kayıt `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, isteğe bağlı görünüm `<workspace>/.hades/runs.jsonl` altındadır. Son tam doğrulama: 2026-10-03. Güncel regresyon için `npm test` çalıştırılır; `npm run verify`, `npm run verify:ci` ve `npm run smoke` başarılıdır.
 
 ## Hızlı başlangıç
 
@@ -442,7 +491,7 @@ HOST / ORKESTRATOR MODEL != SUBAGENT BACKEND
 PACKAGE LOCATION != ACTIVE WORKSPACE
 ```
 
-Aktif workspace package konumundan, config’ten veya runtime CWD’den türetilmez; `SUBAGENT_BRIDGE_TRUSTED_WORKSPACE` canonicalize edilir.
+MCP trusted workspace package konumundan türetilmez: dolu bir başlangıç ortam değişkeni override'ı varsa o, yoksa host'un MCP sürecine sağladığı çalışma dizini kullanılır. Seçilen yol canonicalize edilir ve izinli/yasaklı köklere göre doğrulanır.
 
 ### MCP kural attestation
 
@@ -461,6 +510,49 @@ Sonuç `sourceClass: "mcp_resource"` ile güvenilmeyen bir gözlemdir. `workspac
 ### Kişisel yapılandırma
 
 `configVersion: 2` şema doğrulamasından geçer; bilinmeyen veya eksik alan reddedilir. Provider’lar `defaultMode`/`allowedModes` ile sınırlıdır. `reliability.monthlyCostLimitUsd: 100` ve `warningThresholdPercent: 80` bilgilendirme referansıdır; admission-time bütçe uygulaması varsayılan olarak kapalıdır (`costBudgetEnforced: false`) ve açıkça etkinleştirilebilir. `npm run budget` ve `check_subagent_bridge`, `dailyAccountedUsd`/`monthlyAccountedUsd` alanlarını döndürür (`dailySpentUsd`/`monthlySpentUsd` geriye uyumluluk alias'larıdır). Bu toplam gözlenen ve tahmini maliyetlerden oluşur; tahminler aktif rezervasyonları kapsar, gerçek maliyeti/rezervi bilinmeyen işler ayrı sayılır ve sıfır maliyet diye varsayılmaz. Bu tutarlar **sağlayıcı faturası değildir**. `costAccounting.limitMode`, `advisory_only`, `admission_blocking` veya `no_limit_configured` durumunu belirtir; `costBudgetEnforced: false` iken kalan/aşım/uyarı alanları bilgilendirme amaçlıdır ve yeni isteği reddetmez. `measurementStatus: not_observable`, en az bir çalışmanın gerçek maliyetinin bilinmediğini gösterir; aggregate tutarı observed/estimated ayrımı ve kapsama oranıyla birlikte yorumlayın. Enforcement açıkken limit rezervasyon anında atomik kontrol edilir; süresi dolmuş rezervasyondan sonra gelen geç settlement yine hesaba katılır. Codex `allowNonGitWorkspace` yalnız kişisel machine config ile açılır; DeepSeek Git repository zorunluluğu olmadan denied-root ve Zod doğrulamasını korur.
+
+### Orkestrasyon V2 paralel batch'leri
+
+Orkestrasyon V2, mevcut Node bridge'e eklenen host-owned scheduler'dır; tekil subagent araçlarının yerini almaz ve yeni workflow framework'ü eklemez. “V2” özellik adıdır; paket sürümü veya `configVersion` değildir. Salt-okunur batch'ler bağımsız görevleri ve sıralı bağımlılık dalgalarını destekler. Worker'lar bounded JSON özet döndürür; tam ayrıntı yalnız caller/workspace/batch/task bağlamına bağlı opak referansla okunur. Edit batch'leri Git worktree izolasyonu kullanır ve tek dalgada kalır. Edit task'ları seçilmiş, host allowlist'indeki doğrulama komutlarını ister; `stopConditions` worker'a bildirilir, `resourceClaims` ortak adlı kaynağı kullanan görevleri sıralar. Task başına input/output byte, dosya sayısı ve diff byte limitleri host tavanını aşamaz. Host-enforced tokenizer sınırı olmayan rotada input-token talebi fail-closed reddedilir; output-token sınırı için provider cap canary'si gerekir.
+
+MCP akışı bilinçli olarak iki aşamalıdır:
+
+1. `prepare_parallel_batch` task DAG'ını, okunabilir yolları, provider rotasını ve batch-local admission tahminini doğrular. Worker başlatmaz; `planId`, `planHash` ve sınırlı bir önizleme döndürür. Edit task'ları host allowlist'indeki doğrulama komutlarını seçmelidir; bounded input/diff limitleri, stop koşulları ve paylaşılan kaynak claim'leri belirtebilir.
+2. Ana orkestratör önizlemeyi kullanıcıya gösterir. Yalnız ayrı ve açık kullanıcı onay turundan sonra aynı plan ID/hash ile `start_parallel_batch` çağrılır.
+3. `start_parallel_batch` hemen `batchId` döndürür; her `get_parallel_batch` poll'u yapılandırılmış ilerleme yüzdesi ve task durumlarını döndürür. Yüzde çözümlenmiş task'ları sayar; `unknown` tamamlanmış sayılmaz ve çalışan task içindeki token/iş yüzdesi uydurulmaz. OpenCode MCP progress notification'larını kalıcı bir TUI görünümü olarak çizmez. `get_parallel_task_detail` artifact sayfası okur, `cancel_parallel_batch` açık iptal sağlar. MCP istemcisinin bağlantı kesmesi kabul edilmiş batch'i iptal etmez.
+4. Edit entegrasyonunu onaylamadan önce `taskId: "integration"` ve onay özetindeki `detailRef` ile `get_parallel_task_detail` çağırıp birleşik diff'in sınırlı sayfalarını inceleyin. Ayrı onay diff hash'i, kaynak HEAD/ref durumu ve değişen dosya hash'lerine bağlanır; kaynak workspace write lock altında uygulanır. Doğrulama komutları her izole task worktree'sinde ve ardından integration worktree'sinde çalışır. Kaynak dosya değişmişse önizleme geçersizleşir. Dosyalar değiştirilmeden önce workspace'e bağlı durable recovery journal yazılır; başlangıç kurtarması yarım promotion'ı geri alır veya commit edilmiş promotion'ı batch manifestiyle uzlaştırır. Kaynakta çakışan harici değişiklik veya kurtarma hatası journal'ı koruyup yeni edit işlemlerini bloke eder. Dosyalar tek tek değiştirildiğinden bridge write lock'u dışındaki okuyucular tamamlanmakta olan çok dosyalı promotion'ın ara durumunu görebilir. Hazır diff'i iptal etmek onayı düşürür; `integrating` başladıktan sonra iptal reddedilir. Git commit/push yapmaz.
+
+`prepare_parallel_batch` için örnek argümanlar:
+
+```json
+{
+  "objective": "Kullanıcı dokümantasyonunu gözden geçir",
+  "batchMaxReservedCostUsd": 0.5,
+  "maxWorkers": 2,
+  "tasks": [
+    {
+      "taskId": "readme-review",
+      "role": "reviewer",
+      "mode": "read_only",
+      "target": "codex",
+      "model": "gpt-5.6-luna",
+      "objective": "README içindeki olgusal tutarsızlıkları bul.",
+      "readablePaths": ["README.md"],
+      "acceptanceCriteria": ["Kısa ve kanıta dayalı inceleme döndür."]
+    }
+  ]
+}
+```
+
+Dönen plan ID/hash tek başına başlatma izni değildir; önizlemeyi gösterip ayrı kullanıcı onay turunu bekleyin.
+
+Özelliği kişisel `parallelBatch` yapılandırmasında `enabled: true` ile açın; dağıtım şablonu varsayılan olarak kapalıdır. `editEnabled` ayrı opt-in'dir ve temiz Git workspace'i ile canary'den geçmiş provider capability'si gerektirir. Host doğrulaması şimdilik yalnızca güvenli `git diff --check` komutuna izin verir; OS sandbox'ı bulunmadığından diğer komutlar fail-closed reddedilir. Entegrasyonu onaylamadan önce proje testlerini ayrıca çalıştırın. `batchMaxReservedCostUsd` iç admission tahmini için tavan olup sağlayıcı faturası veya gerçek harcama garantisi değildir. Tahmin, primary rota ile yalnız read-only görevlerde runtime'ın gerçekten yürüttüğü çözümlenen fallback rotaları için yapılandırılmış bilinmeyen-attempt maliyeti ile retry sınırının çarpımlarını toplar; edit görevleri fallback rotası rezerve etmez. Bu değer sağlayıcının uyguladığı output-token/harcama tavanı değildir. Gerçek provider maliyet üst sınırı isteyen görev, bu sınırı sağlayıcıda uygulayamayan rotada çalıştırılmaz. Batch havuzu global per-execution maliyet muhasebesinden ayrıdır; queued/running tahsisler, unknown denemeler ve kullanılmayan tahsisler ayrı gösterilir.
+
+Kalıcı canlı görünüm için kişisel `parallelBatch.autoOpenTerminalDashboard: true` ayarını kullanın; Windows Terminal kuruluysa batch başlayınca ana ekranın sağ kenarına yakın küçük, bağımsız bir pencere açar. Dağıtım şablonunda bu ayar kapalıdır. OpenCode session penceresini bölmez ve ona sekme eklemez. Otomatik açma kapalıysa/uygun değilse OpenCode yanında ikinci terminal açıp `npm run parallel:watch -- <batchId>` çalıştırın. Watcher yalnız yapılandırılmış bridge state dizinindeki atomik batch manifestini okur; ikinci bridge/runtime veya provider görevi başlatmaz. Task çözülme yüzdesini, durumları ve admission tahminini saniyede bir yeniler; worker aşaması terminal olduğunda durur. `Ctrl+C` yalnız görünümü kapatır, batch'i iptal etmez. Bu ayrı terminal görünümüdür; OpenCode içine gömülü panel değildir.
+
+Güncel route kanıtı (2026-10-08): Codex network-off ve disposable workspace task-ref isolation canary'leri geçti. Disposable local file-remote push canary'si `unproven` kaldı; Codex edit rotasını etkinleştirmez. Daha sonraki DeepSeek Flash/OpenCode probu output-token cap ve `steps=1` değerini gözledi; Bash aracı tamamlanmadı. Bu, yalnız prob yapılan host için gözlemdir ve diğer kurulumlar için garanti değildir. Sürümlenen dağıtım policy'si `opencodeOutputCapability=unavailable` tutar; V2 OpenCode görevleri varsayılan olarak fail-closed kalır. Güncel kişisel yapılandırma bağımsız doğrulanmadı. Araçların yeniden kaydolması için yapılandırma değişikliğinden sonra MCP host'u yeniden başlatın. `npm run canary:parallel` canlı provider kontrollerini tekrar çalıştırır ve provider kullanımı tüketebilir.
+
+OpenCode batch ilerleme eklentisinin kaynak şablonu `templates/opencode/parallel-batch-progress.js` dosyasındadır. Etkinleştirmek için bunu `.opencode/plugins/parallel-batch-progress.js` konumuna kopyalayın. Tamamlanan batch başlatma, polling, iptal ve entegrasyon onay tool event'lerini dinleyip görev ilerlemesi değiştiğinde yinelenen geçici OpenCode TUI bildirimlerini gösterir. Kalıcı panel değildir; orkestratör poll ettiğinde veya batch işlemi döndüğünde güncellenir. Public dışa aktarım şablonu içerir, proje-yerel üretilmiş plugin klasörünü içermez. Plugin değişikliğinden sonra OpenCode'u yeniden başlatın.
 
 ### Kanonik yönlendirme
 
@@ -503,7 +595,7 @@ sol61_implementation    → GPT-6.1 Sol, edit, 4, fallback: GPT-6 Sol → Codex 
 luna6_implementation    → GPT-6 Luna, edit, 11, fallback yok
 ```
 
-Profiller `~/.config/subagent-bridge/config.json` içindeki `orchestration.taskProfiles` alanındadır. Model belirtilmeyen Codex subagent çağrıları araç katmanında `gpt-6.1-sol` ile sabitlenir (`run_codex_subagent` ve global `codex` aracı); açıkça verilen model bu varsayılanı geçersiz kılar. Model erişimi hesap ve rollout durumuna bağlıdır.
+Profiller `~/.config/subagent-bridge/config.json` içindeki `orchestration.taskProfiles` alanındadır. Model belirtilmeyen Codex subagent çağrıları araç katmanında `gpt-6.1-sol` ile sabitlenir (`run_codex_subagent` ve global `codex` aracı); açıkça verilen model bu varsayılanı geçersiz kılar. Global salt-okunur `codexSol61` aracı GPT-6.1 Sol'u açıkça seçer; `codexSol6` GPT-6 Sol olarak kalır. Kanonik global OpenCode araç şablonu `templates/opencode/subagent-bridge.js` içindedir. Mevcut checkout'tan kurmak için `npm run opencode-tools:install`, kurulu kopyayı doğrulamak için `npm run opencode-tools:check` çalıştırılır; ardından OpenCode yeniden başlatılmalıdır. Model erişimi hesap ve rollout durumuna bağlıdır.
 
 ```powershell
 npm run config:apply-routing
@@ -530,7 +622,9 @@ claude_sonnet     → claude-sonnet-4-6
 
 Salt-okunur çağrı `--add-dir`, `deny write_file(*)` ve `no command(*)` politikalarıyla sınırlanır. `agy mcp list` sonucu `No MCP servers configured.` olmalıdır; harici MCP, kalıcı geniş izin, mutasyon ve network probe reddedilir. Ayarlar PID lock ile serileştirilir ve geri yüklenir.
 
-Salt-okunur çağrılar kanıt modunu prompta göre seçer: web niyeti taşıyan promptlar JSON carrier'lı strict modda kalır ve tek carrier onarım denemesi yapılır; yerel analiz promptları URL içermeyen düz metnin web kanıtı olmadan kabul edildiği repair modunda çalışır. URL yalnızca `webEvidence.sourceUrl` içinde bulunabilir; `result` ve `excerpts` URL içermemelidir.
+Salt-okunur çağrılar kanıt modunu prompta göre seçer: web niyeti taşıyan promptlar JSON carrier'lı strict modda kalır ve tek carrier onarım denemesi yapılır; yerel analiz promptları URL içermeyen düz metnin web kanıtı olmadan kabul edildiği repair modunda çalışır. Antigravity'nin kanonik web aracı `read_url_content`, izin eylemi ise `read_url(domain)`'dir. Salt-okunur yürütme sırasında bridge geçici olarak `read_url(*)` izni ekler; command, write, MCP ve etkileşimli browser eylemlerini reddeder ve işlem sonunda ayarları geri yükler. URL yalnızca `webEvidence.sourceUrl` içinde bulunabilir; `result` ve `excerpts` URL içermemelidir.
+
+Web niyetli Antigravity çağrıları kanonik web aracı adımını gözlemek için `stream-json` kullanır. CLI zaman aşımında kısmi stdout/stderr bellekte incelenip yalnız web-okuma durumu korunur; ham sağlayıcı çıktısı metriklere yazılmaz. `used`, araç adımının gözlendiğini belirtir; web araştırma sonucu kabul edilmeden önce kanıt zarfı host tarafından doğrulanıp karantinaya alınır. Onay verilemeyen headless CLI izin istekleri Antigravity tarafından soft-deny edilir. Ayrıntılar: [Permissions](https://antigravity.google/docs/permissions/) ve [Headless mode](https://antigravity.google/docs/cli/headless/).
 
 Kanonik hata sınıfları `rate_limited`, `authentication_failure`, `permission_denied`, `timeout`, `server`, `network`, `process_exit`, `process_error` ve `output_limit`’tir; gerçek `exitCode` ve `signal` korunur. Provider circuit anahtarı Antigravity’de model bazlıdır (`antigravity:<model>`), böylece bir modelin geçici hatası diğer Gemini modellerini kapatmaz.
 
@@ -585,7 +679,7 @@ Codex kapsamı ve mimariyi belirler, kodu ve testleri yürütür, sonuçları do
 
 ## Skill’ler
 
-Kanonik skill’ler `.agents/skills`, Claude uyumlu kopyalar `.claude/skills` altındadır: `commit-at`, `guvenlik-ve-sertlestirme`, `kod-denetleyicisi`, `otomatik-dokumantasyon`, `veri-seti-analizcisi`, `proje-kesif-planlama`, `model-saglayici-ekleme`, `dogrulama-kapisi`, `mcp-sozlesme-denetimi`, `hafiza-vault-bakimi`, `maliyet-ve-butce-denetimi`, `bagimlilik-guvenligi`, `m2-hook-oturum-uygunlugu`, `m2-hook-sonuc-geri-bildirimi`, `m2-hook-proje-kohortu`, `m2-hook-tarihsel-atif`, `m2-hook-metrik-incelemesi`. Beş `m2-hook-*` skill’i M2 session uygunluğu, açık kullanıcı outcome’u, yeni session cohort metadatası, dar kapsamlı tarihsel atıf ve salt-okunur metrik incelemesini ayrı yürütür; Vault notu yazmaz ve YOLO/COCO veri seti sınıflandırması yapmaz. Eşitleme: `npm run skills:sync`. Global kurulum aynı klasörleri `~/.config/opencode/skills`, `~/.codex/skills`, `~/.claude/skills` ve `~/.agents/skills` altına kopyalar; `npm run verify` `.agents` ↔ `.claude` eşlemesini doğrular, global kopyalar elle kurulur ve bu kapının dışındadır. `npm run skills:check-global` dört global kopyayı kanonik `.agents` kaynağıyla karşılaştırır ve eşit, eksik ve farklı kökleri raporlar; `--strict` eksik kopyayı hata sayar.
+Kanonik skill’ler `.agents/skills`, Claude uyumlu kopyalar `.claude/skills` altındadır: `commit-at`, `guvenlik-ve-sertlestirme`, `kod-denetleyicisi`, `otomatik-dokumantasyon`, `veri-seti-analizcisi`, `proje-kesif-planlama`, `subagent-orkestrasyonu`, `model-saglayici-ekleme`, `dogrulama-kapisi`, `mcp-sozlesme-denetimi`, `hafiza-vault-bakimi`, `maliyet-ve-butce-denetimi`, `bagimlilik-guvenligi`, `m2-hook-oturum-uygunlugu`, `m2-hook-sonuc-geri-bildirimi`, `m2-hook-proje-kohortu`, `m2-hook-tarihsel-atif`, `m2-hook-metrik-incelemesi`. `subagent-orkestrasyonu` skill’i görev/sağlayıcı/model yönlendirmesini, gerçek model metadata’sı doğrulamasını, salt-okunur/kontrollü edit ayrımını ve multi-agent batch onayını kapsar. Beş `m2-hook-*` skill’i M2 session uygunluğu, açık kullanıcı outcome’u, yeni session cohort metadatası, dar kapsamlı tarihsel atıf ve salt-okunur metrik incelemesini ayrı yürütür; Vault notu yazmaz ve YOLO/COCO veri seti sınıflandırması yapmaz. Eşitleme: `npm run skills:sync`. Global kurulum aynı klasörleri `~/.config/opencode/skills`, `~/.codex/skills`, `~/.claude/skills` ve `~/.agents/skills` altına kopyalar; `npm run verify` `.agents` ↔ `.claude` eşlemesini doğrular, global kopyalar elle kurulur ve bu kapının dışındadır. `npm run skills:check-global` dört global kopyayı kanonik `.agents` kaynağıyla karşılaştırır ve eşit, eksik ve farklı kökleri raporlar; `--strict` eksik kopyayı hata sayar.
 
 Planlama, web araştırmasını ve delegasyonu yalnız ihtiyaç varsa seçer. Yetkili planı ana orkestratör yazabilir; devredilen edit seçilmiş plan dosyasıyla sınırlıdır. Sağlayıcı sınırları skill'in destek belgelerinden yalnız seçilen rota için yüklenir. GPT-6.1 Sol kendi incelemesi için ikinci Sol çağrısı yapmak zorunda değildir; kendi incelemesi bağımsız denetim sayılmaz. Doğrulama, değişiklik türünün zorunlu kapılarını seçer. Global kurulumda destek belgeleri dahil bütün skill klasörünü kopyalayın.
 

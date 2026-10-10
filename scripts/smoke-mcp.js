@@ -9,6 +9,7 @@ const projectRoot = path.resolve(scriptDirectory, "..");
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [path.join(projectRoot, "subagent-bridge", "src", "server.js")],
+  cwd: projectRoot,
   env: {
     ...process.env,
     SUBAGENT_BRIDGE_TRUSTED_WORKSPACE: projectRoot,

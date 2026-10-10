@@ -50,3 +50,62 @@ test("SPACE-BUNNY-MCP-01: MCP read-only tool publishes its schema and dispatches
     await server.close();
   }
 });
+
+test("MCP-DEEPSEEK-SCHEMA-01: refined public schema is published and dispatched without leaking request context", async () => {
+  const runtimeCalls = [];
+  const runtime = {
+    runDeepSeek: async (input) => {
+      runtimeCalls.push(input);
+      return { ok: true, result: "Pilot route accepted" };
+    }
+  };
+  const server = createSubagentMcpServer({ runtime, configuration: {}, trustedWorkspace: os.tmpdir() });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "deepseek-tool-schema-contract-test", version: "1.0.0" });
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+
+  try {
+    const tools = await client.listTools();
+    const tool = tools.tools.find((entry) => entry.name === "run_deepseek_subagent");
+    assert.ok(tool);
+    assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), [
+      "acceptanceCriteria",
+      "contextFiles",
+      "files",
+      "mode",
+      "model",
+      "objective",
+      "riskSignals",
+      "role",
+      "skills",
+      "taskId",
+      "workspace"
+    ]);
+    assert.deepEqual([...tool.inputSchema.required].sort(), ["acceptanceCriteria", "objective", "role", "taskId", "workspace"]);
+
+    const result = await client.callTool({
+      name: "run_deepseek_subagent",
+      arguments: {
+        taskId: "deepseek-schema-contract",
+        role: "analyst",
+        model: "deepseek_pro",
+        mode: "read_only",
+        objective: "Return a short synthetic MCP contract result.",
+        workspace: os.tmpdir(),
+        files: [],
+        contextFiles: [],
+        skills: [],
+        acceptanceCriteria: ["Return a structured response"]
+      }
+    });
+
+    assert.equal(result.isError, false);
+    assert.equal(runtimeCalls.length, 1);
+    assert.equal(runtimeCalls[0].taskId, "deepseek-schema-contract");
+    assert.equal(Object.hasOwn(runtimeCalls[0], "signal"), false);
+    assert.equal(Object.hasOwn(runtimeCalls[0], "sessionId"), false);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});

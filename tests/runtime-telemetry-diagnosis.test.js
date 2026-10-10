@@ -170,7 +170,7 @@ test("RTD-03: maksimum denemede retry durur ve stop nedeni kaydedilir", async (t
   assert.equal(metric.failureClass, "rate_limited");
 });
 
-test("RTD-04: tanısız adaptör sonucu attempt alanlarını null bırakır", async (t) => {
+test("RTD-04: tanısız adapter failure receives a fallback stage and provider classification", async (t) => {
   const root = fixtureDirectory(t, "no-diagnostics");
   const configuration = createConfiguration(root, root);
   configuration.antigravity.maxRetries = 0;
@@ -179,8 +179,8 @@ test("RTD-04: tanısız adaptör sonucu attempt alanlarını null bırakır", as
   const result = await runRuntime(runtime, root);
   const record = result.metrics.attempts.at(-1);
   assert.equal(record.failureClass, "network");
-  assert.equal(record.failureStage, null);
-  assert.equal(record.providerCode, null);
+  assert.equal(record.failureStage, "provider_execution");
+  assert.equal(record.providerCode, "network_error");
   assert.equal(record.signal, null);
   assert.equal(record.settingsLockWaitMs, null);
   assert.equal(record.providerExecutionMs, null);
@@ -221,7 +221,8 @@ test("RTD-06: adaptör istisnası process_error olarak kaydedilir", async (t) =>
   assert.equal(result.reason, "process_error");
   const record = result.metrics.attempts.at(-1);
   assert.equal(record.failureClass, "process_error");
-  assert.equal(record.failureStage, null);
+  assert.equal(record.failureStage, "provider_execution");
+  assert.equal(record.providerCode, "process_error");
   assert.equal(record.retryDecision, "stop");
   assert.equal(record.retryStopReason, "non_retryable_failure_class");
 });

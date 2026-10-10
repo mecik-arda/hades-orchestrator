@@ -6,11 +6,13 @@ import {
   capabilityFailureClassValues,
   capabilityStatusValues,
   failureStageValues,
+  operatingSystemErrorCodeValues,
   outputSizeBucketValues,
   processSignalValues,
   providerCodeValues,
   retryDecisionValues,
-  retryStopReasonValues
+  retryStopReasonValues,
+  webEvidenceFailureCodeValues
 } from "./schemas/core-schemas.js";
 import { normalizeMemoryHookSessionId } from "./services/memory-hook-identity.js";
 import { memoryHookNamedCohorts, memoryHookProjectCohorts, memoryHookReportCohorts } from "./services/memory-hook-cohort.js";
@@ -36,6 +38,9 @@ const modelTokenPattern = /^[a-z][a-z0-9._/-]{0,119}$/;
 const modelFitFixtureVersionPattern = /^[a-z0-9][a-z0-9-]{2,63}$/;
 const hashPattern = /^[a-f0-9]{64}$/;
 const modelFitTaskClassValues = ["candidate_generation", "sourced_analysis", "strict_schema", "controlled_edit_readiness", "critical_review"];
+const reviewScopeStatuses = ["not_requested", "complete", "blocked"];
+const reviewDeliveryStatuses = ["not_attempted", "complete_to_cli", "failed"];
+const reviewEligibilityStatuses = ["eligible_for_orchestrator_evaluation", "unverified", "unavailable"];
 
 function sanitizeDurationMs(value) {
   return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
@@ -48,6 +53,14 @@ export function normalizeFailureStage(value) {
 export function normalizeProviderCode(value) {
   if (value === null || value === undefined) return null;
   return providerCodeValues.includes(value) ? value : "unclassified";
+}
+
+export function normalizeOperatingSystemErrorCode(value) {
+  return operatingSystemErrorCodeValues.includes(value) ? value : null;
+}
+
+export function normalizeWebEvidenceFailureCode(value) {
+  return webEvidenceFailureCodeValues.includes(value) ? value : null;
 }
 
 export function normalizeProcessSignal(value) {
@@ -199,6 +212,31 @@ function sanitizeTimestamp(value) {
   return typeof value === "string" && isoPattern.test(value) && Number.isFinite(Date.parse(value)) ? value : null;
 }
 
+function sanitizeReviewContract(value) {
+  if (!value || typeof value !== "object" || value.version !== 1) return null;
+  if (!reviewScopeStatuses.includes(value.sourceScopeStatus)
+    || !reviewDeliveryStatuses.includes(value.sourceDeliveryStatus)
+    || !reviewEligibilityStatuses.includes(value.reviewEligibility)) return null;
+  const sourceManifestSha256 = typeof value.sourceManifestSha256 === "string" && hashPattern.test(value.sourceManifestSha256)
+    ? value.sourceManifestSha256
+    : null;
+  const sourceFileCount = Number.isInteger(value.sourceFileCount) && value.sourceFileCount >= 0 && value.sourceFileCount <= 50
+    ? value.sourceFileCount
+    : null;
+  const sourceBytes = Number.isInteger(value.sourceBytes) && value.sourceBytes >= 0 && value.sourceBytes <= 256 * 1024
+    ? value.sourceBytes
+    : null;
+  return {
+    version: 1,
+    sourceScopeStatus: value.sourceScopeStatus,
+    sourceDeliveryStatus: value.sourceDeliveryStatus,
+    sourceManifestSha256,
+    sourceFileCount,
+    sourceBytes,
+    reviewEligibility: value.reviewEligibility
+  };
+}
+
 function sanitizeRecordedAt(value) {
   return sanitizeTimestamp(value) ?? new Date().toISOString();
 }
@@ -233,6 +271,8 @@ function sanitizeAttemptV2(attempt) {
   sanitized.failureClass = source.failureClass === null || source.failureClass === undefined ? null : sanitizeFailureClass(source.failureClass);
   sanitized.failureStage = normalizeFailureStage(source.failureStage);
   sanitized.providerCode = normalizeProviderCode(source.providerCode);
+  sanitized.osErrorCode = normalizeOperatingSystemErrorCode(source.osErrorCode);
+  sanitized.webEvidenceFailureCode = normalizeWebEvidenceFailureCode(source.webEvidenceFailureCode);
   sanitized.exitCode = Number.isInteger(source.exitCode) ? source.exitCode : null;
   sanitized.signal = normalizeProcessSignal(source.signal);
   sanitized.retryDecision = normalizeRetryDecision(source.retryDecision);
@@ -269,6 +309,7 @@ function sanitizeArtifactHashes(value) {
 export function createRedactedExecutionMetric({ executionId, workspace, mode, profile, metricBackend, result }) {
   const attempts = (Array.isArray(result.metrics?.attempts) ? result.metrics.attempts : []).map(sanitizeAttemptV2);
   const lastAttempt = attempts.at(-1) || null;
+  const reviewContract = sanitizeReviewContract(result.reviewContract);
   return {
     schemaVersion: 2,
     manifestVersion: 2,
@@ -296,7 +337,8 @@ export function createRedactedExecutionMetric({ executionId, workspace, mode, pr
     cacheHit: result.metrics?.cacheHit === true,
     capability: sanitizeCapability(result.metrics?.capability),
     artifactHashes: sanitizeArtifactHashes(result.artifacts?.filesChanged || result.filesChanged),
-    webEvidenceRepair: result.metrics?.webEvidenceRepair === true
+    webEvidenceRepair: result.metrics?.webEvidenceRepair === true,
+    ...(reviewContract ? { reviewContract } : {})
   };
 }
 
@@ -341,6 +383,7 @@ function sanitizeExecutionMetricV2(metric) {
   const lastAttempt = attempts.at(-1) || null;
   const failed = metric.outcomeStatus === "failed";
   const artifactHashes = Array.isArray(metric.artifactHashes) ? metric.artifactHashes.map((entry) => sanitizeHash(entry)).filter(Boolean).slice(0, 100) : [];
+  const reviewContract = sanitizeReviewContract(metric.reviewContract);
   return {
     schemaVersion: 2,
     manifestVersion: 2,
@@ -368,7 +411,8 @@ function sanitizeExecutionMetricV2(metric) {
     cacheHit: metric.cacheHit === true,
     capability: sanitizeCapability(metric.capability),
     artifactHashes: artifactHashes.length > 0 ? artifactHashes : null,
-    webEvidenceRepair: metric.webEvidenceRepair === true
+    webEvidenceRepair: metric.webEvidenceRepair === true,
+    ...(reviewContract ? { reviewContract } : {})
   };
 }
 
@@ -382,7 +426,7 @@ function sanitizeProbeStatusMap(probes) {
   const source = probes && typeof probes === "object" ? probes : {};
   const sanitized = {};
   if (["available", "unavailable"].includes(source.cli)) sanitized.cli = source.cli;
-  for (const key of ["modelAccess", "toolFreeResponse", "workspaceRead", "webRead"]) {
+  for (const key of ["modelAccess", "toolFreeResponse", "workspaceRead", "sandboxStartup", "webRead"]) {
     if (capabilityStatusValues.includes(source[key])) sanitized[key] = source[key];
   }
   return Object.keys(sanitized).length > 0 ? sanitized : null;
@@ -397,6 +441,8 @@ function sanitizeCapabilityProbes(capabilityProbes) {
       modelAccess: capabilityStatusValues.includes(probe.modelAccess) ? probe.modelAccess : "not_probed",
       toolFreeResponse: capabilityStatusValues.includes(probe.toolFreeResponse) ? probe.toolFreeResponse : "not_probed",
       workspaceRead: capabilityStatusValues.includes(probe.workspaceRead) ? probe.workspaceRead : "not_probed",
+      sandboxStartup: capabilityStatusValues.includes(probe.sandboxStartup) ? probe.sandboxStartup : "not_probed",
+      workspaceReadTarget: ["not_probed", "temp_workspace", "trusted_workspace"].includes(probe.workspaceReadTarget) ? probe.workspaceReadTarget : null,
       webRead: capabilityStatusValues.includes(probe.webRead) ? probe.webRead : "not_probed",
       failureClass: probe.failureClass === null || probe.failureClass === undefined
         ? null
@@ -418,6 +464,8 @@ function sanitizeLiveObservationMetric(metric) {
       modelAccess: capabilityStatusValues.includes(capabilities.modelAccess) ? capabilities.modelAccess : "not_probed",
       toolFreeResponse: capabilityStatusValues.includes(capabilities.toolFreeResponse) ? capabilities.toolFreeResponse : "not_probed",
       workspaceRead: capabilityStatusValues.includes(capabilities.workspaceRead) ? capabilities.workspaceRead : "not_probed",
+      sandboxStartup: capabilityStatusValues.includes(capabilities.sandboxStartup) ? capabilities.sandboxStartup : "not_probed",
+      workspaceReadTarget: ["not_probed", "temp_workspace", "trusted_workspace"].includes(capabilities.workspaceReadTarget) ? capabilities.workspaceReadTarget : null,
       webRead: capabilityStatusValues.includes(capabilities.webRead) ? capabilities.webRead : "not_probed"
     },
     failureClass: metric.failureClass === null || metric.failureClass === undefined
@@ -1550,4 +1598,71 @@ export async function appendRedactedRunMetric(configuration, metric, options = {
     ? await appendProjectMirrorMetric(configuration, options.workspace, redactedMetric)
     : { written: false, reason: "not_requested" };
   return { written: true, path: metricsPath, mirror };
+}
+
+const parallelBatchRecordTypes = ["parallel_batch_plan", "parallel_batch_start", "parallel_batch_task", "parallel_batch_finish", "parallel_batch_budget", "parallel_batch_cancel", "parallel_batch_recovery", "parallel_route_canary"];
+const parallelCanaryStatusValues = ["accepted", "rejected", "skipped"];
+const parallelBatchStatusSet = new Set(["planned", "claimed", "expired", "created", "queued", "running", "cancel_requested", "cancelling", "result_ready", "blocked", "integrating", "ready_for_approval", "integrated", "failed", "cancelled", "unknown", "completed"]);
+const parallelSummaryStatusSet = new Set(["full", "summary_truncated", "schema_invalid", "output_limit", "not_available"]);
+const parallelCancellationReasonSet = new Set(["client_request", "provider_limit", "host_shutdown", "timeout", "policy"]);
+
+function sanitizeParallelBatchRecord(metric) {
+  const record = {
+    recordType: parallelBatchRecordTypes.includes(metric?.recordType) ? metric.recordType : "parallel_batch_task",
+    recordedAt: sanitizeRecordedAt(metric?.recordedAt)
+  };
+  for (const key of ["batchIdHash", "planIdHash", "taskIdHash", "executionIdHash"]) {
+    const value = sanitizeHash(metric?.[key]);
+    if (value) record[key] = value;
+  }
+  if (sanitizeBackend(metric?.backend)) record.backend = sanitizeBackend(metric.backend);
+  if (typeof metric?.modelClass === "string" && modelTokenPattern.test(metric.modelClass)) record.modelClass = metric.modelClass;
+  if (parallelBatchStatusSet.has(metric?.batchStatus)) record.batchStatus = metric.batchStatus;
+  if (parallelBatchStatusSet.has(metric?.taskStatus)) record.taskStatus = metric.taskStatus;
+  if (parallelSummaryStatusSet.has(metric?.summaryStatus)) record.summaryStatus = metric.summaryStatus;
+  if (Array.isArray(metric?.taskStatusCounts)) {
+    record.taskStatusCounts = metric.taskStatusCounts
+      .filter((entry) => parallelBatchStatusSet.has(entry?.status) && Number.isInteger(entry?.count) && entry.count >= 0)
+      .map((entry) => ({ status: entry.status, count: entry.count }))
+      .slice(0, 16);
+  }
+  const durationMs = sanitizeDurationMs(metric?.durationMs);
+  if (durationMs !== null) record.durationMs = durationMs;
+  const queueWaitMs = sanitizeDurationMs(metric?.queueWaitMs);
+  if (queueWaitMs !== null) record.queueWaitMs = queueWaitMs;
+  if (Number.isInteger(metric?.retries) && metric.retries >= 0) record.retries = metric.retries;
+  if (Number.isFinite(metric?.costMeasuredUsd)) record.costMeasuredUsd = normalizeCost(Math.max(0, metric.costMeasuredUsd));
+  if (Number.isFinite(metric?.costEstimatedUsd)) record.costEstimatedUsd = normalizeCost(Math.max(0, metric.costEstimatedUsd));
+  if (typeof metric?.costUnknown === "boolean") record.costUnknown = metric.costUnknown;
+  if (Number.isInteger(metric?.snapshotBytes) && metric.snapshotBytes >= 0) record.snapshotBytes = metric.snapshotBytes;
+  if (Number.isInteger(metric?.summaryBytes) && metric.summaryBytes >= 0) record.summaryBytes = metric.summaryBytes;
+  if (Number.isInteger(metric?.artifactBytes) && metric.artifactBytes >= 0) record.artifactBytes = metric.artifactBytes;
+  const failureClass = sanitizeFailureClass(metric?.failureClass);
+  if (failureClass) record.failureClass = failureClass;
+  if (parallelCancellationReasonSet.has(metric?.cancellationReason)) record.cancellationReason = metric.cancellationReason;
+  if (tokenPattern.test(metric?.verificationClass)) record.verificationClass = metric.verificationClass;
+  if (parallelCanaryStatusValues.includes(metric?.canaryStatus)) record.canaryStatus = metric.canaryStatus;
+  if (typeof metric?.canaryName === "string" && modelTokenPattern.test(metric.canaryName)) record.canaryName = metric.canaryName;
+  if (Number.isInteger(metric?.roundTripCount) && metric.roundTripCount >= 0) record.roundTripCount = metric.roundTripCount;
+  if (Number.isFinite(metric?.maxObservedTokens) && metric.maxObservedTokens >= 0) record.maxObservedTokens = Math.floor(metric.maxObservedTokens);
+  if (Number.isInteger(metric?.workerCount) && metric.workerCount >= 0 && metric.workerCount <= 5) record.workerCount = metric.workerCount;
+  if (metric?.isProviderInvoice === false) record.isProviderInvoice = false;
+  return record;
+}
+
+export async function appendParallelBatchMetric(configuration, metric) {
+  const metricsDirectory = path.join(configuration.statePaths.logs, "metrics");
+  fs.mkdirSync(metricsDirectory, { recursive: true });
+  const redactedMetric = sanitizeParallelBatchRecord(metric);
+  const metricsPath = path.join(metricsDirectory, "parallel-batch-runs.jsonl");
+  const serialized = `${JSON.stringify(redactedMetric)}\n`;
+  await withMetricLock(`${metricsPath}.lock`, async () => {
+    const existingBytes = fs.existsSync(metricsPath) ? fs.statSync(metricsPath).size : 0;
+    if (existingBytes > 0 && existingBytes + Buffer.byteLength(serialized, "utf8") > configuration.observability.maxMetricFileBytes) {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      fs.renameSync(metricsPath, path.join(metricsDirectory, `parallel-batch-runs-${timestamp}-${crypto.randomUUID()}.jsonl`));
+    }
+    fs.appendFileSync(metricsPath, serialized, "utf8");
+  });
+  return { written: true, path: metricsPath };
 }

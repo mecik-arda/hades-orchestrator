@@ -18,13 +18,30 @@ function stale(filePath, staleLockMs) {
   }
 }
 
+function staleWorkspaceLease(filePath, staleLockMs) {
+  if (!stale(filePath, staleLockMs)) return false;
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (Number.isInteger(value.pid)) {
+      try {
+        process.kill(value.pid, 0);
+        return false;
+      } catch (error) {
+        if (error.code === "EPERM") return false;
+      }
+    }
+  } catch {
+  }
+  return true;
+}
+
 function cleanStaleLocks(directory, staleLockMs) {
   try {
     const entries = fs.readdirSync(directory);
     const remainingEntries = [];
     for (const entry of entries) {
       const filePath = path.join(directory, entry);
-      if (stale(filePath, staleLockMs)) {
+      if (staleWorkspaceLease(filePath, staleLockMs)) {
         fs.rmSync(filePath, { force: true });
       } else {
         remainingEntries.push(entry);
@@ -38,7 +55,7 @@ function cleanStaleLocks(directory, staleLockMs) {
 
 function createLease(lockPath, ownerId, leaseHeartbeatMs) {
   const descriptor = fs.openSync(lockPath, "wx");
-  fs.writeFileSync(descriptor, ownerId, "utf8");
+  fs.writeFileSync(descriptor, JSON.stringify({ ownerId, pid: process.pid, createdAt: new Date().toISOString() }), "utf8");
   const heartbeat = setInterval(() => {
     try {
       fs.futimesSync(descriptor, new Date(), new Date());
@@ -47,17 +64,27 @@ function createLease(lockPath, ownerId, leaseHeartbeatMs) {
     }
   }, leaseHeartbeatMs);
   heartbeat.unref?.();
-  return () => {
+  const release = () => {
     clearInterval(heartbeat);
     try {
       fs.closeSync(descriptor);
     } catch {
     }
     try {
-      if (fs.readFileSync(lockPath, "utf8") === ownerId) fs.rmSync(lockPath, { force: true });
+      const current = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+      if (current.ownerId === ownerId && current.pid === process.pid) fs.rmSync(lockPath, { force: true });
     } catch {
     }
   };
+  release.isOwner = () => {
+    try {
+      const current = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+      return current.ownerId === ownerId && current.pid === process.pid;
+    } catch {
+      return false;
+    }
+  };
+  return release;
 }
 
 export function withGuard(directory, staleLockMs, callback) {
@@ -213,7 +240,7 @@ export function createWorkspaceCoordinator({ lockDirectory, staleLockMs = 150000
       }
       queue.splice(queue.indexOf(next), 1);
       if (next.mode === "edit") clearWriterIntent(workspace, next.executionId);
-      active.set(next.executionId, { workspace, release });
+      active.set(next.executionId, { workspace, release, isOwner: release.isOwner });
       next.resolve({ queueWaitMs: Date.now() - next.enqueuedAt });
     }
     if (queue.length === 0) {
@@ -260,6 +287,11 @@ export function createWorkspaceCoordinator({ lockDirectory, staleLockMs = 150000
     active.delete(executionId);
     entry.release();
     drain(entry.workspace);
+  }
+
+  function assertOwner(workspace, executionId) {
+    const entry = active.get(executionId);
+    return Boolean(entry && entry.workspace === workspace && entry.isOwner());
   }
 
   function cancel(executionId) {
@@ -310,5 +342,5 @@ export function createWorkspaceCoordinator({ lockDirectory, staleLockMs = 150000
     };
   }
 
-  return { acquire, release, cancel, snapshot };
+  return { acquire, release, cancel, assertOwner, snapshot };
 }

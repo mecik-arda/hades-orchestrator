@@ -19,7 +19,7 @@ import {
   subagentExecutionRequestSchema, subagentResultSchema,
   createFailureSubagentResult, createSuccessSubagentResult
 } from "../subagent-bridge/src/schemas/core-schemas.js";
-import { ANTIGRAVITY_MODEL_MAP, READ_ONLY_INSTRUCTION, READ_ONLY_PROBE_HINT, WEB_EVIDENCE_OUTPUT_INSTRUCTION, READ_ONLY_PERMISSION_RULES, CARRIER_OUTPUT_SCHEMA, hasSafeReadOnlyPermissionBaseline, hasNoConfiguredMcpServers, resolveModel, resolveAntigravityCommand, buildAntigravityArgs, classifyAntigravityError, extractAntigravityResult, normalizeCarrierStructuredOutput, writeCarrierSchemaFile, createAntigravityAdapter, createSettingsLock } from "../subagent-bridge/src/adapters/antigravity-adapter.js";
+import { ANTIGRAVITY_MODEL_MAP, READ_ONLY_INSTRUCTION, READ_ONLY_PROBE_HINT, WEB_EVIDENCE_OUTPUT_INSTRUCTION, READ_ONLY_PERMISSION_RULES, CARRIER_OUTPUT_SCHEMA, hasSafeReadOnlyPermissionBaseline, hasNoConfiguredMcpServers, resolveModel, resolveAntigravityCommand, buildAntigravityArgs, classifyAntigravityError, extractAntigravityResult, extractAntigravityStreamTrace, normalizeCarrierStructuredOutput, writeCarrierSchemaFile, createAntigravityAdapter, createSettingsLock } from "../subagent-bridge/src/adapters/antigravity-adapter.js";
 import { acquireReadLock, releaseReadLock, acquireWriteLock, releaseWriteLock, releaseAllLocks } from "./support/workspace-lock.js";
 
 test("AG-AC-01: AntigravityAdapter AgentAdapter kontratını uygular", () => {
@@ -296,12 +296,81 @@ test("AG-AC-16a: structured_output carrier tercih edilir ve boş kanıt null olu
   );
 });
 
+test("AG-AC-16e: stream-json read_url eventinden yalnız izin durumunu çıkarır", () => {
+  const deniedStream = [
+    JSON.stringify({
+      event: "step_update",
+      step_update: {
+        state: "DONE",
+        step_type: "tool",
+        tool_name: "read_url_content",
+        tool_info: { name: "read_url_content", error: { type: "permission_denied", message: "read_url was auto-denied SECRET_SENTINEL" } }
+      }
+    }),
+    JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "blocked", structured_output: { result: "blocked", webEvidence: null } } })
+  ].join("\n");
+  const denied = extractAntigravityStreamTrace(deniedStream);
+  assert.equal(denied.webReadStatus, "permission_denied");
+  assert.equal(JSON.stringify(denied).includes("SECRET_SENTINEL"), false);
+
+  const headlessSoftDenied = extractAntigravityStreamTrace(
+    [
+      JSON.stringify({ event: "init", init: { tools: ["read_url_content"] } }),
+      JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "plain" } })
+    ].join("\n"),
+    "Tool read_url_content was soft-denied because read_url permission requires approval SECRET_SENTINEL"
+  );
+  assert.equal(headlessSoftDenied.webReadStatus, "permission_denied");
+  assert.equal(JSON.stringify(headlessSoftDenied).includes("SECRET_SENTINEL"), false);
+
+  const usedStream = [
+    JSON.stringify({
+      event: "step_update",
+      step_update: {
+        state: "DONE",
+        step_type: "tool",
+        tool_name: "read_url_content",
+        tool_info: { name: "read_url_content", output: "RAW_PAGE_SENTINEL" }
+      }
+    }),
+    JSON.stringify({ event: "result", result: { status: "SUCCESS", structured_output: { result: "report", webEvidence: null } } })
+  ].join("\n");
+  const used = extractAntigravityStreamTrace(usedStream);
+  assert.equal(used.webReadStatus, "used");
+  assert.equal(JSON.stringify(used).includes("RAW_PAGE_SENTINEL"), false);
+
+  const internalToolNotInvoked = [
+    JSON.stringify({ event: "init", init: { tools: ["read_url_content", "read_file"] } }),
+    JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "plain" } })
+  ].join("\n");
+  assert.equal(extractAntigravityStreamTrace(internalToolNotInvoked).webReadStatus, "not_invoked");
+
+  const notObserved = extractAntigravityStreamTrace(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "plain" } }));
+  assert.equal(notObserved.webReadStatus, "not_observed");
+
+  const notInvokedStream = [
+    JSON.stringify({ event: "init", init: { tools: ["read_url", "read_file"] } }),
+    JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "plain" } })
+  ].join("\n");
+  assert.equal(extractAntigravityStreamTrace(notInvokedStream).webReadStatus, "not_invoked");
+
+  const unavailableStream = [
+    JSON.stringify({ event: "init", init: { tools: ["read_file", "run_command"] } }),
+    JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "plain" } })
+  ].join("\n");
+  assert.equal(extractAntigravityStreamTrace(unavailableStream).webReadStatus, "unavailable");
+});
+
 test("AG-AC-16b: carrier şeması zorunlu alanları ve serbest kanıt alanını tanımlar", () => {
   const schema = JSON.parse(CARRIER_OUTPUT_SCHEMA);
   assert.equal(schema.type, "object");
   assert.deepEqual(schema.required, ["result"]);
-  assert.deepEqual(schema.properties.webEvidence, {});
-  assert.equal(schema.additionalProperties, undefined);
+  assert.deepEqual(schema.properties.webEvidence.anyOf.map((entry) => entry.type), ["null", "object"]);
+  assert.deepEqual(schema.properties.webEvidence.anyOf[1].required, ["sourceUrl", "excerpts"]);
+  assert.deepEqual(schema.properties.webEvidence.anyOf[1].properties.confidence.enum, ["low"]);
+  assert.deepEqual(schema.properties.webEvidence.anyOf[1].properties.verificationStatus.enum, ["unverified"]);
+  assert.equal(schema.properties.webEvidence.anyOf[1].additionalProperties, false);
+  assert.equal(schema.additionalProperties, false);
   assert.equal(normalizeCarrierStructuredOutput({ result: "x", webEvidence: {} }), JSON.stringify({ result: "x", webEvidence: null }));
   assert.equal(normalizeCarrierStructuredOutput({ webEvidence: null }), null);
 });
@@ -351,7 +420,7 @@ test("AG-AC-15c: read-only permission policy yalnız inceleme komutlarını allo
   assert.deepEqual(READ_ONLY_PERMISSION_RULES.deny, ["command(*)", "unsandboxed(*)", "write_file(*)", "mcp(*)", "execute_url(*)"]);
   assert.match(READ_ONLY_INSTRUCTION, /built-in workspace read tools/i);
   assert.match(READ_ONLY_INSTRUCTION, /Do not call MCP, terminal commands, or built-in write tools/i);
-  assert.match(WEB_EVIDENCE_OUTPUT_INSTRUCTION, /Never place URLs or citation links inside result or excerpts/i);
+  assert.match(WEB_EVIDENCE_OUTPUT_INSTRUCTION, /Never put URLs or citation links inside result or excerpts/i);
   assert.match(WEB_EVIDENCE_OUTPUT_INSTRUCTION, /sourceUrl/);
   assert.match(READ_ONLY_PROBE_HINT, /check_antigravity_subagent/);
   assert.match(READ_ONLY_PROBE_HINT, /probeCapabilities/);
@@ -561,6 +630,24 @@ test("AG-AC-15g: gemini_flash_3_8 argümanlarına gemini-3.8-flash-high modeli g
   assert.equal(command.args[command.args.indexOf("--model") + 1], "gemini-3.8-flash-high");
 });
 
+test("AG-AC-15h: stream-json yalnız read-only web-read trace için seçilir", () => {
+  const webRead = buildAntigravityArgs(
+    { prompt: "inspect", model: "gemini_pro", mode: "read_only", webReadTrace: true, workspace: "C:\\workspace" },
+    { antigravity: { executable: "agy" } }
+  );
+  const ordinaryRead = buildAntigravityArgs(
+    { prompt: "inspect", model: "gemini_pro", mode: "read_only", workspace: "C:\\workspace" },
+    { antigravity: { executable: "agy" } }
+  );
+  const edit = buildAntigravityArgs(
+    { prompt: "change", model: "gemini_pro", mode: "edit", webReadTrace: true, workspace: "C:\\workspace" },
+    { antigravity: { executable: "agy" } }
+  );
+  assert.equal(webRead.args[webRead.args.indexOf("--output-format") + 1], "stream-json");
+  assert.equal(ordinaryRead.args[ordinaryRead.args.indexOf("--output-format") + 1], "json");
+  assert.equal(edit.args[edit.args.indexOf("--output-format") + 1], "json");
+});
+
 test("AG-AC-16: Faz 0'daki 38 testin tamamı regress olmadan geçer", () => {
   assert.ok(true);
 });
@@ -660,6 +747,7 @@ test("AGY-EXEC-03: absolute executable PATH resolution gerektirmez", async () =>
       modelAccess: "not_probed",
       toolFreeResponse: "not_probed",
       workspaceRead: "not_probed",
+      sandboxStartup: "not_probed",
       webRead: "not_probed"
     });
     assert.equal(health.executable, process.execPath);
@@ -673,4 +761,11 @@ test("AGY-EXEC-04: nested provider ENOENT çıktısı AGY executable missing say
 
   assert.equal(classification.valid, false);
   assert.equal(classification.errorClass, "process_exit");
+});
+
+test("AGY-READINESS-01: sandbox startup and workspace read errors remain distinct", () => {
+  const sandbox = classifyAntigravityError(null, 1, "", "Windows sandbox helper failed to initialize");
+  const workspace = classifyAntigravityError(null, 1, "", "workspace read denied by policy");
+  assert.equal(sandbox.errorClass, "sandbox_setup");
+  assert.equal(workspace.errorClass, "workspace_read");
 });

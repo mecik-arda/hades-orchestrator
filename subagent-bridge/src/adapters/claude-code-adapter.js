@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadSkills, loadTextFile } from "../config.js";
-import { createProviderEnvironment, runProcess, createExecutionHandle } from "../services/execution-service.js";
+import { createProviderEnvironment, createProcessFailureDiagnostics, runProcess, createExecutionHandle } from "../services/execution-service.js";
 import { createAdapter } from "./agent-adapter-base.js";
 import {
   createSuccessSubagentResult,
@@ -105,6 +105,12 @@ function resolveClaudeResultModel(jsonOutput) {
 
 function classifyClaudeError(error, exitCode, stdout, stderr, jsonOutput, signal = null) {
   if (error) {
+    if (error.failureClass === "prompt_transport_limit" || ["E2BIG", "ENAMETOOLONG"].includes(error.code)) {
+      return { valid: false, errorClass: "prompt_transport_limit", reason: "prompt transport limit exceeded" };
+    }
+    if (["EACCES", "EPERM"].includes(error.code)) return { valid: false, errorClass: "permission_denied", reason: "process spawn permission denied" };
+    if (["ECONNRESET", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND", "EAI_AGAIN"].includes(error.code)) return { valid: false, errorClass: "network", reason: "process network failure" };
+    if (error.code === "ETIMEDOUT") return { valid: false, errorClass: "timeout", reason: "execution timed out" };
     const message = String(error.message || error).toLocaleLowerCase("en-US");
 
     if (/timed out|timeout|zaman aşımı/i.test(message)) {
@@ -115,7 +121,7 @@ function classifyClaudeError(error, exitCode, stdout, stderr, jsonOutput, signal
       return { valid: false, errorClass: "executable_missing", reason: "claude executable not found" };
     }
 
-    return { valid: false, errorClass: "process_error", reason: message || "process error" };
+    return { valid: false, errorClass: "process_error", reason: "claude code process failed" };
   }
 
   if (signal || exitCode === null) {
@@ -327,9 +333,10 @@ export function createClaudeCodeAdapter(configuration) {
           {
             cwd: request.workspace,
             env: environment,
-            stdin: prompt,
+            stdin: request.reviewSourcePayload ? `${prompt}\n\n${request.reviewSourcePayload}` : prompt,
+            ...(request.reviewSourcePayload ? { requireStdinDelivery: true } : {}),
             timeoutMs,
-            maxOutputBytes: configuration?.claude_code?.maxOutputBytes || 8388608,
+            maxOutputBytes: request.maxOutputBytes || configuration?.claude_code?.maxOutputBytes || 8388608,
             abortController: handle.abortController,
             onSpawn: (child) => handle.attachChild(child)
           }
@@ -374,7 +381,8 @@ export function createClaudeCodeAdapter(configuration) {
           durationMs: Date.now() - startedAt,
           resolvedModel: resolveClaudeResultModel(parsed.json),
           metrics: {
-            totalCostUsd: Number.isFinite(parsed.json?.total_cost_usd) ? parsed.json.total_cost_usd : null
+            totalCostUsd: Number.isFinite(parsed.json?.total_cost_usd) ? parsed.json.total_cost_usd : null,
+            ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {})
           }
         });
       } catch (error) {
@@ -388,7 +396,8 @@ export function createClaudeCodeAdapter(configuration) {
             timedOut: false,
             exitCode: null,
             durationMs: Date.now() - startedAt,
-            reason: "cancelled"
+            reason: "cancelled",
+            metrics: { diagnostics: createProcessFailureDiagnostics(error, { failureStage: "cancelled" }) }
           });
         }
 
@@ -400,7 +409,8 @@ export function createClaudeCodeAdapter(configuration) {
             timedOut: true,
             exitCode: null,
             durationMs: Date.now() - startedAt,
-            reason: "timeout"
+            reason: "timeout",
+            metrics: { diagnostics: createProcessFailureDiagnostics(error, { failureStage: "provider_execution", providerCode: "timeout" }) }
           });
         }
 
@@ -408,7 +418,8 @@ export function createClaudeCodeAdapter(configuration) {
         return mapClaudeErrorToResult(
           classification.errorClass, classification.reason || error.message,
           "claude_code", model.model,
-          Date.now() - startedAt, 0
+          Date.now() - startedAt, 0,
+          { diagnostics: createProcessFailureDiagnostics(error, { providerCode: classification.errorClass === "executable_missing" ? "executable_missing" : null }) }
         );
       }
     },

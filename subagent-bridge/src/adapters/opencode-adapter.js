@@ -1,4 +1,8 @@
-import { createProviderEnvironment, runProcess, createExecutionHandle } from "../services/execution-service.js";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createProviderEnvironment, createProcessFailureDiagnostics, runProcess, createExecutionHandle } from "../services/execution-service.js";
 import { createAdapter } from "./agent-adapter-base.js";
 import { createSuccessSubagentResult, createFailureSubagentResult } from "../schemas/core-schemas.js";
 import { prependExecutionMetadata } from "../services/execution-metadata.js";
@@ -68,15 +72,24 @@ function parseOpenCodeOutput(stdout) {
 
 function classifyOpenCodeError(error, exitCode, stdout, stderr, signal = null) {
   if (error) {
+    if (error.failureClass === "prompt_transport_limit" || ["E2BIG", "ENAMETOOLONG"].includes(error.code)) {
+      return { valid: false, errorClass: "prompt_transport_limit", reason: "prompt transport limit exceeded" };
+    }
+    if (["EACCES", "EPERM"].includes(error.code)) return { valid: false, errorClass: "permission_denied", reason: "process spawn permission denied" };
+    if (["ECONNRESET", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND", "EAI_AGAIN"].includes(error.code)) return { valid: false, errorClass: "network", reason: "process network failure" };
+    if (error.code === "ETIMEDOUT") return { valid: false, errorClass: "timeout", reason: "execution timed out" };
     const message = String(error.message || error).toLocaleLowerCase("en-US");
 
     if (/timed out|timeout|zaman aşımı/i.test(message)) {
       return { valid: false, errorClass: "timeout", reason: "execution timed out" };
     }
+    if (/output limit|bytes/i.test(message)) {
+      return { valid: false, errorClass: "output_limit", reason: "output exceeded limit" };
+    }
     if (/enoent|not found|does not exist|command not found/i.test(message)) {
       return { valid: false, errorClass: "executable_missing", reason: "opencode executable not found" };
     }
-    return { valid: false, errorClass: "process_error", reason: message || "process error" };
+    return { valid: false, errorClass: "process_error", reason: "opencode process failed" };
   }
 
   if (signal || exitCode === null) {
@@ -90,6 +103,12 @@ function classifyOpenCodeError(error, exitCode, stdout, stderr, signal = null) {
     }
     if (/rate.limit|429|quota/i.test(output)) {
       return { valid: false, errorClass: "rate_limited", reason: "provider rate limited" };
+    }
+    if (/\b5\d\d\b|internal server error|service unavailable|bad gateway|gateway timeout/i.test(output)) {
+      return { valid: false, errorClass: "server", reason: "provider service unavailable" };
+    }
+    if (/econn|enotfound|eai_again|socket|network|fetch failed|connection reset/i.test(output)) {
+      return { valid: false, errorClass: "network", reason: "provider network failure" };
     }
     return { valid: false, errorClass: "non_zero_exit", reason: `process exited with code ${exitCode}` };
   }
@@ -105,13 +124,40 @@ function isOpenCodeModelAccessDeniedMessage(value) {
   return /subscription plan does not yet include access|plan does not include access|model access (?:is )?not included/i.test(value);
 }
 
+function buildParallelWorkerInlineConfiguration(mode, steps) {
+  const readOnly = mode === "read_only";
+  const agentName = readOnly ? "parallel-readonly" : "parallel-edit";
+  const permission = { "*": "deny", external_directory: "deny" };
+  permission.read = "allow";
+  permission.glob = "allow";
+  permission.grep = "allow";
+  permission.list = "allow";
+  if (!readOnly) permission.edit = "allow";
+  return JSON.stringify({
+    agent: {
+      [agentName]: {
+        description: readOnly ? "Bridge-managed parallel read-only worker" : "Bridge-managed parallel edit worker",
+        mode: "primary",
+        steps,
+        prompt: readOnly
+          ? "Analyze only the provided readable files. Do not make changes, use shell commands, invoke subagents, fetch web content, or access paths outside the readable list. Return exactly one JSON object matching the requested worker summary schema."
+          : "Change only the editable files inside this host-owned worktree. Do not commit, push, stash, use shell commands, invoke subagents, fetch web content, or touch prohibited paths. Return exactly one JSON object matching the requested worker summary schema.",
+        permission
+      }
+    }
+  });
+}
+
 function buildOpenCodeArgs(request, configuration, model) {
   const spaceBunny = model === SPACE_BUNNY_MODEL_ID;
+  const parallelWorker = request.caller === "parallel_batch" || request.caller === "parallel_batch_edit";
   const agentName = spaceBunny
     ? request.caller === "space_bunny_web_research"
       ? "space-bunny-web-research"
       : request.mode === "read_only" ? "space-bunny-readonly" : "space-bunny-edit"
-    : request.mode === "read_only"
+    : parallelWorker
+      ? request.mode === "read_only" ? "parallel-readonly" : "parallel-edit"
+      : request.mode === "read_only"
       ? (request.caller === "deepseek_opencode" ? configuration?.opencode?.deepSeekReadOnlyAgent || "plan" : "plan")
       : (["deepseek_edit", "deepseek_edit_pilot"].includes(request.caller)
         ? configuration?.opencode?.deepSeekEditAgent || "deepseek-edit"
@@ -260,6 +306,16 @@ export function createOpenCodeAdapter(configuration) {
         environment.OPENCODE_DISABLE_PROJECT_CONFIG = "1";
         environment.OPENCODE_CONFIG_CONTENT = buildSpaceBunnyInlineConfiguration(request.mode, request.caller);
       }
+      let parallelConfigPath = null;
+      if (request.caller === "parallel_batch" || request.caller === "parallel_batch_edit") {
+        parallelConfigPath = path.join(os.tmpdir(), `opencode-parallel-${crypto.randomUUID()}.json`);
+        fs.writeFileSync(parallelConfigPath, buildParallelWorkerInlineConfiguration(request.mode, configuration?.parallelBatch?.opencodeSteps || 8), { encoding: "utf8", mode: 384 });
+        environment.OPENCODE_DISABLE_PROJECT_CONFIG = "1";
+        environment.OPENCODE_CONFIG = parallelConfigPath;
+        if (configuration?.parallelBatch?.opencodeOutputCapability === "available") {
+          environment.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX = String(request.maxOutputTokens || configuration.parallelBatch.opencodeOutputTokens || 2048);
+        }
+      }
 
       const handle = createExecutionHandle(request.executionId);
       activeExecutionHandles.set(request.executionId, handle);
@@ -273,8 +329,9 @@ export function createOpenCodeAdapter(configuration) {
           {
             cwd: request.workspace,
             timeoutMs,
-            maxOutputBytes: configuration?.opencode?.maxOutputBytes || 8388608,
+            maxOutputBytes: request.maxOutputBytes || configuration?.opencode?.maxOutputBytes || 8388608,
             env: environment,
+            ...(request.reviewSourcePayload ? { stdin: request.reviewSourcePayload, requireStdinDelivery: true } : {}),
             abortController: handle.abortController,
             onSpawn: (child) => handle.attachChild(child),
             onStderr(chunk) {
@@ -312,7 +369,7 @@ export function createOpenCodeAdapter(configuration) {
             exitCode: processResult.code,
             durationMs: Date.now() - startedAt,
             reason: classification.errorClass,
-            metrics: { signal: processResult.signal ?? null }
+            metrics: { signal: processResult.signal ?? null, ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {}) }
           });
         }
 
@@ -321,7 +378,8 @@ export function createOpenCodeAdapter(configuration) {
           return createFailureSubagentResult("opencode", model.model, {
             error: parsed.error,
             durationMs: Date.now() - startedAt,
-            exitCode: processResult.code || 1
+            exitCode: processResult.code || 1,
+            metrics: { ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {}) }
           });
         }
 
@@ -331,7 +389,8 @@ export function createOpenCodeAdapter(configuration) {
           result: parsed.text,
           durationMs: Date.now() - startedAt,
           metrics: {
-            totalCostUsd: Number.isFinite(parsed.usage?.cost) ? parsed.usage.cost : null
+            totalCostUsd: Number.isFinite(parsed.usage?.cost) ? parsed.usage.cost : null,
+            ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {})
           },
           artifacts: parsed.usage ? {
             summary: JSON.stringify(parsed.usage)
@@ -347,7 +406,8 @@ export function createOpenCodeAdapter(configuration) {
             timedOut: false,
             exitCode: 1,
             durationMs: Date.now() - startedAt,
-            reason: "rate_limited"
+            reason: "rate_limited",
+            metrics: { diagnostics: createProcessFailureDiagnostics(null, { failureStage: "provider_rate_limit", providerCode: "rate_limited" }) }
           });
         }
 
@@ -359,7 +419,8 @@ export function createOpenCodeAdapter(configuration) {
             timedOut: false,
             exitCode: 1,
             durationMs: Date.now() - startedAt,
-            reason: "model_access_denied"
+            reason: "model_access_denied",
+            metrics: { diagnostics: createProcessFailureDiagnostics(null, { failureStage: "mcp_preflight", providerCode: "permission_denied" }) }
           });
         }
 
@@ -371,7 +432,8 @@ export function createOpenCodeAdapter(configuration) {
             timedOut: false,
             exitCode: null,
             durationMs: Date.now() - startedAt,
-            reason: "cancelled"
+            reason: "cancelled",
+            metrics: { diagnostics: createProcessFailureDiagnostics(error, { failureStage: "cancelled" }) }
           });
         }
 
@@ -382,7 +444,9 @@ export function createOpenCodeAdapter(configuration) {
             retryable: false,
             timedOut: true,
             exitCode: null,
-            durationMs: Date.now() - startedAt
+            durationMs: Date.now() - startedAt,
+            reason: "timeout",
+            metrics: { diagnostics: createProcessFailureDiagnostics(error, { failureStage: "provider_execution", providerCode: "timeout" }) }
           });
         }
 
@@ -392,8 +456,17 @@ export function createOpenCodeAdapter(configuration) {
           retryable: classification.errorClass === "rate_limited" || classification.errorClass === "provider_temporary_error",
           timedOut: false,
           exitCode: 1,
-          durationMs: Date.now() - startedAt
+          durationMs: Date.now() - startedAt,
+          reason: classification.errorClass,
+          metrics: { diagnostics: createProcessFailureDiagnostics(error, { providerCode: classification.errorClass === "executable_missing" ? "executable_missing" : null }) }
         });
+      } finally {
+        if (parallelConfigPath) {
+          try {
+            fs.rmSync(parallelConfigPath, { force: true });
+          } catch {
+          }
+        }
       }
     },
 
@@ -407,4 +480,4 @@ export function createOpenCodeAdapter(configuration) {
   };
 }
 
-export { OPENCODE_MODEL_MAP, resolveModel, parseOpenCodeOutput, classifyOpenCodeError, isOpenCodeRateLimitMessage, isOpenCodeModelAccessDeniedMessage, buildOpenCodeArgs };
+export { OPENCODE_MODEL_MAP, resolveModel, parseOpenCodeOutput, classifyOpenCodeError, isOpenCodeRateLimitMessage, isOpenCodeModelAccessDeniedMessage, buildOpenCodeArgs, buildParallelWorkerInlineConfiguration };

@@ -59,8 +59,13 @@ test("yalnızca geçici hata sınıfları retry için uygundur", () => {
   assert.equal(classifyProcessFailure({ code: 1, stdout: "", stderr: "HTTP 429 rate limit" }), "rate_limited");
   assert.equal(classifyProcessFailure({ code: 1, stdout: "", stderr: "HTTP 503 service unavailable" }), "server");
   assert.equal(classifyProcessFailure({ code: 1, stdout: "", stderr: "network connection reset" }), "network");
+  assert.equal(classifyProcessFailure({ error: Object.assign(new Error("process command-line budget exceeded"), { code: "ENAMETOOLONG", failureClass: "prompt_transport_limit" }) }), "prompt_transport_limit");
+  assert.equal(classifyProcessFailure({ error: Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT" }) }), "executable_missing");
   assert.equal(isRetryableFailure("rate_limited"), true);
-  assert.equal(isRetryableFailure("schema_invalid"), true);
+  assert.equal(isRetryableFailure("provider_temporary_error"), true);
+  assert.equal(isRetryableFailure("schema_invalid"), false);
+  assert.equal(isRetryableFailure("output_parse_invalid"), false);
+  assert.equal(isRetryableFailure("empty_output"), false);
   assert.equal(isRetryableFailure("process_exit"), false);
   assert.equal(calculateRetryDelayMs(1, 1000, 8000, 0), 0);
   assert.equal(calculateRetryDelayMs(4, 1000, 8000, 1), 8000);
@@ -167,9 +172,41 @@ test("DeepSeek checkpoint gerçek deneme ve model kimliği ayrıntılarını kor
   });
   assert.deepEqual(checkpoint.attempts.map((attempt) => attempt.failureClass), ["rate_limited", "timeout"]);
   assert.deepEqual(checkpoint.attempts.map((attempt) => attempt.durationMs), [50, 150]);
+  assert.equal(checkpoint.failureClass, "timeout");
+  assert.match(checkpoint.result.summary, /Subagent execution failed \(timeout\)/u);
+  assert.doesNotMatch(checkpoint.result.summary, /structured output validation failed/u);
   assert.equal(checkpoint.requestedModel, "deepseek_pro");
   assert.equal(checkpoint.resolvedModel, "deepseek/deepseek-v4-pro");
   assert.equal(checkpoint.accessMode, "read_only");
+});
+
+test("DeepSeek checkpoint separates operational failures from structured-output validation failures", () => {
+  const input = { taskId: "checkpoint-classification", role: "analyst", model: "deepseek_pro" };
+  const operationalFailure = createDeepSeekCheckpoint(input, {
+    ok: false,
+    model: "deepseek/deepseek-v4-pro",
+    resolvedModel: "deepseek/deepseek-v4-pro",
+    exitCode: 1,
+    durationMs: 10,
+    reason: "process_exit",
+    metrics: { retries: 0, totalCostUsd: null }
+  });
+  const schemaFailure = createDeepSeekCheckpoint(input, {
+    ok: true,
+    model: "deepseek/deepseek-v4-pro",
+    resolvedModel: "deepseek/deepseek-v4-pro",
+    result: "not valid structured output",
+    exitCode: 0,
+    durationMs: 10,
+    reason: undefined,
+    metrics: { retries: 0, totalCostUsd: 0 }
+  });
+
+  assert.equal(operationalFailure.failureClass, "process_exit");
+  assert.match(operationalFailure.result.summary, /Subagent execution failed \(process_exit\)/u);
+  assert.doesNotMatch(operationalFailure.result.summary, /structured output validation failed/u);
+  assert.equal(schemaFailure.failureClass, "output_parse_invalid");
+  assert.match(schemaFailure.result.summary, /Structured output validation failed \(output_parse_invalid\)/u);
 });
 
 test("OpenCode DeepSeek yalnız geçerli yapılandırılmış sonucu kabul eder", () => {

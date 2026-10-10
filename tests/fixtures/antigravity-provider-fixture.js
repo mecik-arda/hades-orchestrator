@@ -35,6 +35,9 @@ if (invocation.includes("mcp")) {
 } else if (scenario === "probe-ready") {
   process.stdout.write(`${JSON.stringify({ response: "READY" })}\n`);
   process.exitCode = 0;
+} else if (scenario === "probe-sandbox-failure") {
+  process.stderr.write("Windows sandbox helper failed to initialize\n");
+  process.exitCode = 1;
 } else if (scenario === "probe-workspace") {
   const marker = fs.readFileSync(path.join(workspace || ".", "probe.txt"), "utf8");
   process.stdout.write(`${JSON.stringify({ response: marker })}\n`);
@@ -43,8 +46,14 @@ if (invocation.includes("mcp")) {
   process.stdout.write(`${JSON.stringify({ response: "NOT_THE_MARKER" })}\n`);
   process.exitCode = 0;
 } else if (scenario === "probe-web") {
-  process.stdout.write(`${JSON.stringify({ response: "Example Domain" })}\n`);
-  process.exitCode = 0;
+  const prompt = invocation.at(-1) || "";
+  if (!prompt.includes("read_url_content")) {
+    process.stderr.write("probe prompt did not name the canonical web tool\n");
+    process.exitCode = 1;
+  } else {
+    process.stdout.write(`${JSON.stringify({ response: "Example Domain" })}\n`);
+    process.exitCode = 0;
+  }
 } else if (scenario === "probe-web-denied") {
   process.stderr.write("tool required the 'read_url' permission, auto-denied\n");
   process.exitCode = 1;

@@ -24,6 +24,32 @@ test("CODEX-DIAG-09a: sinyalle sonlanan süreç başarı sayılmaz", () => {
   assert.equal(classifyCodexError(null, null, "partial text", "", "SIGTERM").errorClass, "process_exit");
 });
 
+test("CODEX-AUTH-CLASSIFICATION: yalnız belirgin kimlik doğrulama ifadeleri auth_invalid olur", () => {
+  for (const output of [
+    "authentication failure",
+    "failed to authenticate",
+    "Please log in",
+    "API key is invalid",
+    "access token expired",
+    "HTTP 401 Unauthorized"
+  ]) {
+    assert.equal(classifyCodexError(null, 1, "", output).errorClass, "auth_invalid", output);
+  }
+  for (const output of [
+    "author identity unknown",
+    "authorization policy forbids this action",
+    "oauth callback configuration error",
+    "API key documentation unavailable",
+    "HTTP 401 request timed out",
+    "401 response from local test server",
+    "model response: authentication succeeded"
+  ]) {
+    assert.equal(classifyCodexError(null, 1, "", output).errorClass, "non_zero_exit", output);
+  }
+  assert.equal(classifyCodexError(null, 0, "authorization policy forbids this action", "").valid, true);
+  assert.equal(shouldRetry("auth_invalid", "read_only", 1, 3).retryable, false);
+});
+
 test("CX-AC-01: CodexAdapter AgentAdapter kontratını uygular", () => {
   const adapter = createAdapter("codex", {
     canRead: true, canWrite: true,
@@ -116,6 +142,26 @@ test("CODEX-DIAG-04/05/06: canonical argv sandbox modunu seçer ve danger flag i
   assert.deepEqual(sol61.args.slice(1, 4), ["--model", "gpt-6.1-sol", "--sandbox"]);
 });
 
+test("CODEX-STDIN-01: Codex prompt ve host source bundle argv yerine stdin üzerinden taşınır", () => {
+  const sourceBundle = "HOST_SOURCE_BUNDLE_SENTINEL";
+  const command = buildCodexArgs({
+    prompt: "Review the selected source bundle",
+    reviewSourcePayload: sourceBundle,
+    model: "gpt-6.1-sol",
+    mode: "read_only"
+  }, { codex: { executable: "codex" } });
+  assert.equal(command.args.at(-1), "-");
+  assert.equal(command.args.includes(sourceBundle), false);
+  assert.equal(command.args.includes("Review the selected source bundle"), false);
+  const ordinaryPrompt = buildCodexArgs({
+    prompt: "A long ordinary task prompt",
+    model: "gpt-6.1-sol",
+    mode: "read_only"
+  }, { codex: { executable: "codex" } });
+  assert.equal(ordinaryPrompt.args.at(-1), "-");
+  assert.equal(ordinaryPrompt.args.includes("A long ordinary task prompt"), false);
+});
+
 test("CODEX-CLEANUP-01: edit ortamı pytest ve bytecode artefaktlarını engeller", () => {
   const editEnvironment = createCodexEnvironment("edit", { PATH: "test-path", PYTEST_ADDOPTS: "-q", PYTHONDONTWRITEBYTECODE: "0" });
   const readOnlyEnvironment = createCodexEnvironment("read_only", { PATH: "test-path", PYTEST_ADDOPTS: "-q", PYTHONDONTWRITEBYTECODE: "0" });
@@ -139,10 +185,12 @@ test("CODEX-GLOBAL-01: trusted machine config permits only non-Git workspace che
   const gitArgs = buildCodexArgs({ ...request, workspace: gitWorkspace }, trustedConfig).args;
   const nonGitArgs = buildCodexArgs({ ...request, workspace: nonGitWorkspace }, trustedConfig).args;
   const defaultArgs = buildCodexArgs({ ...request, workspace: nonGitWorkspace }, defaultConfig).args;
+  const snapshotArgs = buildCodexArgs({ ...request, workspace: nonGitWorkspace, caller: "parallel_batch" }, defaultConfig).args;
 
   assert.equal(gitArgs.includes("--skip-git-repo-check"), false);
   assert.equal(nonGitArgs.includes("--skip-git-repo-check"), true);
   assert.equal(defaultArgs.includes("--skip-git-repo-check"), false);
+  assert.equal(snapshotArgs.includes("--skip-git-repo-check"), true);
   assert.equal(nonGitArgs.includes("--sandbox"), true);
   assert.equal(nonGitArgs[nonGitArgs.indexOf("--sandbox") + 1], "read-only");
 });
@@ -201,4 +249,14 @@ test("CODEX-DIAG-01/02/03: missing executable fail-fast ve runtime executable ku
 
 test("CX-AC-11: regression check", () => {
   assert.ok(true);
+});
+
+test("CX-AC-12: parallel edit args force network access off", () => {
+  const request = { target: "codex", prompt: "change", model: "default", mode: "edit", workspace: process.cwd(), caller: "parallel_batch_edit", delegationDepth: 0 };
+  const command = buildCodexArgs(request, { codex: { executable: "codex" } });
+  const configIndex = command.args.indexOf("sandbox_workspace_write.network_access=false");
+  assert.equal(configIndex > 0, true);
+  assert.equal(command.args[configIndex - 1], "-c");
+  const readOnlyCommand = buildCodexArgs({ ...request, mode: "read_only", caller: "parallel_batch" }, { codex: { executable: "codex" } });
+  assert.equal(readOnlyCommand.args.includes("sandbox_workspace_write.network_access=false"), false);
 });

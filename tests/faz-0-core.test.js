@@ -4,7 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { createAdapter } from "../subagent-bridge/src/adapters/agent-adapter-base.js";
-import { createExecutionId, createProviderEnvironment, runProcess, createExecutionHandle, killProcessTree } from "../subagent-bridge/src/services/execution-service.js";
+import { assertProcessCommandLineWithinLimit, calculateWindowsCommandLineUpperBound, createExecutionId, createProviderEnvironment, runProcess, createExecutionHandle, killProcessTree, WINDOWS_CREATE_PROCESS_COMMAND_LINE_LIMIT } from "../subagent-bridge/src/services/execution-service.js";
 import { checkCapability } from "../subagent-bridge/src/services/capability-service.js";
 import { acquireReadLock, releaseReadLock, acquireWriteLock, releaseWriteLock, releaseAllLocks } from "./support/workspace-lock.js";
 import { createDelegationGuard, getMaxDelegationDepth } from "../subagent-bridge/src/services/delegation-guard.js";
@@ -326,6 +326,48 @@ test("execution-service: process spawn, timeout ve output limit çalışır", as
     assert.fail("should have timed out");
   } catch (error) {
     assert.match(error.message, /timed out/i);
+  }
+
+  await assert.rejects(
+    runProcess("node", ["-e", "process.stdout.write('STDOUT_SENTINEL'); process.stderr.write('STDERR_SENTINEL'); setInterval(() => {}, 1000)"], { timeoutMs: 1500 }),
+    (error) => {
+      assert.match(error.stdout, /STDOUT_SENTINEL/);
+      assert.match(error.stderr, /STDERR_SENTINEL/);
+      assert.equal(Object.keys(error).includes("stdout"), false);
+      assert.equal(Object.keys(error).includes("stderr"), false);
+      return true;
+    }
+  );
+});
+
+test("execution-service: required stdin delivery reports bytes only after the child stream finishes", async () => {
+  const stdin = "host source bundle: ğüşiöç";
+  const result = await runProcess("node", ["-e", "let input=''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => process.stdout.write(input))"], {
+    timeoutMs: 5000,
+    stdin,
+    requireStdinDelivery: true
+  });
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, stdin);
+  assert.equal(result.stdinWriteStatus, "complete");
+  assert.equal(result.stdinBytes, Buffer.byteLength(stdin, "utf8"));
+});
+
+test("execution-service: Windows argv upper-bound includes UTF-16 units and fails before spawn", () => {
+  const executable = "codex";
+  const args = ["exec", "😀"];
+  const expected = 2 * (executable.length + args.reduce((total, argument) => total + argument.length, 0)) + 4 * (args.length + 1);
+  assert.equal(calculateWindowsCommandLineUpperBound(executable, args), expected);
+  assert.doesNotThrow(() => assertProcessCommandLineWithinLimit(executable, args, "win32"));
+  assert.throws(() => assertProcessCommandLineWithinLimit("codex", ["x".repeat(WINDOWS_CREATE_PROCESS_COMMAND_LINE_LIMIT)], "win32"), {
+    failureClass: "prompt_transport_limit",
+    code: "ENAMETOOLONG"
+  });
+  if (process.platform === "win32") {
+    assert.throws(() => runProcess("missing-codex", ["x".repeat(WINDOWS_CREATE_PROCESS_COMMAND_LINE_LIMIT)]), {
+      failureClass: "prompt_transport_limit",
+      code: "ENAMETOOLONG"
+    });
   }
 });
 

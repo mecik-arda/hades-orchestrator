@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createOpenCodeAdapter, resolveModel, parseOpenCodeOutput, classifyOpenCodeError, isOpenCodeRateLimitMessage, isOpenCodeModelAccessDeniedMessage, OPENCODE_MODEL_MAP } from "../subagent-bridge/src/adapters/opencode-adapter.js";
+import { createOpenCodeAdapter, resolveModel, parseOpenCodeOutput, classifyOpenCodeError, isOpenCodeRateLimitMessage, isOpenCodeModelAccessDeniedMessage, OPENCODE_MODEL_MAP, buildParallelWorkerInlineConfiguration } from "../subagent-bridge/src/adapters/opencode-adapter.js";
 import { createAdapter } from "../subagent-bridge/src/adapters/agent-adapter-base.js";
 import { checkCapability } from "../subagent-bridge/src/services/capability-service.js";
 import { shouldRetry, isMutationStateUnknown } from "../subagent-bridge/src/services/retry-service.js";
@@ -310,4 +310,73 @@ test("OC-AC-17: SubagentExecutionRequest strict schema", () => {
 
 test("OC-AC-18: regression check", () => {
   assert.ok(true);
+});
+
+test("OC-AC-19: parallel worker inline config restricts tools and carries steps", () => {
+  const readOnlyConfig = JSON.parse(buildParallelWorkerInlineConfiguration("read_only", 3));
+  const readOnlyAgent = readOnlyConfig.agent["parallel-readonly"];
+  assert.equal(readOnlyAgent.steps, 3);
+  assert.equal(readOnlyAgent.permission["*"], "deny");
+  assert.equal(readOnlyAgent.permission.read, "allow");
+  assert.equal(readOnlyAgent.permission.glob, "allow");
+  assert.equal(readOnlyAgent.permission.grep, "allow");
+  assert.equal(readOnlyAgent.permission.list, "allow");
+  assert.equal(readOnlyAgent.permission.edit, undefined);
+  assert.equal(readOnlyAgent.permission.bash, undefined);
+  assert.equal(readOnlyAgent.permission.task, undefined);
+  const editConfig = JSON.parse(buildParallelWorkerInlineConfiguration("edit", 5));
+  const editAgent = editConfig.agent["parallel-edit"];
+  assert.equal(editAgent.steps, 5);
+  assert.equal(editAgent.permission.edit, "allow");
+  assert.equal(editAgent.permission["*"], "deny");
+});
+
+test("OC-AC-20: parallel task output token cap reaches the pinned OpenCode worker request", async () => {
+  const adapter = createOpenCodeAdapter({
+    opencode: {
+      executable: process.execPath,
+      execArgs: ["-e", "process.stdout.write(JSON.stringify({type:'text',part:{text:process.env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX}})+'\\n')"],
+      allowedModels: ["deepseek/deepseek-v4-pro"]
+    },
+    parallelBatch: { opencodeOutputCapability: "available", opencodeOutputTokens: 2048, opencodeSteps: 5 }
+  });
+  const result = await adapter.execute({
+    executionId: "parallel-output-token-cap",
+    backend: "opencode",
+    prompt: "inspect",
+    model: "deepseek/deepseek-v4-pro",
+    mode: "read_only",
+    workspace: process.cwd(),
+    delegationDepth: 0,
+    caller: "parallel_batch",
+    timeoutMs: 5000,
+    maxOutputBytes: 2048,
+    maxOutputTokens: 512
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.result.trim(), "512");
+});
+
+test("OC-AC-21: task output byte cap is enforced by the OpenCode process collector", async () => {
+  const adapter = createOpenCodeAdapter({
+    opencode: {
+      executable: process.execPath,
+      execArgs: ["-e", "process.stdout.write('x'.repeat(4096))"],
+      allowedModels: ["deepseek/deepseek-v4-pro"]
+    }
+  });
+  const result = await adapter.execute({
+    executionId: "parallel-output-byte-cap",
+    backend: "opencode",
+    prompt: "inspect",
+    model: "deepseek/deepseek-v4-pro",
+    mode: "read_only",
+    workspace: process.cwd(),
+    delegationDepth: 0,
+    caller: "parallel_batch",
+    timeoutMs: 5000,
+    maxOutputBytes: 1024
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "output_limit", JSON.stringify(result));
 });

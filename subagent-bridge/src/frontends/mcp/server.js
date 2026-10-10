@@ -37,6 +37,12 @@ function errorResponse(error) {
   };
 }
 
+function publicToolInputShape(schema) {
+  let current = schema;
+  while (current instanceof z.ZodEffects) current = current.innerType();
+  return current.shape;
+}
+
 function safe(handler) {
   return async (...args) => {
     try {
@@ -59,7 +65,7 @@ function safeHealth(handler) {
 
 function sanitizeHealth(health) {
   const probes = health.probes && typeof health.probes === "object"
-    ? Object.fromEntries(["cli", "modelAccess", "toolFreeResponse", "workspaceRead", "webRead"]
+    ? Object.fromEntries(["cli", "modelAccess", "toolFreeResponse", "workspaceRead", "sandboxStartup", "webRead"]
       .filter((key) => capabilityStatusValues.includes(health.probes[key]))
       .map((key) => [key, health.probes[key]]))
     : {};
@@ -101,7 +107,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
     name: "subagent-bridge",
     version: packageVersion
   }, {
-    instructions: "Frontend-neutral subagent bridge runtime için MCP frontend'i. Trusted workspace sunucu başlangıç context'i tarafından sağlanır."
+    instructions: "Frontend-neutral subagent bridge runtime için MCP frontend'i. Trusted workspace sunucu başlangıç context'i tarafından sağlanır. Paralel batch başlatıldığında get_parallel_batch ile durumu terminal duruma kadar sorgula ve kullanıcıya kısa, doğal durum güncellemeleri ver. Kullanıcı ayrı terminalde sürekli görünüm isterse batchId ile `npm run parallel:watch -- <batchId>` komutunu öner; bu salt-okunur watcher ikinci bridge süreci başlatmaz ve Ctrl+C batch'i iptal etmez. Yüzde çözümlenmiş task'lardan hesaplanır; unknown task tamamlanmış sayılmaz ve çalışan task içindeki model token ilerlemesi ölçülmez. Özel ASCII panel biçimi üretme."
   });
   const handlers = createMcpToolHandlers({ runtime, trustedWorkspace, caller: "openCode", configuration });
 
@@ -227,14 +233,14 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
   server.registerTool("run_deepseek_subagent", {
     title: "DeepSeek V4 Pro veya Flash subagent çalıştır",
     description: "OpenCode üzerinden DeepSeek Pro veya Flash'ı read-only veya kontrollü edit modunda çalıştırır. deepseek_flash aliası canonical deepseek/deepseek-flash kimliğine, yani DeepSeek-V4.1-Flash sürümüne çözülür. Edit yalnız seçilmiş dosyaları disposable workspace sonrası trusted host workspace'e doğrulanmış promotion ile uygular.",
-    inputSchema: publicToolSchemas.runDeepSeek.shape,
+    inputSchema: publicToolInputShape(publicToolSchemas.runDeepSeek),
     annotations: executionAnnotations
   }, safe(handlers.runDeepSeek));
 
   server.registerTool("run_deepseek_edit_pilot", {
     title: "DeepSeek disposable edit pilotu çalıştır",
     description: "DeepSeek Pro veya Flash'a (deepseek_flash canonical deepseek/deepseek-flash, DeepSeek-V4.1-Flash) yalnız bridge-owned disposable workspace içinde kontrollü dosya düzenleme görevi verir; ana workspace'e değişiklik uygulamaz.",
-    inputSchema: publicToolSchemas.runDeepSeekEditPilot.shape,
+    inputSchema: publicToolInputShape(publicToolSchemas.runDeepSeekEditPilot),
     annotations: executionAnnotations
   }, safe(handlers.runDeepSeekEditPilot));
 
@@ -252,7 +258,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
   server.registerTool("run_glm_subagent", {
     title: "GLM subagent çalıştır",
     description: "OpenCode üzerinden GLM 5.2, GLM 5.2 HighSpeed, GLM 5.3 veya GLM 5.3 Flash'ı read-only ya da kontrollü edit modunda çalıştırır. Edit yalnız seçilmiş dosyaları disposable workspace sonrası trusted host workspace'e doğrulanmış promotion ile uygular.",
-    inputSchema: publicToolSchemas.runGlm.shape,
+    inputSchema: publicToolInputShape(publicToolSchemas.runGlm),
     annotations: executionAnnotations
   }, safe(handlers.runGlm));
 
@@ -276,20 +282,22 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
     server.registerTool(`run_${provider}_subagent`, {
       title: `${provider} subagent çalıştır`,
       description: `OpenCode üzerinden ${provider} modelini read-only veya kontrollü edit modunda çalıştırır.`,
-      inputSchema: publicToolSchemas.runCatalogProvider.shape,
+      inputSchema: publicToolInputShape(publicToolSchemas.runCatalogProvider),
       annotations: executionAnnotations
     }, safe(handler));
   }
 
   server.registerTool("check_antigravity_subagent", {
     title: "Antigravity subagent bağlantısını kontrol et",
-    description: "Antigravity CLI yürütücüsünü, model eşlemesini ve auth durumunu secret değerlerini göstermeden kontrol eder. probeModels ve probeCapabilities birlikte verilirse isteğe bağlı, seri ve düşük maliyetli capability probları çalıştırır.",
+    description: "Antigravity CLI, model/auth erişimi, sandbox başlangıcı ve workspace-read yeteneklerini redakte biçimde kontrol eder. probeModels ve probeCapabilities birlikte verilirse isteğe bağlı, seri, düşük maliyetli capability probları çalıştırır; workspaceReadTarget trusted_workspace olduğunda host kontrollü kısa ömürlü sentinel dizini oluşturur.",
     inputSchema: antigravityProbeSchema,
     annotations: readOnlyAnnotations
   }, safeHealth(async (input) => {
     const health = await runtime.health(["antigravity"], {
       probeModels: input.probeModels,
-      probeCapabilities: input.probeCapabilities
+      probeCapabilities: input.probeCapabilities,
+      workspaceReadTarget: input.workspaceReadTarget,
+      trustedWorkspace
     });
     const entry = health.adapters.antigravity;
     const result = {
@@ -307,21 +315,21 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
   server.registerTool("run_antigravity_subagent", {
     title: "Antigravity subagent çalıştır",
     description: "Antigravity CLI üzerinden Gemini Pro, Gemini Flash, Gemini 3.7 Flash, Gemini 3.8 Flash veya Claude Sonnet görevi devreder. İsteğe bağlı workspace yalnızca salt okunur modda ve izinli kökler altında kullanılabilir.",
-    inputSchema: publicToolSchemas.runAntigravity.shape,
+    inputSchema: publicToolInputShape(publicToolSchemas.runAntigravity),
     annotations: executionAnnotations
   }, safe(handlers.runAntigravity));
 
   server.registerTool("run_claude_code_subagent", {
     title: "Claude Code subagent çalıştır",
     description: "Claude Code CLI üzerinden salt okunur veya düzenleme modunda görev devreder.",
-    inputSchema: publicToolSchemas.runClaudeCode.shape,
+    inputSchema: publicToolInputShape(publicToolSchemas.runClaudeCode),
     annotations: executionAnnotations
   }, safe(handlers.runClaudeCode));
 
   server.registerTool("run_opencode_subagent", {
     title: "OpenCode subagent çalıştır",
     description: "Açıkça belirtilmiş bağımsız OpenCode provider modellerine görev devreder. Gemini modelleri Antigravity üzerinden çalıştırılmalıdır.",
-    inputSchema: publicToolSchemas.runOpenCode.shape,
+    inputSchema: publicToolInputShape(publicToolSchemas.runOpenCode),
     annotations: executionAnnotations
   }, safe(handlers.runOpenCode));
 
@@ -345,21 +353,21 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
   server.registerTool("run_space_bunny_edit_pilot", {
     title: "Space Bunny disposable edit pilotu çalıştır",
     description: "Space Bunny Free'yi yalnız seçilmiş dosyaların bridge-owned disposable kopyasında dener; ana workspace'e hiçbir değişiklik terfi ettirmez.",
-    inputSchema: publicToolSchemas.runSpaceBunnyEditPilot.shape,
+    inputSchema: publicToolInputShape(publicToolSchemas.runSpaceBunnyEditPilot),
     annotations: executionAnnotations
   }, safe(handlers.runSpaceBunnyEditPilot));
 
   server.registerTool("run_codex_subagent", {
     title: "OpenAI Codex subagent çalıştır",
     description: "OpenAI Codex CLI üzerinden salt okunur veya düzenleme modunda görev devreder.",
-    inputSchema: publicToolSchemas.runCodex.shape,
+    inputSchema: publicToolInputShape(publicToolSchemas.runCodex),
     annotations: executionAnnotations
   }, safe(handlers.runCodex));
 
   server.registerTool("run_task_profile", {
     title: "Görev profiliyle subagent çalıştır",
     description: "Açıkça seçilen görev profiline ait canonical provider ve modla çalışır; yalnız policy'de tanımlı read-only fallback hedeflerini kullanabilir.",
-    inputSchema: publicToolSchemas.runProfile.shape,
+    inputSchema: publicToolInputShape(publicToolSchemas.runProfile),
     annotations: executionAnnotations
   }, safe(handlers.runProfile));
 
@@ -385,8 +393,8 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
 
   server.registerTool("check_provider_capability", {
     title: "Sağlayıcı capability probe çalıştır",
-    description: "Seçilen sağlayıcı ve model için opt-in, düşük maliyetli, salt-okunur capability probu çalıştırır; sonucu redacted live_observation metriği olarak kaydeder.",
-    inputSchema: publicToolSchemas.checkProviderCapability.shape,
+    description: "Seçilen sağlayıcı ve model için opt-in, salt-okunur capability probu çalıştırır; probeWorkspaceRead=true ek bir sağlayıcı çağrısıyla yalnız trusted workspace altında host tarafından oluşturulmuş kısa ömürlü sentinel'i okumayı dener. Maliyet modele göre değişebilir; sonucu redacted live_observation metriği olarak kaydeder.",
+    inputSchema: publicToolInputShape(publicToolSchemas.checkProviderCapability),
     annotations: externalReadOnlyExecutionAnnotations
   }, safe(handlers.checkProviderCapability));
 
@@ -394,9 +402,50 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
     server.registerTool("approve_prepared_edit", {
       title: "Hazırlanmış edit değişikliğini onayla ve uygula",
       description: "Yalnız orkestratör oturumunda hazırlanmış, yüksek etkili edit değişikliğini sağlayıcıyı yeniden çalıştırmadan saklanan kesin içerikle uygular.",
-      inputSchema: publicToolSchemas.approvePreparedEdit.shape,
+      inputSchema: publicToolInputShape(publicToolSchemas.approvePreparedEdit),
       annotations: executionAnnotations
     }, safe(handlers.approvePreparedEdit));
+  }
+
+  if (configuration.parallelBatch?.enabled === true) {
+    server.registerTool("prepare_parallel_batch", {
+      title: "Paralel batch planı hazırla",
+      description: "Ana orkestratörün sunduğu task DAG'ını strict şemaya göre doğrular, read-only dependency wave'lerini, dosya sahipliğini ve batch-local admission sınırlarını hesaplar, bounded özet döndürür ve hiçbir worker başlatmaz. Edit task'ları tek wave'dir. Plan kullanıcıya gösterildikten sonra ayrı bir açık onay turunda start_parallel_batch çağrılmalıdır.",
+      inputSchema: publicToolInputShape(publicToolSchemas.prepareParallelBatch),
+      annotations: executionAnnotations
+    }, safe(handlers.prepareParallelBatch));
+    server.registerTool("start_parallel_batch", {
+      title: "Onaylanmış paralel batch'i başlat",
+      description: "Yalnız kullanıcıya gösterilmiş değişmez plan hash'i ve ayrı kullanıcı onayından sonra tek kullanımlık planı tüketir; manifesti atomik kaydedip batchId ile hemen döner. Worker'lar arka planda çalışır. autoOpenTerminalDashboard opt-in ise session penceresinden bağımsız, Windows ekranının sağında küçük Windows Terminal penceresi açılır; aksi halde watcher komutu npm run parallel:watch -- <batchId> ile ikinci terminalde başlatılabilir.",
+      inputSchema: publicToolInputShape(publicToolSchemas.startParallelBatch),
+      annotations: executionAnnotations
+    }, safe(handlers.startParallelBatch));
+    server.registerTool("get_parallel_batch", {
+      title: "Paralel batch durumunu sorgula",
+      description: "Batch durumu, çözümlenmiş task'lardan hesaplanan ilerleme yüzdesi, per-task statü ve batch-local admission bütçesinin sınırlı yapılandırılmış özetini döndürür. Task içi token ilerlemesi ölçülmez. Tam worker çıktısı yalnız get_parallel_task_detail ile alınır; admission tutarı sağlayıcı faturası değildir.",
+      inputSchema: publicToolInputShape(publicToolSchemas.getParallelBatch),
+      annotations: readOnlyAnnotations
+    }, safe(handlers.getParallelBatch));
+    server.registerTool("get_parallel_task_detail", {
+      title: "Paralel task ayrıntısını oku",
+      description: "Yalnız aynı batch, task, caller ve trusted workspace yetkisiyle opak detail_ref artefaktının sınırlı sayfasını döndürür; taskId=integration birleşik edit diff önizlemesidir. Süresi dolan veya yetkisiz artefakt için fail-closed hata verir.",
+      inputSchema: publicToolInputShape(publicToolSchemas.getParallelTaskDetail),
+      annotations: readOnlyAnnotations
+    }, safe(handlers.getParallelTaskDetail));
+    server.registerTool("cancel_parallel_batch", {
+      title: "Paralel batch'i iptal et",
+      description: "Açık iptal isteğini manifeste yazar, çalışan child execution'ları iptal eder; belirsiz child durumu unknown kalır ve otomatik tekrar veya entegrasyon yapılmaz.",
+      inputSchema: publicToolInputShape(publicToolSchemas.cancelParallelBatch),
+      annotations: executionAnnotations
+    }, safe(handlers.cancelParallelBatch));
+    if (enableOrchestratorApproval === true) {
+      server.registerTool("approve_parallel_integration", {
+        title: "Paralel entegrasyon diff'ini onayla ve uygula",
+        description: "Yalnız edit batch'i ready_for_approval durumundayken, kaynak HEAD ve dosya durumu doğrulandıktan sonra saklanan birleşik diff'i atomik dosya promosyonuyla kaynak workspace'e uygular; Git commit veya push yapmaz.",
+        inputSchema: publicToolInputShape(publicToolSchemas.approveParallelIntegration),
+        annotations: executionAnnotations
+      }, safe(handlers.approveParallelIntegration));
+    }
   }
 
   return server;

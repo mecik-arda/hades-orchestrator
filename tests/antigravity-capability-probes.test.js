@@ -57,6 +57,7 @@ function createFakeAdapter(id, probeCapabilities) {
       modelAccess: "not_probed",
       toolFreeResponse: "not_probed",
       workspaceRead: "not_probed",
+      sandboxStartup: "not_probed",
       webRead: "not_probed"
     }
   });
@@ -83,6 +84,8 @@ function probeFixtureResult(overrides = {}) {
     modelAccess: "not_probed",
     toolFreeResponse: "not_probed",
     workspaceRead: "not_probed",
+    sandboxStartup: "not_probed",
+    workspaceReadTarget: null,
     webRead: "not_probed",
     failureClass: null,
     checkedAt: new Date().toISOString(),
@@ -102,6 +105,7 @@ test("CAP-01: tool-free probe model erişimini ve araçsız yanıtı bağımsız
   assert.equal(result.modelAccess, "available");
   assert.equal(result.toolFreeResponse, "available");
   assert.equal(result.workspaceRead, "not_probed");
+  assert.equal(result.sandboxStartup, "not_probed");
   assert.equal(result.webRead, "not_probed");
   assert.equal(result.failureClass, null);
   assert.equal(capabilityProbeSchema.safeParse(result).success, true);
@@ -120,15 +124,16 @@ test("CAP-03: workspace-read probe marker içeriğini doğrular", async () => {
   const adapter = createProbeAdapter("probe-workspace");
   const result = await adapter.probeCapabilities({ model: "gemini_flash_3_8", capabilities: ["workspaceRead"] });
   assert.equal(result.workspaceRead, "available");
+  assert.equal(result.workspaceReadTarget, "temp_workspace");
   assert.equal(result.modelAccess, "not_probed");
   assert.equal(result.failureClass, null);
 });
 
-test("CAP-04: workspace-read beklenmeyen yanıtta unclassified olur", async () => {
+test("CAP-04: workspace-read beklenmeyen yanıtı workspace_read olarak sınıflandırılır", async () => {
   const adapter = createProbeAdapter("probe-workspace-wrong");
   const result = await adapter.probeCapabilities({ model: "gemini_flash_3_8", capabilities: ["workspaceRead"] });
   assert.equal(result.workspaceRead, "unavailable");
-  assert.equal(result.failureClass, "unclassified");
+  assert.equal(result.failureClass, "workspace_read");
 });
 
 test("CAP-05: web-read başarısı ve izin reddi ayrı raporlanır", async () => {
@@ -154,7 +159,35 @@ test("CAP-06: bir capability hatası diğer capability sonucunu bozmaz", async (
   const result = await adapter.probeCapabilities({ model: "gemini_flash_3_8", capabilities: ["modelAccess", "workspaceRead"] });
   assert.equal(result.modelAccess, "available");
   assert.equal(result.workspaceRead, "unavailable");
-  assert.equal(result.failureClass, "unclassified");
+  assert.equal(result.failureClass, "workspace_read");
+});
+
+test("CAP-SANDBOX-01: tool-free success does not claim terminal sandbox startup", async () => {
+  const readyAdapter = createProbeAdapter("probe-ready");
+  const ready = await readyAdapter.probeCapabilities({ model: "gemini_flash_3_8", capabilities: ["sandboxStartup"] });
+  assert.equal(ready.sandboxStartup, "not_probed");
+  assert.equal(ready.modelAccess, "not_probed");
+  assert.equal(ready.failureClass, null);
+
+  const failingAdapter = createProbeAdapter("probe-sandbox-failure");
+  const failed = await failingAdapter.probeCapabilities({ model: "gemini_flash_3_8", capabilities: ["sandboxStartup"] });
+  assert.equal(failed.sandboxStartup, "unavailable");
+  assert.equal(failed.failureClass, "sandbox_setup");
+});
+
+test("CAP-WORKSPACE-01: trusted workspace read probe uses and removes its host sentinel directory", async (t) => {
+  const root = fixtureDirectory(t, "trusted-workspace-read");
+  const adapter = createProbeAdapter("probe-workspace");
+  const result = await adapter.probeCapabilities({
+    model: "gemini_flash_3_8",
+    capabilities: ["workspaceRead"],
+    workspaceReadTarget: "trusted_workspace",
+    trustedWorkspace: root
+  });
+  assert.equal(result.workspaceRead, "available");
+  assert.equal(result.workspaceReadTarget, "trusted_workspace");
+  assert.equal(result.failureClass, null);
+  assert.deepEqual(fs.readdirSync(root), []);
 });
 
 test("CAP-07: probe timeout sınıflandırılır ve capability unavailable kalır", async () => {
@@ -163,6 +196,34 @@ test("CAP-07: probe timeout sınıflandırılır ve capability unavailable kalı
   assert.equal(result.modelAccess, "unavailable");
   assert.equal(result.failureClass, "timeout");
   assert.equal(capabilityProbeSchema.safeParse(result).success, true);
+});
+
+test("CAP-SANDBOX-02: sandbox startup failure is reported without treating a response as readiness", async () => {
+  const readyAdapter = createProbeAdapter("probe-ready");
+  const ready = await readyAdapter.probeCapabilities({ model: "gemini_flash_3_8", capabilities: ["sandboxStartup"] });
+  assert.equal(ready.sandboxStartup, "not_probed");
+  assert.equal(ready.modelAccess, "not_probed");
+  assert.equal(ready.failureClass, null);
+
+  const failingAdapter = createProbeAdapter("probe-sandbox-failure");
+  const failed = await failingAdapter.probeCapabilities({ model: "gemini_flash_3_8", capabilities: ["sandboxStartup"] });
+  assert.equal(failed.sandboxStartup, "unavailable");
+  assert.equal(failed.failureClass, "sandbox_setup");
+});
+
+test("CAP-WORKSPACE-01: trusted workspace read probe uses and removes a host-created sentinel directory", async (t) => {
+  const root = fixtureDirectory(t, "trusted-workspace-read");
+  const adapter = createProbeAdapter("probe-workspace");
+  const result = await adapter.probeCapabilities({
+    model: "gemini_flash_3_8",
+    capabilities: ["workspaceRead"],
+    workspaceReadTarget: "trusted_workspace",
+    trustedWorkspace: root
+  });
+  assert.equal(result.workspaceRead, "available");
+  assert.equal(result.workspaceReadTarget, "trusted_workspace");
+  assert.equal(result.failureClass, null);
+  assert.deepEqual(fs.readdirSync(root), []);
 });
 
 test("CAP-08: geçersiz model süreç çalıştırmadan invalid_model döner", async () => {
@@ -179,11 +240,13 @@ test("CAP-09: capability listesi boşsa hiçbir probe çalışmaz", async () => 
     modelAccess: result.modelAccess,
     toolFreeResponse: result.toolFreeResponse,
     workspaceRead: result.workspaceRead,
+    sandboxStartup: result.sandboxStartup,
     webRead: result.webRead
   }, {
     modelAccess: "not_probed",
     toolFreeResponse: "not_probed",
     workspaceRead: "not_probed",
+    sandboxStartup: "not_probed",
     webRead: "not_probed"
   });
   assert.equal(result.failureClass, null);
@@ -270,9 +333,11 @@ test("CAP-RT-04: probe isteği health cache'ini bypass eder", async (t) => {
 
 test("CAP-RT-05: capability kayıtları health snapshot'a redakte edilerek yazılır", async (t) => {
   const root = fixtureDirectory(t, "runtime-snapshot");
-  const antigravity = createFakeAdapter("antigravity", async () => probeFixtureResult({
+  const antigravity = createFakeAdapter("antigravity", async ({ workspaceReadTarget }) => probeFixtureResult({
     modelAccess: "available",
     workspaceRead: "unavailable",
+    sandboxStartup: "available",
+    workspaceReadTarget,
     failureClass: "PERMISSION SENTINEL free text",
     prompt: "PROMPT_SENTINEL",
     stdout: "STDOUT_SENTINEL",
@@ -288,7 +353,7 @@ test("CAP-RT-05: capability kayıtları health snapshot'a redakte edilerek yazı
     stdout: "HEALTH_STDOUT_SENTINEL"
   });
   const runtime = createBridgeRuntime({ configuration: createConfiguration(root, root), adapters: { antigravity } });
-  const runtimeHealth = await runtime.health(["antigravity"], { probeModels: ["gemini_flash_3_8"], probeCapabilities: ["modelAccess", "workspaceRead"] });
+  const runtimeHealth = await runtime.health(["antigravity"], { probeModels: ["gemini_flash_3_8"], probeCapabilities: ["modelAccess", "workspaceRead", "sandboxStartup"], workspaceReadTarget: "trusted_workspace", trustedWorkspace: root });
   assert.equal(runtimeHealth.adapters.antigravity.health.version, "1.2.3");
   assert.equal(runtimeHealth.adapters.antigravity.health.error, "unavailable");
   assert.equal(Object.hasOwn(runtimeHealth.adapters.antigravity.health, "prompt"), false);
@@ -302,6 +367,8 @@ test("CAP-RT-05: capability kayıtları health snapshot'a redakte edilerek yazı
   assert.equal(record.adapters.antigravity.authValid, null);
   assert.equal(probes.modelAccess, "available");
   assert.equal(probes.workspaceRead, "unavailable");
+  assert.equal(probes.sandboxStartup, "available");
+  assert.equal(probes.workspaceReadTarget, "trusted_workspace");
   assert.equal(probes.failureClass, "unclassified");
   assert.match(probes.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
   const returnedProbe = (await runtime.health(["antigravity"], { probeModels: ["gemini_flash_3_8"], probeCapabilities: ["modelAccess"] })).adapters.antigravity.health.capabilityProbes.gemini_flash_3_8;
@@ -334,8 +401,9 @@ test("CAP-RT-07: probe çağrısı healthCheck recovery davranışını kapatır
 });
 
 test("CAP-MCP-01: MCP probe girdisi kapalı enum ve strict sınırlarla doğrulanır", () => {
-  assert.deepEqual(antigravityProbeSchema.parse({}), { probeModels: [], probeCapabilities: [] });
+  assert.deepEqual(antigravityProbeSchema.parse({}), { probeModels: [], probeCapabilities: [], workspaceReadTarget: "temp_workspace" });
   assert.equal(antigravityProbeSchema.safeParse({ probeModels: ["gemini_flash_3_8"], probeCapabilities: ["modelAccess"] }).success, true);
+  assert.equal(antigravityProbeSchema.safeParse({ probeModels: ["gemini_flash_3_8"], probeCapabilities: ["sandboxStartup"], workspaceReadTarget: "trusted_workspace" }).success, true);
   assert.equal(antigravityProbeSchema.safeParse({ probeModels: ["gemini_flash_3_6"], probeCapabilities: ["modelAccess"] }).success, false);
   assert.equal(antigravityProbeSchema.safeParse({ probeModels: ["gemini_flash_3_8"], probeCapabilities: ["promptInjection"] }).success, false);
   assert.equal(antigravityProbeSchema.safeParse({ probeModels: Array(6).fill("gemini_flash_3_8"), probeCapabilities: ["modelAccess"] }).success, false);

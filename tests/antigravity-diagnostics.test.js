@@ -64,7 +64,7 @@ test("AGD-02: sınıflandırılamayan çıkış gerçek kod ile process_exit olu
   assert.equal(result.reason, "process_exit");
   assert.equal(result.retryable, false);
   assert.equal(result.exitCode, 1);
-  assert.equal(result.metrics.diagnostics.failureStage, "provider_execution");
+  assert.equal(result.metrics.diagnostics.failureStage, "provider_process_exit");
   assert.equal(result.metrics.diagnostics.providerCode, "process_exit");
   assert.equal(outputSizeBucket(result.metrics.diagnostics.stderrBytes), "lte_1_kib");
   assert.equal(outputSizeBucket(result.metrics.diagnostics.stdoutBytes), "empty");
@@ -76,7 +76,7 @@ test("AGD-03: RESOURCE_EXHAUSTED rate_limited ve resource_exhausted olur", async
   assert.equal(result.reason, "rate_limited");
   assert.equal(result.retryable, true);
   assert.equal(result.metrics.diagnostics.providerCode, "resource_exhausted");
-  assert.equal(result.metrics.diagnostics.failureStage, "provider_execution");
+  assert.equal(result.metrics.diagnostics.failureStage, "provider_rate_limit");
 });
 
 test("AGD-04: 503 yanıtı server ve unavailable olur", async (t) => {
@@ -92,6 +92,7 @@ test("AGD-05: UNAUTHENTICATED authentication_failure olur ve retry edilmez", asy
   const result = await executeFixture("auth", { workspace: root });
   assert.equal(result.reason, "authentication_failure");
   assert.equal(result.retryable, false);
+  assert.equal(result.metrics.diagnostics.failureStage, "provider_auth");
   assert.equal(result.metrics.diagnostics.providerCode, "unauthenticated");
 });
 

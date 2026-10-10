@@ -110,6 +110,8 @@ test("DRILL-01: auth hatası yeniden denenmez, circuit'e yazılmaz ve metric red
   assert.equal(validateSubagentResult(result).success, true);
   assert.equal(calls, 1);
   assert.equal(result.metrics.attempts.length, 1);
+  assert.equal(result.metrics.attempts[0].failureStage, "provider_auth");
+  assert.equal(result.metrics.attempts[0].providerCode, "unauthenticated");
   assert.equal(result.metrics.attempts[0].retryDecision, "stop");
   assert.equal(result.metrics.attempts[0].retryStopReason, "non_retryable_failure_class");
 
@@ -143,6 +145,8 @@ test("DRILL-02: quota hatası retry edilir, circuit açılır ve sonraki çağr�
   assert.equal(validateSubagentResult(first).success, true);
   assert.equal(calls, 2);
   assert.equal(first.metrics.attempts.length, 2);
+  assert.equal(first.metrics.attempts[0].failureStage, "provider_rate_limit");
+  assert.equal(first.metrics.attempts[0].providerCode, "rate_limited");
   assert.equal(first.metrics.attempts[0].retryDecision, "retry");
   assert.equal(first.metrics.attempts[1].retryDecision, "stop");
   assert.equal(first.metrics.attempts[1].retryStopReason, "max_attempts_reached");
@@ -183,6 +187,8 @@ test("DRILL-03: izin hatası yeniden denenmez ve circuit kapalı kalır", async 
   assert.equal(result.ok, false);
   assert.equal(result.reason, "permission_denied");
   assert.equal(calls, 1);
+  assert.equal(result.metrics.attempts[0].failureStage, "provider_execution");
+  assert.equal(result.metrics.attempts[0].providerCode, "permission_denied");
   assert.equal(result.metrics.attempts[0].retryStopReason, "non_retryable_failure_class");
 
   const health = await runtime.health(["codex"]);
@@ -194,7 +200,7 @@ test("DRILL-03: izin hatası yeniden denenmez ve circuit kapalı kalır", async 
   assertRedactedMetric(metric, root);
 });
 
-test("DRILL-04: bozuk sonuç schema_invalid olarak sınıflanır ve result_parse aşamasında kalır", async (t) => {
+test("DRILL-04: invalid adapter envelope does not enter operational retry and remains result_parse", async (t) => {
   const root = fixtureDirectory(t, "malformed");
   const configuration = createConfiguration(root);
   let calls = 0;
@@ -209,12 +215,12 @@ test("DRILL-04: bozuk sonuç schema_invalid olarak sınıflanır ve result_parse
   assert.equal(result.ok, false);
   assert.equal(result.reason, "schema_invalid");
   assert.equal(validateSubagentResult(result).success, true);
-  assert.equal(calls, 2);
-  assert.equal(result.metrics.attempts.length, 2);
+  assert.equal(calls, 1);
+  assert.equal(result.metrics.attempts.length, 1);
   assert.equal(result.metrics.attempts[0].failureClass, "schema_invalid");
   assert.equal(result.metrics.attempts[0].failureStage, "result_parse");
-  assert.equal(result.metrics.attempts[0].retryDecision, "retry");
-  assert.equal(result.metrics.attempts[1].retryStopReason, "max_attempts_reached");
+  assert.equal(result.metrics.attempts[0].retryDecision, "stop");
+  assert.equal(result.metrics.attempts[0].retryStopReason, "non_retryable_failure_class");
 
   const health = await runtime.health(["codex"]);
   assert.equal(health.circuits.codex.state, "closed");
@@ -224,6 +230,33 @@ test("DRILL-04: bozuk sonuç schema_invalid olarak sınıflanır ve result_parse
   assert.equal(metric.failureClass, "schema_invalid");
   assert.equal(metric.failureStage, "result_parse");
   assertRedactedMetric(metric, root);
+});
+
+test("DRILL-09: OS spawn error is classified and recorded without raw error text", async (t) => {
+  const root = fixtureDirectory(t, "spawn-error");
+  const configuration = createConfiguration(root);
+  let calls = 0;
+  const spawnError = Object.assign(new Error("untrusted executable path detail"), { code: "ENAMETOOLONG" });
+  const adapter = createFakeAdapter(async () => {
+    calls += 1;
+    throw spawnError;
+  });
+  const runtime = createBridgeRuntime({ configuration, adapters: { codex: adapter }, sleep: async () => {} });
+  const result = await runtime.run(runRequest(root));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "prompt_transport_limit");
+  assert.equal(result.error, "process command-line budget exceeded");
+  assert.equal(result.error.includes("untrusted executable path detail"), false);
+  assert.equal(result.metrics.attempts.length, 1);
+  assert.equal(result.metrics.attempts[0].failureStage, "process_spawn");
+  assert.equal(result.metrics.attempts[0].providerCode, "prompt_transport_limit");
+  assert.equal(result.metrics.attempts[0].osErrorCode, "ENAMETOOLONG");
+  assert.equal(result.metrics.attempts[0].retryDecision, "stop");
+  assert.equal(calls, 1);
+  const [metric] = runRecords(configuration);
+  assert.equal(metric.attempts[0].osErrorCode, "ENAMETOOLONG");
+  assert.equal(JSON.stringify(metric).includes("untrusted executable path detail"), false);
 });
 
 test("DRILL-05: timeout read-only'de retry edilir, edit'te mutation_state_unknown olur", async (t) => {

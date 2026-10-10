@@ -1,7 +1,51 @@
 import { z } from "zod";
 import { webEvidenceEnvelopeSchema } from "../web-evidence.js";
 
-export const failureStageValues = ["mcp_preflight", "settings_lock", "settings_enforcement", "provider_execution", "result_parse"];
+export const failureStageValues = [
+  "mcp_preflight",
+  "process_spawn",
+  "sandbox_setup",
+  "workspace_read",
+  "settings_lock",
+  "settings_enforcement",
+  "provider_auth",
+  "provider_rate_limit",
+  "provider_execution",
+  "provider_process_exit",
+  "result_parse",
+  "evidence_invalid",
+  "cancelled"
+];
+export const operatingSystemErrorCodeValues = [
+  "E2BIG",
+  "EACCES",
+  "EADDRNOTAVAIL",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EEXIST",
+  "EHOSTUNREACH",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EMFILE",
+  "ENETUNREACH",
+  "ENFILE",
+  "ENAMETOOLONG",
+  "ENOENT",
+  "ENOTDIR",
+  "ENOTFOUND",
+  "EPERM"
+];
+export const webEvidenceFailureCodeValues = [
+  "provider_result_missing",
+  "result_contains_restricted_content",
+  "source_url_rejected",
+  "excerpt_rejected",
+  "evidence_metadata_rejected",
+  "carrier_missing_or_malformed",
+  "carrier_fields_invalid",
+  "unclassified_evidence_rejection"
+];
 export const providerCodeValues = [
   "resource_exhausted",
   "rate_limited",
@@ -9,6 +53,7 @@ export const providerCodeValues = [
   "permission_denied",
   "timeout",
   "output_limit",
+  "prompt_transport_limit",
   "executable_missing",
   "internal_error",
   "bad_gateway",
@@ -31,7 +76,10 @@ export const retryStopReasonValues = [
   "max_attempts_reached",
   "budget_exhausted",
   "budget_reserved",
-  "schema_repair_exhausted"
+  "schema_repair_exhausted",
+  "schema_repair_budget_exhausted",
+  "web_evidence_repair_exhausted",
+  "web_evidence_repair_budget_exhausted"
 ];
 export const processSignalValues = [
   "SIGABRT",
@@ -49,8 +97,9 @@ export const processSignalValues = [
   "SIGXFSZ"
 ];
 export const outputSizeBucketValues = ["empty", "lte_1_kib", "lte_64_kib", "lte_1_mib", "gt_1_mib"];
+export const webReadStatusValues = ["not_traced", "not_observed", "unavailable", "not_invoked", "used", "permission_denied", "failed"];
 export const capabilityStatusValues = ["not_probed", "available", "unavailable"];
-export const capabilityNames = ["modelAccess", "toolFreeResponse", "workspaceRead", "webRead"];
+export const capabilityNames = ["modelAccess", "toolFreeResponse", "workspaceRead", "webRead", "sandboxStartup"];
 export const capabilityFailureClassValues = [
   "timeout",
   "output_limit",
@@ -65,13 +114,31 @@ export const capabilityFailureClassValues = [
   "process_exit",
   "process_error",
   "invalid_model",
+  "sandbox_setup",
+  "workspace_read",
   "unclassified"
 ];
+
+export const reviewScopeStatusValues = ["not_requested", "complete", "blocked"];
+export const reviewContractDeliveryStatusValues = ["not_attempted", "complete_to_cli", "failed"];
+export const reviewEligibilityValues = ["eligible_for_orchestrator_evaluation", "unverified", "unavailable"];
+export const reviewContractSchema = z.object({
+  version: z.literal(1),
+  sourceScopeStatus: z.enum(reviewScopeStatusValues),
+  sourceDeliveryStatus: z.enum(reviewContractDeliveryStatusValues),
+  sourceManifestSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  sourceFileCount: z.number().int().min(0).nullable(),
+  sourceBytes: z.number().int().min(0).nullable(),
+  reviewEligibility: z.enum(reviewEligibilityValues)
+}).strict();
+export const reviewSourceDeliveryStatusValues = ["complete_to_cli", "failed"];
 
 export const capabilityProbeSchema = z.object({
   modelAccess: z.enum(capabilityStatusValues),
   toolFreeResponse: z.enum(capabilityStatusValues),
   workspaceRead: z.enum(capabilityStatusValues),
+  sandboxStartup: z.enum(capabilityStatusValues),
+  workspaceReadTarget: z.enum(["not_probed", "temp_workspace", "trusted_workspace"]).nullable(),
   webRead: z.enum(capabilityStatusValues),
   failureClass: z.enum(capabilityFailureClassValues).nullable(),
   checkedAt: z.string().datetime().nullable()
@@ -80,6 +147,8 @@ export const capabilityProbeSchema = z.object({
 export const attemptDiagnosticsSchema = z.object({
   failureStage: z.enum(failureStageValues).nullable(),
   providerCode: z.enum(providerCodeValues).nullable(),
+  osErrorCode: z.enum(operatingSystemErrorCodeValues).nullable().optional(),
+  webEvidenceFailureCode: z.enum(webEvidenceFailureCodeValues).nullable().optional(),
   settingsLockWaitMs: z.number().int().min(0).nullable(),
   providerExecutionMs: z.number().int().min(0).nullable(),
   stdoutBytes: z.number().int().min(0).nullable(),
@@ -96,6 +165,7 @@ export const healthResultSchema = z.object({
     modelAccess: z.enum(capabilityStatusValues),
     toolFreeResponse: z.enum(capabilityStatusValues),
     workspaceRead: z.enum(capabilityStatusValues),
+    sandboxStartup: z.enum(capabilityStatusValues),
     webRead: z.enum(capabilityStatusValues)
   }).strict().optional(),
   capabilityProbes: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/), capabilityProbeSchema).optional(),
@@ -123,8 +193,13 @@ export const subagentResultSchema = z.object({
     cacheHit: z.boolean().optional(),
     fallbacks: z.number().int().min(0).optional(),
     totalCostUsd: z.number().min(0).nullable().optional(),
+    stdinWriteStatus: z.enum(["not_used", "pending", "complete", "failed"]).optional(),
+    stdinBytes: z.number().int().min(0).nullable().optional(),
+    reviewContract: reviewContractSchema.optional(),
+    reviewSourceDeliveryStatus: z.enum(reviewSourceDeliveryStatusValues).optional(),
     signal: z.string().nullable().optional(),
     diagnostics: attemptDiagnosticsSchema.optional(),
+    webReadStatus: z.enum(webReadStatusValues).optional(),
     costBudget: z.object({
       period: z.enum(["daily", "monthly"]),
       limitUsd: z.number().min(0),
@@ -136,6 +211,8 @@ export const subagentResultSchema = z.object({
       failureClass: z.string().nullable(),
       failureStage: z.enum(failureStageValues).nullable().optional(),
       providerCode: z.enum(providerCodeValues).nullable().optional(),
+      osErrorCode: z.enum(operatingSystemErrorCodeValues).nullable().optional(),
+      webEvidenceFailureCode: z.enum(webEvidenceFailureCodeValues).nullable().optional(),
       retryDecision: z.enum(retryDecisionValues).optional(),
       retryStopReason: z.enum(retryStopReasonValues).nullable().optional(),
       signal: z.string().nullable().optional(),
@@ -156,6 +233,7 @@ export const subagentResultSchema = z.object({
     webEvidenceRepair: z.boolean().optional()
   }).strict(),
   webEvidence: webEvidenceEnvelopeSchema.nullable().optional(),
+  reviewContract: reviewContractSchema.optional(),
   artifacts: z.object({
     filesChanged: z.array(z.string()).optional(),
     summary: z.string().optional()
@@ -227,6 +305,12 @@ export const subagentExecutionRequestSchema = z.object({
   workspace: z.string().min(1),
   delegationDepth: z.number().int().min(0),
   caller: z.string().min(1),
+  reviewEvidenceRequirement: z.enum(["best_effort", "required"]).optional(),
+  reviewScope: z.array(z.string().min(1).max(500)).min(1).max(50).optional(),
+  reviewSourcePayload: z.string().max(300 * 1024).optional(),
+  webReadTrace: z.boolean().optional(),
+  maxOutputBytes: z.number().int().min(1024).max(8388608).optional(),
+  maxOutputTokens: z.number().int().min(1).max(32768).optional(),
   timeoutMs: z.number().int().min(1000)
 }).strict();
 
@@ -260,7 +344,8 @@ export function createFailureSubagentResult(backend, model, overrides = {}) {
     exitCode: "exitCode" in overrides ? overrides.exitCode : 1,
     durationMs: overrides.durationMs ?? 0,
     reason: overrides.reason,
-    metrics: { retries: overrides.retries ?? 0, ...(overrides.metrics || {}) }
+    metrics: { retries: overrides.retries ?? 0, ...(overrides.metrics || {}) },
+    ...(overrides.reviewContract ? { reviewContract: overrides.reviewContract } : {})
   };
 }
 
@@ -278,6 +363,7 @@ export function createSuccessSubagentResult(backend, model, overrides = {}) {
     exitCode: 0,
     durationMs: overrides.durationMs ?? 0,
     metrics: { retries: overrides.retries ?? 0, ...(overrides.metrics || {}) },
+    ...(overrides.reviewContract ? { reviewContract: overrides.reviewContract } : {}),
     artifacts: overrides.artifacts,
     ...(Object.hasOwn(overrides, "webEvidence") ? { webEvidence: overrides.webEvidence } : {})
   };

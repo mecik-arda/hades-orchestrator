@@ -3,12 +3,30 @@ import { z } from "zod";
 import { validateWorkspace } from "../../config.js";
 import { ANTIGRAVITY_MODEL_MAP } from "../../adapters/antigravity-adapter.js";
 import { detectWebIntent } from "../../web-evidence.js";
+import {
+  approveParallelIntegrationRequestSchema,
+  cancelParallelBatchRequestSchema,
+  getParallelBatchRequestSchema,
+  getParallelTaskDetailRequestSchema,
+  prepareParallelBatchRequestSchema,
+  startParallelBatchRequestSchema
+} from "../../schemas/parallel-batch-schema.js";
 
 const modeSchema = z.enum(["read_only", "edit"]).default("read_only");
 const readOnlyModeSchema = z.literal("read_only").default("read_only");
 const timeoutSecondsSchema = z.number().int().min(10).max(1200).optional();
 const profileSchema = z.string().min(1).max(64);
+const reviewScopeSchema = z.array(z.string().min(1).max(500)).min(1).max(50).optional();
+const reviewEvidenceRequirementSchema = z.enum(["best_effort", "required"]).default("best_effort");
 const approvalRequestIdSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const refineDirectReviewScope = (value, context) => {
+  if (value.reviewEvidenceRequirement === "required" && (!value.reviewScope || value.reviewScope.length === 0)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["reviewScope"], message: "required review evidence needs an explicit non-empty reviewScope" });
+  }
+  if (value.mode === "edit" && value.reviewScope?.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["reviewScope"], message: "reviewScope is only available for read-only tasks" });
+  }
+};
 const riskSignalsSchema = z.object({
   externalService: z.boolean().optional(),
   irreversible: z.boolean().optional()
@@ -16,7 +34,8 @@ const riskSignalsSchema = z.object({
 
 export const antigravityProbeFields = {
   probeModels: z.array(z.enum(["gemini_pro", "gemini_flash", "gemini_flash_3_7", "gemini_flash_3_8", "claude_sonnet"])).max(5).default([]),
-  probeCapabilities: z.array(z.enum(["modelAccess", "toolFreeResponse", "workspaceRead", "webRead"])).max(4).default([])
+  probeCapabilities: z.array(z.enum(["modelAccess", "toolFreeResponse", "workspaceRead", "webRead", "sandboxStartup"])).max(5).default([]),
+  workspaceReadTarget: z.enum(["temp_workspace", "trusted_workspace"]).default("temp_workspace")
 };
 
 export const antigravityProbeSchema = z.object(antigravityProbeFields).strict();
@@ -50,20 +69,26 @@ export const publicToolSchemas = {
     model: z.enum(["gemini_pro", "gemini_flash", "gemini_flash_3_7", "gemini_flash_3_8", "claude_sonnet"]),
     mode: readOnlyModeSchema,
     timeout_seconds: timeoutSecondsSchema,
-    workspace: z.string().min(1).optional()
-  }).strict(),
+    workspace: z.string().min(1).optional(),
+    reviewEvidenceRequirement: reviewEvidenceRequirementSchema,
+    reviewScope: reviewScopeSchema
+  }).strict().superRefine(refineDirectReviewScope),
   runClaudeCode: z.object({
     prompt: z.string().min(1).max(60000),
     model: z.string().min(1).optional(),
     mode: readOnlyModeSchema,
-    timeout_seconds: timeoutSecondsSchema
-  }).strict(),
+    timeout_seconds: timeoutSecondsSchema,
+    reviewEvidenceRequirement: reviewEvidenceRequirementSchema,
+    reviewScope: reviewScopeSchema
+  }).strict().superRefine(refineDirectReviewScope),
   runOpenCode: z.object({
     prompt: z.string().min(1).max(60000),
     model: z.string().min(1),
     mode: readOnlyModeSchema,
-    timeout_seconds: timeoutSecondsSchema
-  }).strict(),
+    timeout_seconds: timeoutSecondsSchema,
+    reviewEvidenceRequirement: reviewEvidenceRequirementSchema,
+    reviewScope: reviewScopeSchema
+  }).strict().superRefine(refineDirectReviewScope),
   runSpaceBunny: z.object({
     taskId: z.string().min(1).max(120),
     role: z.enum(["analyst", "researcher", "reviewer", "planner", "implementer"]),
@@ -78,6 +103,7 @@ export const publicToolSchemas = {
     if (value.mode === "edit" && value.role !== "implementer") context.addIssue({ code: z.ZodIssueCode.custom, path: ["role"], message: "edit mode requires implementer role" });
     if (value.mode === "edit" && value.files.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ["files"], message: "edit mode requires selected target files" });
     if (value.mode === "edit" && value.acceptanceCriteria.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ["acceptanceCriteria"], message: "edit mode requires acceptance criteria" });
+    if (value.mode === "read_only" && value.role === "reviewer" && value.files.length + value.contextFiles.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ["files"], message: "verified reviewer tasks require an explicit source scope" });
     if (value.webResearch && (value.mode !== "read_only" || value.role !== "researcher")) context.addIssue({ code: z.ZodIssueCode.custom, path: ["webResearch"], message: "web research requires read-only researcher role" });
     if (value.role === "researcher" && !value.webResearch) context.addIssue({ code: z.ZodIssueCode.custom, path: ["webResearch"], message: "researcher role requires explicit webResearch opt-in" });
   }),
@@ -94,18 +120,22 @@ export const publicToolSchemas = {
     prompt: z.string().min(1).max(60000),
     model: z.string().min(1).max(120).default("gpt-6.1-sol"),
     mode: readOnlyModeSchema,
-    timeout_seconds: timeoutSecondsSchema
-  }).strict(),
+    timeout_seconds: timeoutSecondsSchema,
+    reviewEvidenceRequirement: reviewEvidenceRequirementSchema,
+    reviewScope: reviewScopeSchema
+  }).strict().superRefine(refineDirectReviewScope),
   runProfile: z.object({
     prompt: z.string().min(1).max(60000),
     profile: profileSchema,
     taskId: z.string().min(1).max(120).optional(),
     files: z.array(z.string().min(1).max(500)).max(100).default([]),
     contextFiles: z.array(z.string().min(1).max(500)).max(100).default([]),
+    reviewScope: reviewScopeSchema,
+    reviewEvidenceRequirement: reviewEvidenceRequirementSchema,
     acceptanceCriteria: z.array(z.string().min(1).max(4000)).max(50).default([]),
     timeout_seconds: timeoutSecondsSchema,
     riskSignals: riskSignalsSchema.optional()
-  }).strict(),
+  }).strict().superRefine(refineDirectReviewScope),
   runDeepSeek: z.object({
     taskId: z.string().min(1).max(120),
     role: z.enum(["analyst", "researcher", "reviewer", "planner", "implementer"]),
@@ -115,10 +145,12 @@ export const publicToolSchemas = {
     workspace: z.string().min(1),
     files: z.array(z.string()).max(200).default([]),
     contextFiles: z.array(z.string()).max(100).default([]),
-    skills: z.array(z.enum(["commit-at", "guvenlik-ve-sertlestirme", "kod-denetleyicisi", "otomatik-dokumantasyon", "veri-seti-analizcisi", "proje-kesif-planlama", "model-saglayici-ekleme", "dogrulama-kapisi", "mcp-sozlesme-denetimi", "hafiza-vault-bakimi", "maliyet-ve-butce-denetimi", "bagimlilik-guvenligi"])).max(12).default([]),
+    skills: z.array(z.enum(["commit-at", "guvenlik-ve-sertlestirme", "kod-denetleyicisi", "otomatik-dokumantasyon", "veri-seti-analizcisi", "proje-kesif-planlama", "model-saglayici-ekleme", "dogrulama-kapisi", "mcp-sozlesme-denetimi", "hafiza-vault-bakimi", "maliyet-ve-butce-denetimi", "bagimlilik-guvenligi", "subagent-orkestrasyonu"])).max(12).default([]),
     acceptanceCriteria: z.array(z.string()).min(1).max(50),
     riskSignals: riskSignalsSchema.optional()
-  }).strict(),
+  }).strict().superRefine((value, context) => {
+    if (value.mode === "read_only" && value.role === "reviewer" && value.files.length + value.contextFiles.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ["files"], message: "verified reviewer tasks require at least one selected source path" });
+  }),
   runDeepSeekEditPilot: z.object({
     taskId: z.string().min(1).max(120),
     model: z.enum(["deepseek_pro", "deepseek_flash"]).default("deepseek_pro"),
@@ -140,7 +172,9 @@ export const publicToolSchemas = {
     acceptanceCriteria: z.array(z.string()).min(1).max(50),
     timeout_seconds: timeoutSecondsSchema,
     riskSignals: riskSignalsSchema.optional()
-  }).strict(),
+  }).strict().superRefine((value, context) => {
+    if (value.mode === "read_only" && value.role === "reviewer" && value.files.length + value.contextFiles.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ["files"], message: "verified reviewer tasks require at least one selected source path" });
+  }),
   runGlmEditPilot: z.object({
     taskId: z.string().min(1).max(120),
     model: z.enum(["glm_5_2", "glm_5_2_highspeed", "glm_5_3", "glm_5_3_flash"]).default("glm_5_2"),
@@ -162,13 +196,22 @@ export const publicToolSchemas = {
     acceptanceCriteria: z.array(z.string()).min(1).max(50),
     timeout_seconds: timeoutSecondsSchema,
     riskSignals: riskSignalsSchema.optional()
-  }).strict(),
+  }).strict().superRefine((value, context) => {
+    if (value.mode === "read_only" && value.role === "reviewer" && value.files.length + value.contextFiles.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, path: ["files"], message: "verified reviewer tasks require at least one selected source path" });
+  }),
   approvePreparedEdit: z.object({
     approvalRequestId: approvalRequestIdSchema
   }).strict(),
+  prepareParallelBatch: prepareParallelBatchRequestSchema,
+  startParallelBatch: startParallelBatchRequestSchema,
+  getParallelBatch: getParallelBatchRequestSchema,
+  getParallelTaskDetail: getParallelTaskDetailRequestSchema,
+  cancelParallelBatch: cancelParallelBatchRequestSchema,
+  approveParallelIntegration: approveParallelIntegrationRequestSchema,
   checkProviderCapability: z.object({
     provider: z.enum(["antigravity", "codex", "claude_code", "opencode"]),
-    model: z.string().min(1).max(120).optional()
+    model: z.string().min(1).max(120).optional(),
+    probeWorkspaceRead: z.boolean().default(false)
   }).strict()
 };
 
@@ -188,6 +231,27 @@ function toMcpResult(result) {
   };
 }
 
+function toParallelBatchResult(result) {
+  if (!result || result.ok === false) {
+    const payload = { ok: false, reason: result?.reason || "parallel_batch_failed", message: result?.message || null };
+    return { isError: true, content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload };
+  }
+  const summary = result.summary || null;
+  const payload = {
+    ok: true,
+    planId: result.planId ?? summary?.planId ?? null,
+    planHash: result.planHash ?? summary?.planHash ?? null,
+    batchId: result.batchId ?? summary?.batchId ?? null,
+    ...(result.alreadyStarted ? { alreadyStarted: true } : {}),
+    ...(result.allocation ? { allocation: result.allocation } : {}),
+    ...(result.dashboard ? { dashboard: result.dashboard } : {}),
+    ...(result.cancellation ? { cancellation: result.cancellation } : {}),
+    ...(result.page ? { page: result.page } : {}),
+    summary
+  };
+  return { isError: false, content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], structuredContent: payload };
+}
+
 function createRuntimeRequest(input, target, trustedWorkspace, caller, abortSignal, options = {}) {
   return {
     target,
@@ -199,6 +263,8 @@ function createRuntimeRequest(input, target, trustedWorkspace, caller, abortSign
     delegationDepth: 0,
     timeoutMs: input.timeout_seconds ? input.timeout_seconds * 1000 : undefined,
     profile: input.profile,
+    reviewEvidenceRequirement: input.reviewEvidenceRequirement,
+    reviewScope: input.reviewScope,
     abortSignal,
     ...options
   };
@@ -248,7 +314,8 @@ export function createMcpToolHandlers({ runtime, trustedWorkspace, caller = "ope
     async runSpaceBunny(input, context = {}) {
       const parsed = parse(publicToolSchemas.runSpaceBunny, input);
       requireImplementerEdit(parsed);
-      const result = await runtime.runSpaceBunny(parsed, trustedWorkspace, context.signal);
+      const reviewScope = parsed.role === "reviewer" ? [...new Set([...parsed.files, ...parsed.contextFiles])] : undefined;
+      const result = await runtime.runSpaceBunny({ ...parsed, reviewScope, reviewEvidenceRequirement: parsed.role === "reviewer" ? "required" : "best_effort" }, trustedWorkspace, context.signal);
       return { isError: result.status ? result.status !== "completed" : result.ok === false, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result };
     },
     async runSpaceBunnyEditPilot(input, context = {}) {
@@ -278,6 +345,8 @@ export function createMcpToolHandlers({ runtime, trustedWorkspace, caller = "ope
           objective: parsed.prompt,
           files: parsed.files,
           contextFiles: parsed.contextFiles,
+          reviewScope: parsed.reviewScope,
+          reviewEvidenceRequirement: parsed.reviewEvidenceRequirement,
           acceptanceCriteria: parsed.acceptanceCriteria.length > 0 ? parsed.acceptanceCriteria : ["Return a concise, evidence-based result."],
           riskSignals: parsed.riskSignals
         };
@@ -295,7 +364,8 @@ export function createMcpToolHandlers({ runtime, trustedWorkspace, caller = "ope
     async runDeepSeek(input, context = {}) {
       const parsed = parse(publicToolSchemas.runDeepSeek, input);
       requireImplementerEdit(parsed);
-      const result = await runtime.runDeepSeek(parsed, trustedWorkspace, context.signal);
+      const reviewScope = parsed.role === "reviewer" ? [...new Set([...parsed.files, ...parsed.contextFiles])] : undefined;
+      const result = await runtime.runDeepSeek({ ...parsed, reviewScope, reviewEvidenceRequirement: parsed.role === "reviewer" ? "required" : "best_effort" }, trustedWorkspace, context.signal);
       return {
         isError: result.status ? result.status !== "completed" : result.ok === false,
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -314,7 +384,8 @@ export function createMcpToolHandlers({ runtime, trustedWorkspace, caller = "ope
     async runGlm(input, context = {}) {
       const parsed = parse(publicToolSchemas.runGlm, input);
       requireImplementerEdit(parsed);
-      const result = await runtime.runGlm(parsed, trustedWorkspace, context.signal);
+      const reviewScope = parsed.role === "reviewer" ? [...new Set([...parsed.files, ...parsed.contextFiles])] : undefined;
+      const result = await runtime.runGlm({ ...parsed, reviewScope, reviewEvidenceRequirement: parsed.role === "reviewer" ? "required" : "best_effort" }, trustedWorkspace, context.signal);
       return {
         isError: result.status ? result.status !== "completed" : result.ok === false,
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -333,13 +404,15 @@ export function createMcpToolHandlers({ runtime, trustedWorkspace, caller = "ope
     async runKimi(input, context = {}) {
       const parsed = parse(publicToolSchemas.runCatalogProvider, input);
       requireImplementerEdit(parsed);
-      const result = await runtime.runCatalogProvider("kimi", parsed, trustedWorkspace, context.signal);
+      const reviewScope = parsed.role === "reviewer" ? [...new Set([...parsed.files, ...parsed.contextFiles])] : undefined;
+      const result = await runtime.runCatalogProvider("kimi", { ...parsed, reviewScope, reviewEvidenceRequirement: parsed.role === "reviewer" ? "required" : "best_effort" }, trustedWorkspace, context.signal);
       return { isError: result.status ? result.status !== "completed" : result.ok === false, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result };
     },
     async runQwen(input, context = {}) {
       const parsed = parse(publicToolSchemas.runCatalogProvider, input);
       requireImplementerEdit(parsed);
-      const result = await runtime.runCatalogProvider("qwen", parsed, trustedWorkspace, context.signal);
+      const reviewScope = parsed.role === "reviewer" ? [...new Set([...parsed.files, ...parsed.contextFiles])] : undefined;
+      const result = await runtime.runCatalogProvider("qwen", { ...parsed, reviewScope, reviewEvidenceRequirement: parsed.role === "reviewer" ? "required" : "best_effort" }, trustedWorkspace, context.signal);
       return { isError: result.status ? result.status !== "completed" : result.ok === false, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result };
     },
     async approvePreparedEdit(input) {
@@ -347,12 +420,41 @@ export function createMcpToolHandlers({ runtime, trustedWorkspace, caller = "ope
       const result = await runtime.approvePreparedEdit(parsed, trustedWorkspace);
       return { isError: result.status !== "completed", content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result };
     },
+    async prepareParallelBatch(input) {
+      const parsed = parse(publicToolSchemas.prepareParallelBatch, input);
+      return toParallelBatchResult(await runtime.prepareParallelBatch(parsed, trustedWorkspace));
+    },
+    async startParallelBatch(input) {
+      const parsed = parse(publicToolSchemas.startParallelBatch, input);
+      return toParallelBatchResult(await runtime.startParallelBatch(parsed, trustedWorkspace));
+    },
+    async getParallelBatch(input) {
+      const parsed = parse(publicToolSchemas.getParallelBatch, input);
+      return toParallelBatchResult(await runtime.getParallelBatch(parsed, trustedWorkspace));
+    },
+    async getParallelTaskDetail(input) {
+      const parsed = parse(publicToolSchemas.getParallelTaskDetail, input);
+      return toParallelBatchResult(await runtime.getParallelTaskDetail(parsed, trustedWorkspace));
+    },
+    async cancelParallelBatch(input) {
+      const parsed = parse(publicToolSchemas.cancelParallelBatch, input);
+      return toParallelBatchResult(await runtime.cancelParallelBatch(parsed, trustedWorkspace));
+    },
+    async approveParallelIntegration(input) {
+      const parsed = parse(publicToolSchemas.approveParallelIntegration, input);
+      return toParallelBatchResult(await runtime.approveParallelIntegration(parsed, trustedWorkspace));
+    },
     async checkProviderCapability(input) {
       const parsed = parse(publicToolSchemas.checkProviderCapability, input);
       if ((parsed.provider === "antigravity" || parsed.provider === "opencode") && !parsed.model) throw new Error("capability probe requires a model for this provider");
       if (parsed.provider === "antigravity" && !Object.hasOwn(ANTIGRAVITY_MODEL_MAP, parsed.model)) throw new Error("capability probe model is not an Antigravity alias");
       const target = parsed.provider === "antigravity" ? parsed.model : parsed.provider === "claude_code" ? "native_claude" : parsed.provider;
-      const result = await runtime.probeCapability({ target, model: parsed.provider === "antigravity" ? undefined : parsed.model, trustedWorkspace });
+      const result = await runtime.probeCapability({
+        target,
+        model: parsed.provider === "antigravity" ? undefined : parsed.model,
+        trustedWorkspace,
+        probeWorkspaceRead: parsed.probeWorkspaceRead
+      });
       return { isError: false, content: [{ type: "text", text: JSON.stringify({ ...result, provider: parsed.provider }, null, 2) }], structuredContent: { ...result, provider: parsed.provider } };
     }
   };

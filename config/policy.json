@@ -23,7 +23,8 @@
                                     "m2-hook-sonuc-geri-bildirimi",
                                     "m2-hook-proje-kohortu",
                                     "m2-hook-tarihsel-atif",
-                                    "m2-hook-metrik-incelemesi"
+                                    "m2-hook-metrik-incelemesi",
+                                    "subagent-orkestrasyonu"
                                 ]
                },
     "deepseek":  {
@@ -448,5 +449,42 @@
                                                 "latencyP95Ms":  600000
                                             },
                           "webIntentHeuristics":  true
+                      },
+    "parallelBatch":  {
+                          "enabled":  false,
+                          "editEnabled":  false,
+                          "maxWorkers":  5,
+                          "providerConcurrency":  {
+                                                      "codex":  2,
+                                                      "opencode":  2
+                                                  },
+                          "defaultProviderConcurrency":  2,
+                          "planTtlMs":  600000,
+                          "maxSummaryCharacters":  4096,
+                          "maxBatchSummaryBytes":  20480,
+                          "maxReadablePathsPerTask":  50,
+                          "maxContextFilesPerTask":  100,
+                          "maxReadableSnapshotBytes":  8388608,
+                          "maxFilesChangedPerTask":  100,
+                          "maxFileBytesPerTask":  524288,
+                          "maxTotalDiffBytesPerTask":  2097152,
+                          "maxOutputBytesPerTask":  8388608,
+                          "artifactTtlMs":  86400000,
+                          "maxArtifactBytes":  1048576,
+                          "maxArtifactTotalBytes":  52428800,
+                          "allowedTargets":  [
+                                                 "codex",
+                                                 "opencode",
+                                                 "claude_code",
+                                                 "native_claude",
+                                                 "antigravity"
+                                             ],
+                          "opencodeOutputCapability":  "unavailable",
+                          "opencodeOutputTokens":  2048,
+                          "opencodeSteps":  8,
+                          "codexNetworkOffCapability":  "available",
+                          "autoOpenTerminalDashboard":  false,
+                          "verificationCommands":  [],
+                          "orphanGraceMs":  300000
                       }
 }

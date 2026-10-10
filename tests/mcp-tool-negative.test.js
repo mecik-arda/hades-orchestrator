@@ -16,6 +16,12 @@ const wrongTypePayloads = {
   runGlmEditPilot: { taskId: "t1", objective: "hedef", files: ["dosya"], acceptanceCriteria: "kriter" },
   runCatalogProvider: { taskId: "t1", role: "analyst", model: 42, mode: "read_only", objective: "hedef", acceptanceCriteria: ["kriter"] },
   approvePreparedEdit: { approvalRequestId: 123 },
+  prepareParallelBatch: { objective: "hedef", batchMaxReservedCostUsd: 1, tasks: "gorev-listesi" },
+  startParallelBatch: { planId: 42, planHash: "b".repeat(64) },
+  getParallelBatch: { batchId: 42 },
+  getParallelTaskDetail: { batchId: "a".repeat(32), taskId: "task-one", detailRef: 42 },
+  cancelParallelBatch: { batchId: false },
+  approveParallelIntegration: { batchId: "a".repeat(32), approvalRef: "b".repeat(64), expectedDiffHash: 42 },
   checkProviderCapability: { provider: 42 }
 };
 
@@ -56,4 +62,17 @@ test("MCP-NEG-04: store hafıza şeması acknowledgeInjectionRisk tipini doğrul
   assert.equal(storeMemorySchema.safeParse({ ...base, acknowledgeInjectionRisk: 42 }).success, false);
   assert.equal(storeMemorySchema.safeParse({ ...base, acknowledgeInjectionRisk: true }).success, true);
   assert.equal(storeMemorySchema.safeParse({ ...base, unexpected_field_for_test: true }).success, false);
+});
+
+test("MCP-DEEPSEEK-SKILL: yalnız allowlist'teki orkestrasyon skill'i kabul edilir", () => {
+  const base = {
+    taskId: "route-analysis",
+    role: "analyst",
+    mode: "read_only",
+    objective: "Inspect the local model routing contract",
+    workspace: "C:\\workspace",
+    acceptanceCriteria: ["Return source references"]
+  };
+  assert.equal(publicToolSchemas.runDeepSeek.safeParse({ ...base, skills: ["subagent-orkestrasyonu"] }).success, true);
+  assert.equal(publicToolSchemas.runDeepSeek.safeParse({ ...base, skills: ["unlisted-skill"] }).success, false);
 });

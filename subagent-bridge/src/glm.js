@@ -123,6 +123,8 @@ export function createGlmRuntimeRequest(configuration, input, trustedWorkspace, 
     mode: "read_only",
     trustedWorkspace: workspace,
     caller: "glm_opencode",
+    reviewEvidenceRequirement: input.reviewEvidenceRequirement,
+    reviewScope: input.reviewScope,
     delegationDepth: 0,
     metricBackend: "glm",
     timeoutMs: input.timeout_seconds ? input.timeout_seconds * 1000 : configuration.glm?.timeoutMs || configuration.opencode?.timeoutMs,
@@ -180,6 +182,7 @@ export function createGlmCheckpoint(input, runtimeResult) {
       turns: null,
       totalCostUsd: runtimeResult.metrics?.totalCostUsd ?? null
     },
+    ...(runtimeResult.reviewContract ? { reviewContract: runtimeResult.reviewContract } : {}),
     result
   };
 }

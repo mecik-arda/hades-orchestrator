@@ -127,6 +127,8 @@ export function createDeepSeekRuntimeRequest(configuration, input, trustedWorksp
     mode: "read_only",
     trustedWorkspace: workspace,
     caller: "deepseek_opencode",
+    reviewEvidenceRequirement: input.reviewEvidenceRequirement,
+    reviewScope: input.reviewScope,
     delegationDepth: 0,
     timeoutMs: configuration.deepseek.timeoutMs,
     abortSignal,
@@ -140,10 +142,12 @@ export function createDeepSeekCheckpoint(input, runtimeResult) {
   const normalized = runtimeResult.ok
     ? normalizeOpenCodeDeepSeekResult(runtimeResult.result)
     : { ok: false, errorClass: runtimeResult.reason || "process_exit" };
-  const result = normalized.ok
-    ? normalized.result
-    : createFailureResult(`structured output validation failed: ${normalized.errorClass}`);
-  const failureClass = normalized.ok ? (runtimeResult.ok ? null : runtimeResult.reason || "process_exit") : normalized.errorClass;
+  const result = !runtimeResult.ok
+    ? createFailureResult(`Subagent execution failed (${runtimeResult.reason || "process_exit"}); no structured review result was produced.`)
+    : normalized.ok
+      ? normalized.result
+      : createFailureResult(`Structured output validation failed (${normalized.errorClass}).`);
+  const failureClass = !runtimeResult.ok ? runtimeResult.reason || "process_exit" : normalized.ok ? null : normalized.errorClass;
   return {
     runId: createRunId(),
     taskId: input.taskId,
@@ -183,6 +187,7 @@ export function createDeepSeekCheckpoint(input, runtimeResult) {
       turns: null,
       totalCostUsd: runtimeResult.metrics?.totalCostUsd ?? null
     },
+    ...(runtimeResult.reviewContract ? { reviewContract: runtimeResult.reviewContract } : {}),
     result
   };
 }

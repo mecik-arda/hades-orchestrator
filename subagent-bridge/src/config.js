@@ -184,7 +184,36 @@ const configurationSchema = z.object({
       latencyP95Ms: z.number().int().positive().optional()
     }).strict().optional(),
     webIntentHeuristics: z.boolean().optional()
-  }).strict()
+  }).strict(),
+  parallelBatch: z.object({
+    enabled: z.boolean(),
+    editEnabled: z.boolean(),
+    maxWorkers: z.number().int().min(1).max(5),
+    providerConcurrency: z.record(z.string().min(1).max(64), z.number().int().min(1).max(10)).optional(),
+    defaultProviderConcurrency: z.number().int().min(1).max(10).optional(),
+    planTtlMs: z.number().int().positive().optional(),
+    maxSummaryCharacters: z.number().int().positive().optional(),
+    maxBatchSummaryBytes: z.number().int().min(4096).optional(),
+    maxReadablePathsPerTask: z.number().int().positive().max(200).optional(),
+    maxContextFilesPerTask: z.number().int().positive().max(200).optional(),
+    maxReadableSnapshotBytes: z.number().int().positive().optional(),
+    maxFilesChangedPerTask: z.number().int().positive().max(100).optional(),
+    maxFileBytesPerTask: z.number().int().positive().max(524288).optional(),
+    maxTotalDiffBytesPerTask: z.number().int().positive().max(2097152).optional(),
+    maxOutputBytesPerTask: z.number().int().positive().max(8388608).optional(),
+    artifactTtlMs: z.number().int().positive().optional(),
+    maxArtifactBytes: z.number().int().positive().optional(),
+    maxArtifactTotalBytes: z.number().int().positive().optional(),
+    allowedTargets: z.array(z.string().min(1).max(64)).min(1).max(20).optional(),
+    opencodeOutputCapability: z.enum(["available", "unavailable"]).optional(),
+    opencodeOutputTokens: z.number().int().positive().max(32768).optional(),
+    opencodeSteps: z.number().int().positive().max(50).optional(),
+    codexNetworkOffCapability: z.enum(["available", "unavailable"]).optional(),
+    autoOpenTerminalDashboard: z.boolean().optional(),
+    worktreeRoot: z.string().min(1).optional(),
+    verificationCommands: z.array(z.string().min(1).max(200)).max(20).optional(),
+    orphanGraceMs: z.number().int().positive().optional()
+  }).strict().optional()
 }).strict();
 
 export function validateConfiguration(rawConfiguration) {
@@ -248,6 +277,33 @@ export function loadConfiguration(options = {}) {
     reliability: configuration.reliability,
     observability: configuration.observability,
     orchestration: configuration.orchestration || {},
+    parallelBatch: {
+      enabled: configuration.parallelBatch?.enabled === true,
+      editEnabled: configuration.parallelBatch?.editEnabled === true,
+      maxWorkers: configuration.parallelBatch?.maxWorkers ?? 5,
+      providerConcurrency: configuration.parallelBatch?.providerConcurrency || {},
+      defaultProviderConcurrency: configuration.parallelBatch?.defaultProviderConcurrency ?? 2,
+      planTtlMs: configuration.parallelBatch?.planTtlMs ?? 600000,
+      maxSummaryCharacters: configuration.parallelBatch?.maxSummaryCharacters ?? 4096,
+      maxBatchSummaryBytes: configuration.parallelBatch?.maxBatchSummaryBytes ?? 20480,
+      maxReadablePathsPerTask: configuration.parallelBatch?.maxReadablePathsPerTask ?? 50,
+      maxContextFilesPerTask: configuration.parallelBatch?.maxContextFilesPerTask ?? 100,
+      maxReadableSnapshotBytes: configuration.parallelBatch?.maxReadableSnapshotBytes ?? 8388608,
+      artifactTtlMs: configuration.parallelBatch?.artifactTtlMs ?? 86400000,
+      maxArtifactBytes: configuration.parallelBatch?.maxArtifactBytes ?? 1048576,
+      maxArtifactTotalBytes: configuration.parallelBatch?.maxArtifactTotalBytes ?? 52428800,
+      allowedTargets: configuration.parallelBatch?.allowedTargets || ["codex", "opencode", "claude_code", "native_claude", "antigravity"],
+      opencodeOutputCapability: configuration.parallelBatch?.opencodeOutputCapability || "unavailable",
+      opencodeOutputTokens: configuration.parallelBatch?.opencodeOutputTokens ?? 2048,
+      opencodeSteps: configuration.parallelBatch?.opencodeSteps ?? 8,
+      codexNetworkOffCapability: configuration.parallelBatch?.codexNetworkOffCapability || "unavailable",
+      autoOpenTerminalDashboard: configuration.parallelBatch?.autoOpenTerminalDashboard === true,
+      worktreeRoot: configuration.parallelBatch?.worktreeRoot
+        ? resolvePackagePath(configuration.parallelBatch.worktreeRoot)
+        : path.join(options.statePaths?.state || createDefaultStatePaths().state, "worktrees"),
+      verificationCommands: configuration.parallelBatch?.verificationCommands || [],
+      orphanGraceMs: configuration.parallelBatch?.orphanGraceMs ?? 300000
+    },
     agentRulesPath: path.resolve(packageRoot, configuration.agentRules),
     subagentRulesPath: path.resolve(packageRoot, configuration.deepseek.subagentRules),
     skills: {
@@ -318,6 +374,10 @@ export function ensureRuntimeDirectories(configuration) {
     path.join(configuration.statePaths.logs, "metrics"),
     path.join(configuration.statePaths.logs, "audit"),
     path.join(configuration.statePaths.state, "checkpoints"),
+    path.join(configuration.statePaths.state, "parallel-batches"),
+    path.join(configuration.statePaths.state, "parallel-batches", "plans"),
+    path.join(configuration.statePaths.state, "parallel-batches", "batches"),
+    path.join(configuration.statePaths.state, "parallel-artifacts"),
     configuration.statePaths.cache
   ];
   for (const directory of directories) {

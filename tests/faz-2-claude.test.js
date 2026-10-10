@@ -364,10 +364,10 @@ test("CC-VERIFY-07: malformed result → extractUsage returns nulls", () => {
   assert.equal(extracted2.totalCostUsd, null);
 });
 
-test("CC-VERIFY-08: schema failure retry → execute count = 2, final success", async () => {
+test("CC-VERIFY-08: schema failure stays outside the operational retry policy", async () => {
   const { createAdapter } = await import("../subagent-bridge/src/adapters/agent-adapter-base.js");
   const { shouldRetry } = await import("../subagent-bridge/src/services/retry-service.js");
-  const { createFailureSubagentResult, createSuccessSubagentResult, validateSubagentResult } = await import("../subagent-bridge/src/schemas/core-schemas.js");
+  const { createFailureSubagentResult, validateSubagentResult } = await import("../subagent-bridge/src/schemas/core-schemas.js");
 
   let executeCount = 0;
   const adapter = createAdapter("test_claude", {
@@ -376,44 +376,21 @@ test("CC-VERIFY-08: schema failure retry → execute count = 2, final success", 
 
   adapter.execute = async () => {
     executeCount += 1;
-    if (executeCount === 1) {
-      return createFailureSubagentResult("test_claude", "sonnet", {
-        error: "schema_invalid", exitCode: 1, durationMs: 100
-      });
-    }
-    return createSuccessSubagentResult("test_claude", "sonnet", {
-      result: JSON.stringify({
-        is_error: false,
-        result: "structured output valid",
-        structured_output: { status: "completed", summary: "done", findings: [], proposed_steps: [], risks: [], questions: [], requires_human_approval: false },
-        duration_api_ms: 150,
-        num_turns: 2,
-        total_cost_usd: 0.05
-      }),
-      durationMs: 200
+    return createFailureSubagentResult("test_claude", "sonnet", {
+      error: "schema_invalid",
+      reason: "schema_invalid",
+      exitCode: 1,
+      durationMs: 100
     });
   };
 
-  const startedAt = Date.now();
-  const maxAttempts = 3;
-  let finalResult = null;
-
-  for (let n = 1; n <= maxAttempts; n++) {
-    const result = await adapter.execute();
-    if (result.ok) {
-      finalResult = result;
-      break;
-    }
-    const failureClass = "schema_invalid";
-    const decision = shouldRetry(failureClass, "read_only", n, maxAttempts);
-    if (!decision.retryable) break;
-    await new Promise(r => setTimeout(r, 10));
-  }
-
-  assert.equal(executeCount, 2);
-  assert.ok(finalResult);
-  assert.equal(finalResult.ok, true);
-  assert.equal(validateSubagentResult(finalResult).success, true);
+  const result = await adapter.execute();
+  const decision = shouldRetry("schema_invalid", "read_only", 1, 3);
+  assert.equal(executeCount, 1);
+  assert.equal(result.ok, false);
+  assert.equal(validateSubagentResult(result).success, true);
+  assert.equal(decision.retryable, false);
+  assert.equal(decision.reason, "non_retryable_failure_class");
 });
 
 test("CC-AC-14e: rate_limited kanonik sınıfı runtime retry ve attempt telemetrisine taşınır", async (t) => {

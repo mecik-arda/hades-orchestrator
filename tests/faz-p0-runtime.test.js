@@ -247,13 +247,17 @@ test("P0-ANTIGRAVITY-WORKSPACE: Gemini 3.8 Flash vault workspace'ini provider ö
   assert.equal(executions, 0);
 });
 
-test("P0-HOST: MCP trusted workspace requires explicit startup environment", async (t) => {
+test("P0-HOST: MCP trusted workspace uses the explicit binding or launch directory", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-p0-host-"));
+  const otherRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-p0-host-other-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(otherRoot, { recursive: true, force: true }));
   const configuration = { allowedRoots: [root], deepseek: { deniedRootPaths: [] } };
-  assert.equal(resolveTrustedWorkspace(configuration, { SUBAGENT_BRIDGE_TRUSTED_WORKSPACE: `${root}${path.sep}` }), fs.realpathSync(root));
-  assert.throws(() => resolveTrustedWorkspace(configuration, {}), /SUBAGENT_BRIDGE_TRUSTED_WORKSPACE is required/);
-  assert.throws(() => resolveTrustedWorkspace({ allowedRoots: [], deepseek: { deniedRootPaths: [] } }, { SUBAGENT_BRIDGE_TRUSTED_WORKSPACE: root }), /requires at least one allowed root/);
+  assert.equal(resolveTrustedWorkspace(configuration, { SUBAGENT_BRIDGE_TRUSTED_WORKSPACE: `${root}${path.sep}` }, otherRoot), fs.realpathSync(root));
+  assert.equal(resolveTrustedWorkspace(configuration, {}, root), fs.realpathSync(root));
+  assert.equal(resolveTrustedWorkspace(configuration, { SUBAGENT_BRIDGE_TRUSTED_WORKSPACE: "" }, root), fs.realpathSync(root));
+  assert.throws(() => resolveTrustedWorkspace(configuration, {}, path.dirname(root)), /izinli köklerin dışında/);
+  assert.throws(() => resolveTrustedWorkspace({ allowedRoots: [] }, {}, root), /requires at least one allowed root/);
 });
 
 test("P0-STATE: injected state paths own runtime directories", async (t) => {
@@ -692,7 +696,9 @@ test("P0-DEEPSEEK-SCHEMA: geçersiz çıktı canonical runtime tarafından onar�
     });
     return successResult("opencode", request.model, result);
   });
-  const runtime = createBridgeRuntime({ configuration: createConfiguration(root, root), adapters: { opencode }, sleep: async () => {} });
+  const configuration = createConfiguration(root, root);
+  configuration.reliability = { maxSchemaRepairAttempts: 1 };
+  const runtime = createBridgeRuntime({ configuration, adapters: { opencode }, sleep: async () => {} });
   const result = await runtime.runDeepSeek({
     taskId: "deepseek-schema-repair",
     role: "analyst",

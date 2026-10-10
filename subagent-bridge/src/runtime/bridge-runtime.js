@@ -11,10 +11,10 @@ import { buildDeepSeekEditPrompt, checkDeepSeek, createDeepSeekCheckpoint, creat
 import { buildGlmEditPrompt, buildGlmProfileReadOnlyPrompt, buildGlmSchemaRepairPrompt, checkGlm, createGlmCheckpoint, createGlmRuntimeRequest, normalizeOpenCodeGlmResult, resolveGlmModel, writeGlmCheckpoint } from "../glm.js";
 import { buildCatalogEditPrompt, buildCatalogReadOnlyPrompt, checkCatalogProvider, resolveCatalogModel } from "../catalog-provider.js";
 import { checkSpaceBunnyCatalog, SPACE_BUNNY_MODEL_ID } from "../space-bunny.js";
-import { capabilityFailureClassValues, capabilityProbeSchema, capabilityStatusValues, createFailureSubagentResult, healthResultSchema, subagentExecutionRequestSchema, validateControlledEditResult, validateSubagentResult } from "../schemas/core-schemas.js";
+import { capabilityFailureClassValues, capabilityProbeSchema, capabilityStatusValues, createFailureSubagentResult, healthResultSchema, operatingSystemErrorCodeValues, subagentExecutionRequestSchema, validateControlledEditResult, validateSubagentResult, webEvidenceFailureCodeValues } from "../schemas/core-schemas.js";
 import { checkCapability } from "../services/capability-service.js";
 import { createDelegationGuard } from "../services/delegation-guard.js";
-import { createExecutionId } from "../services/execution-service.js";
+import { createExecutionId, createProcessFailureDiagnostics } from "../services/execution-service.js";
 import { createHealthCache } from "../services/health-service.js";
 import { checkModePolicy, resolveAllowedModes } from "../services/mode-policy.js";
 import { containsSecretLikeAddedValue, containsSecretLikeValue, applyPreparedChanges, detectRecoveryArtifacts, provisionDisposableWorkspace } from "../services/disposable-workspace.js";
@@ -27,6 +27,12 @@ import { createReadOnlyResultCache } from "../services/read-only-cache.js";
 import { remainingDurationMs, resolveReliabilityBudget } from "../services/reliability-budget.js";
 import { shouldRetry } from "../services/retry-service.js";
 import { createWorkspaceCoordinator } from "../services/workspace-coordinator.js";
+import { createParallelBatchRegistry } from "../services/parallel-batch-registry.js";
+import { createParallelArtifactStore } from "../services/parallel-artifact-store.js";
+import { createParallelBatchService } from "../services/parallel-batch.js";
+import { createGitWorktreeBatchManager } from "../services/git-worktree-batch.js";
+import { createParallelDashboardLauncher } from "../services/parallel-dashboard-launcher.js";
+import { createReviewSourceManifest, ReviewSourceManifestError } from "../services/review-source-manifest.js";
 import { classifyProcessFailure, isRetryableFailure } from "../retry.js";
 import {
   appendRedactedRunMetric,
@@ -50,10 +56,14 @@ const runtimeRunRequestSchema = z.object({
   caller: z.string().min(1),
   delegationDepth: z.number().int().min(0),
   timeoutMs: z.number().int().min(1000).optional(),
+  maxOutputBytes: z.number().int().min(1024).max(8388608).optional(),
+  maxOutputTokens: z.number().int().min(1).max(32768).optional(),
   profile: z.string().min(1).max(64).optional(),
   executionId: z.string().min(1).optional(),
   abortSignal: z.any().optional(),
   webEvidenceRequired: z.boolean().optional(),
+  reviewEvidenceRequirement: z.enum(["best_effort", "required"]).optional(),
+  reviewScope: z.array(z.string().min(1).max(500)).min(1).max(50).optional(),
   metricBackend: z.enum(["glm", "kimi", "qwen"]).optional(),
   resultValidator: z.function().optional(),
   schemaRepairPrompt: z.string().min(1).max(70000).optional(),
@@ -131,6 +141,8 @@ function normalizeCapabilityProbe(probe) {
     modelAccess: capabilityStatusValues.includes(source.modelAccess) ? source.modelAccess : "not_probed",
     toolFreeResponse: capabilityStatusValues.includes(source.toolFreeResponse) ? source.toolFreeResponse : "not_probed",
     workspaceRead: capabilityStatusValues.includes(source.workspaceRead) ? source.workspaceRead : "not_probed",
+    sandboxStartup: capabilityStatusValues.includes(source.sandboxStartup) ? source.sandboxStartup : "not_probed",
+    workspaceReadTarget: ["not_probed", "temp_workspace", "trusted_workspace"].includes(source.workspaceReadTarget) ? source.workspaceReadTarget : null,
     webRead: capabilityStatusValues.includes(source.webRead) ? source.webRead : "not_probed",
     failureClass: source.failureClass === null || source.failureClass === undefined
       ? null
@@ -145,7 +157,7 @@ function normalizeHealthResult(health) {
   const sourceProbes = source.probes && typeof source.probes === "object" ? source.probes : {};
   const probes = {
     ...(sourceProbes.cli === "available" || sourceProbes.cli === "unavailable" ? { cli: sourceProbes.cli } : {}),
-    ...Object.fromEntries(["modelAccess", "toolFreeResponse", "workspaceRead", "webRead"]
+    ...Object.fromEntries(["modelAccess", "toolFreeResponse", "workspaceRead", "sandboxStartup", "webRead"]
       .filter((key) => capabilityStatusValues.includes(sourceProbes[key]))
       .map((key) => [key, sourceProbes[key]]))
   };
@@ -212,6 +224,7 @@ function createRuntimeFailure(backend, model, error, overrides = {}) {
     retries: overrides.retries ?? 0,
     reason: overrides.reason,
     metrics: overrides.metrics,
+    reviewContract: overrides.reviewContract,
     requestedModel: model,
     resolvedModel: null
   });
@@ -228,12 +241,101 @@ function classifyReturnedFailure(result) {
   return failureClass === "non_zero_exit" ? "process_exit" : failureClass;
 }
 
+function safeRuntimeFailureMessage(failureClass) {
+  const safeMessages = {
+    authentication_failure: "provider authentication failed",
+    auth_invalid: "provider authentication failed",
+    cancelled: "execution cancelled",
+    executable_missing: "provider executable not found",
+    network: "provider network failure",
+    output_limit: "provider output exceeded the configured limit",
+    permission_denied: "provider permission denied",
+    process_error: "provider process failed",
+    process_exit: "provider process exited unsuccessfully",
+    prompt_transport_limit: "process command-line budget exceeded",
+    rate_limited: "provider rate limited",
+    sandbox_setup: "provider sandbox setup failed",
+    server: "provider service unavailable",
+    timeout: "provider execution timed out",
+    workspace_read: "provider workspace read failed"
+  };
+  return safeMessages[failureClass] || "provider execution failed";
+}
+
+function createFailureDiagnostics(result) {
+  const reason = result.reason || "process_exit";
+  const existing = result.metrics?.diagnostics || {};
+  let failureStage = existing.failureStage;
+  if (!failureStage) {
+    if (["prompt_transport_limit", "executable_missing"].includes(reason)) failureStage = "process_spawn";
+    else if (["sandbox_setup", "workspace_read", "provider_auth", "provider_rate_limit", "provider_process_exit", "evidence_invalid", "cancelled"].includes(reason)) failureStage = reason;
+    else if (["auth_invalid", "authentication_failure"].includes(reason)) failureStage = "provider_auth";
+    else if (reason === "rate_limited") failureStage = "provider_rate_limit";
+    else if (["process_exit", "non_zero_exit"].includes(reason)) failureStage = "provider_process_exit";
+    else if (reason === "workspace_read_failure") failureStage = "workspace_read";
+    else if (["schema_invalid", "output_parse_invalid", "empty_output"].includes(reason)) failureStage = "result_parse";
+    else if (reason === "web_evidence_invalid") failureStage = "evidence_invalid";
+    else if (["invalid_model", "mode_not_allowed", "review_scope_invalid", "review_scope_denied", "review_scope_unsafe_file", "review_scope_not_found", "review_scope_unreadable", "review_scope_invalid_encoding", "review_scope_secret_detected", "review_scope_too_large", "review_scope_unavailable", "review_scope_read_failed", "review_scope_changed"].includes(reason)) failureStage = "mcp_preflight";
+    else failureStage = "provider_execution";
+  }
+  const providerCode = existing.providerCode || ({
+    executable_missing: "executable_missing",
+    timeout: "timeout",
+    rate_limited: "rate_limited",
+    network: "network_error",
+    auth_invalid: "unauthenticated",
+    authentication_failure: "unauthenticated",
+    permission_denied: "permission_denied",
+    server: "unavailable",
+    provider_temporary_error: "unavailable",
+    network: "network_error",
+    invalid_model: "invalid_model",
+    process_exit: "process_exit",
+    non_zero_exit: "process_exit",
+    process_error: "process_error",
+    empty_output: "empty_output",
+    prompt_transport_limit: "prompt_transport_limit"
+  })[reason] || null;
+  return {
+    failureStage,
+    providerCode,
+    ...(operatingSystemErrorCodeValues.includes(existing.osErrorCode) ? { osErrorCode: existing.osErrorCode } : {}),
+    ...(webEvidenceFailureCodeValues.includes(existing.webEvidenceFailureCode) ? { webEvidenceFailureCode: existing.webEvidenceFailureCode } : {}),
+    settingsLockWaitMs: Number.isInteger(existing.settingsLockWaitMs) ? existing.settingsLockWaitMs : null,
+    providerExecutionMs: Number.isInteger(existing.providerExecutionMs) ? existing.providerExecutionMs : null,
+    stdoutBytes: Number.isInteger(existing.stdoutBytes) ? existing.stdoutBytes : null,
+    stderrBytes: Number.isInteger(existing.stderrBytes) ? existing.stderrBytes : null
+  };
+}
+
 const maxNoChangesSummaryCharacters = 4000;
 
 function truncateNoChangesSummary(summary) {
   const text = typeof summary === "string" ? summary.trim() : "";
   if (text.length <= maxNoChangesSummaryCharacters) return text;
   return `${text.slice(0, maxNoChangesSummaryCharacters)}...`;
+}
+
+function createReviewContract({
+  sourceManifest = null,
+  sourceScopeStatus = "not_requested",
+  sourceDeliveryStatus = "not_attempted",
+  taskFailed = false
+} = {}) {
+  const reviewEligibility = sourceScopeStatus === "blocked" || sourceDeliveryStatus === "failed" || taskFailed
+    ? "unavailable"
+    : sourceScopeStatus === "complete" && sourceDeliveryStatus === "complete_to_cli" && !taskFailed
+      ? "eligible_for_orchestrator_evaluation"
+      : "unverified";
+  return {
+    version: 1,
+    sourceScopeStatus,
+    sourceDeliveryStatus,
+    sourceManifestSha256: sourceManifest?.manifestSha256 || null,
+    sourceFileCount: sourceManifest?.fileCount ?? null,
+    sourceBytes: sourceManifest?.sourceBytes ?? null,
+    reviewEligibility
+  };
 }
 
 function withRuntimeMetrics(result, retries, extras = {}) {
@@ -256,6 +358,18 @@ function withModelIdentity(result, requestedModel) {
     requestedModel,
     resolvedModel
   };
+}
+
+function classifyWebEvidenceValidationFailure(error) {
+  const message = error instanceof Error ? error.message : "";
+  if (message === "provider result is missing") return "provider_result_missing";
+  if (message === "provider result contains restricted content") return "result_contains_restricted_content";
+  if (/source URL (?:rejected|invalid)/i.test(message)) return "source_url_rejected";
+  if (/excerpt/i.test(message)) return "excerpt_rejected";
+  if (/verification is host controlled/i.test(message)) return "evidence_metadata_rejected";
+  if (/carrier is required|result wrapper is invalid/i.test(message)) return "carrier_missing_or_malformed";
+  if (/web evidence input rejected/i.test(message)) return "carrier_fields_invalid";
+  return "unclassified_evidence_rejection";
 }
 
 function normalizeProviderResult(result, { requireCarrier = false, allowPlainRepair = false, rejectRestricted = false, webIntentHeuristics = false, webIntentPrompt = null } = {}) {
@@ -333,6 +447,48 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     stateDirectory: path.join(runtimeConfiguration.statePaths.state, "provider-circuits"),
     ...runtimeConfiguration.orchestration?.circuitBreaker
   });
+  const parallelBatchConfiguration = runtimeConfiguration.parallelBatch || {};
+  const parallelBatchRegistry = createParallelBatchRegistry({
+    stateDirectory: path.join(runtimeConfiguration.statePaths.state, "parallel-batches"),
+    staleLockMs: scheduler.staleLockMs
+  });
+  const parallelArtifactStore = createParallelArtifactStore({
+    rootDirectory: path.join(runtimeConfiguration.statePaths.state, "parallel-artifacts"),
+    ttlMs: parallelBatchConfiguration.artifactTtlMs,
+    maxArtifactBytes: parallelBatchConfiguration.maxArtifactBytes,
+    maxTotalBytes: parallelBatchConfiguration.maxArtifactTotalBytes
+  });
+  const parallelDashboardLauncher = createParallelDashboardLauncher({
+    enabled: parallelBatchConfiguration.autoOpenTerminalDashboard === true,
+    packageRoot: runtimeConfiguration.packageRoot,
+    stateDirectory: runtimeConfiguration.statePaths.state
+  });
+  const parallelWorkspaceServices = new Map();
+
+  function parallelServiceFor(trustedWorkspace) {
+    const canonicalWorkspace = canonicalizeTrustedWorkspace(trustedWorkspace);
+    if (!parallelWorkspaceServices.has(canonicalWorkspace)) {
+      const worktreeManager = parallelBatchConfiguration.worktreeRoot
+        ? createGitWorktreeBatchManager({
+          sourceWorkspace: canonicalWorkspace,
+          worktreeRoot: parallelBatchConfiguration.worktreeRoot,
+          verificationCommands: parallelBatchConfiguration.verificationCommands || []
+        })
+        : null;
+      parallelWorkspaceServices.set(canonicalWorkspace, createParallelBatchService({
+        configuration: runtimeConfiguration,
+        registry: parallelBatchRegistry,
+        artifactStore: parallelArtifactStore,
+        runtime: { run, cancel },
+        trustedWorkspace: canonicalWorkspace,
+        caller: "openCode",
+        worktreeManager,
+        workspaceCoordinator: coordinator,
+        dashboardLauncher: parallelDashboardLauncher
+      }));
+    }
+    return parallelWorkspaceServices.get(canonicalWorkspace);
+  }
 
   async function cancel(executionId) {
     const execution = activeExecutions.get(executionId);
@@ -486,7 +642,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
       return createRuntimeFailure(route.backend, route.model, "task profile mode does not match request");
     }
     const controlledEditPilot = ["deepseek_edit_pilot", "glm_edit_pilot", "kimi_edit_pilot", "qwen_edit_pilot", "space_bunny_edit_pilot"].includes(input.caller) && route.backend === "opencode" && input.mode === "edit";
-    const controlledEditExecution = ["codex_edit", "controlled_edit", "deepseek_edit", "deepseek_edit_pilot", "glm_edit", "glm_edit_pilot", "kimi_edit", "kimi_edit_pilot", "qwen_edit", "qwen_edit_pilot", "space_bunny_edit", "space_bunny_edit_pilot"].includes(input.caller) && input.mode === "edit";
+    const controlledEditExecution = ["codex_edit", "controlled_edit", "parallel_batch_edit", "deepseek_edit", "deepseek_edit_pilot", "glm_edit", "glm_edit_pilot", "kimi_edit", "kimi_edit_pilot", "qwen_edit", "qwen_edit_pilot", "space_bunny_edit", "space_bunny_edit_pilot"].includes(input.caller) && input.mode === "edit";
     if (input.mode === "edit" && !controlledEditExecution) return createRuntimeFailure(route.backend, route.model, "edit mode requires a controlled edit caller", { reason: "mode_not_allowed" });
     const providerModeConfiguration = controlledEditPilot
       ? { ...runtimeConfiguration[route.backend], defaultMode: "edit", allowedModes: ["edit"] }
@@ -525,17 +681,52 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
       workspace: trustedWorkspace,
       delegationDepth: input.delegationDepth,
       caller: input.caller,
+      reviewEvidenceRequirement: input.reviewEvidenceRequirement,
+      ...(input.reviewScope ? { reviewScope: input.reviewScope } : {}),
+      ...(route.backend === "antigravity" && (input.webEvidenceRequired === true || profile?.webEvidenceRequired === true) ? { webReadTrace: true } : {}),
+      ...(input.maxOutputBytes !== undefined ? { maxOutputBytes: input.maxOutputBytes } : {}),
+      ...(input.maxOutputTokens !== undefined ? { maxOutputTokens: input.maxOutputTokens } : {}),
       timeoutMs
     };
     const requestValidation = subagentExecutionRequestSchema.safeParse(request);
     if (!requestValidation.success) {
       return createRuntimeFailure(route.backend, route.model, `internal schema validation failed: ${requestValidation.error.issues.map((issue) => issue.message).join("; ")}`);
     }
+    if (input.reviewEvidenceRequirement === "required" && !input.reviewScope?.length) {
+      return createRuntimeFailure(route.backend, route.model, "required review source scope is missing", {
+        reason: "review_scope_invalid",
+        reviewContract: createReviewContract({ sourceScopeStatus: "blocked" })
+      });
+    }
+    if (input.reviewScope?.length && !["codex", "opencode", "claude_code"].includes(route.backend)) {
+      return createRuntimeFailure(route.backend, route.model, "provider transport cannot guarantee source bundle delivery", {
+        reason: "review_source_transport_unsupported",
+        reviewContract: createReviewContract({ sourceScopeStatus: "blocked" })
+      });
+    }
+    let reviewSourceManifest = null;
+    if (input.reviewScope?.length) {
+      try {
+        reviewSourceManifest = createReviewSourceManifest(trustedWorkspace, input.reviewScope);
+      } catch (error) {
+        const failureCode = error instanceof ReviewSourceManifestError ? error.code : "review_scope_read_failed";
+        return createRuntimeFailure(route.backend, route.model, "review source scope rejected", {
+          reason: failureCode,
+          reviewContract: createReviewContract({ sourceScopeStatus: "blocked" })
+        });
+      }
+    }
+    const executionRequest = reviewSourceManifest
+      ? { ...requestValidation.data, reviewSourcePayload: reviewSourceManifest.sourcePayload }
+      : requestValidation.data;
+    const reviewContractForFailure = (sourceDeliveryStatus = "not_attempted") => reviewSourceManifest
+      ? createReviewContract({ sourceManifest: reviewSourceManifest, sourceScopeStatus: "complete", sourceDeliveryStatus, taskFailed: true })
+      : undefined;
     if (activeExecutions.has(executionId)) {
-      return createRuntimeFailure(route.backend, route.model, "duplicate active execution ID", { reason: "duplicate_execution_id" });
+      return createRuntimeFailure(route.backend, route.model, "duplicate active execution ID", { reason: "duplicate_execution_id", reviewContract: reviewContractForFailure() });
     }
     if (input.abortSignal?.aborted) {
-      return createRuntimeFailure(route.backend, route.model, "execution cancelled", { reason: "cancelled" });
+      return createRuntimeFailure(route.backend, route.model, "execution cancelled", { reason: "cancelled", reviewContract: reviewContractForFailure() });
     }
     const activeExecution = { adapter, cancelled: false };
     activeExecutions.set(executionId, activeExecution);
@@ -550,7 +741,8 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
       activeExecutions.delete(executionId);
       return createRuntimeFailure(route.backend, route.model, "execution cost budget exhausted", {
         reason: costBudget.reason,
-        metrics: costBudget.budget ? { costBudget: costBudget.budget } : undefined
+        metrics: costBudget.budget ? { costBudget: costBudget.budget } : undefined,
+        reviewContract: reviewContractForFailure()
       });
     }
     const startedAt = Date.now();
@@ -561,6 +753,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     let schemaRepairAttempts = 0;
     let schemaValidationIssues = [];
     let webEvidenceRepairAttempts = 0;
+    let observedWebReadStatus = null;
     const attemptRecords = [];
     let cacheKey = null;
     const abortListener = () => {
@@ -572,11 +765,12 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
       activeExecutions.delete(executionId);
       input.abortSignal?.removeEventListener?.("abort", abortListener);
       return createRuntimeFailure(route.backend, route.model, activeExecution.cancelled ? "execution cancelled" : "workspace execution queue unavailable", {
-        reason: activeExecution.cancelled ? "cancelled" : "queue_unavailable"
+        reason: activeExecution.cancelled ? "cancelled" : "queue_unavailable",
+        reviewContract: reviewContractForFailure()
       });
     }
     try {
-      cacheKey = input.mode === "read_only" && profile?.cacheable === true
+      cacheKey = input.mode === "read_only" && profile?.cacheable === true && !reviewSourceManifest
         ? await readOnlyCache.keyFor({ workspace: trustedWorkspace, backend: route.backend, model: route.model, profile: input.profile, prompt: input.prompt })
         : null;
       const cachedResult = readOnlyCache.get(cacheKey);
@@ -596,7 +790,8 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             durationMs: Date.now() - startedAt,
             retries: Math.max(0, attemptNumber - 1),
             adapterAttempts: attemptNumber,
-            reason: "cancelled"
+            reason: "cancelled",
+            reviewContract: reviewContractForFailure(attemptNumber > 0 ? "failed" : "not_attempted")
           });
         }
         const remainingMs = remainingDurationMs(budget, startedAt);
@@ -605,7 +800,8 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             durationMs: Date.now() - startedAt,
             retries: Math.max(0, attemptNumber - 1),
             adapterAttempts: attemptNumber,
-            reason: "total_duration_budget_exhausted"
+            reason: "total_duration_budget_exhausted",
+            reviewContract: reviewContractForFailure(attemptNumber > 0 ? "failed" : "not_attempted")
           });
         }
         attemptNumber += 1;
@@ -617,20 +813,25 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
           const prompt = ["schema_invalid", "output_parse_invalid"].includes(lastResult?.reason) && input.schemaRepairPrompt
             ? [
               input.schemaRepairPrompt,
-              `This is schema repair attempt ${schemaRepairAttempts + 1}.`,
+              `This is schema repair attempt ${schemaRepairAttempts}.`,
               ...(repairDetails.length > 0 ? ["Validation issues:", ...repairDetails] : ["The previous response was not parseable as the required JSON object."])
             ].join("\n")
             : lastResult?.reason === "web_evidence_invalid" && input.webEvidenceRepairPrompt
               ? [
                 input.webEvidenceRepairPrompt,
-                `This is carrier repair attempt ${webEvidenceRepairAttempts + 1}.`,
+                `This is carrier repair attempt ${webEvidenceRepairAttempts}.`,
                 "Return exactly one JSON object with result and webEvidence fields and nothing else.",
                 "Answer the original task inside the result field. The original task follows.",
                 "--- ORIGINAL TASK ---",
                 request.prompt
               ].join("\n")
               : request.prompt;
-          let result = await adapter.execute({ ...requestValidation.data, prompt, timeoutMs: Math.min(timeoutMs, remainingMs) });
+          let result = await adapter.execute({ ...executionRequest, prompt, timeoutMs: Math.min(timeoutMs, remainingMs) });
+          if (request.webReadTrace && typeof result?.metrics?.webReadStatus === "string") {
+            if (result.metrics.webReadStatus === "used" || observedWebReadStatus !== "used") {
+              observedWebReadStatus = result.metrics.webReadStatus;
+            }
+          }
           try {
             result = normalizeProviderResult(result, {
               requireCarrier: webEvidenceMode === "strict" || webEvidenceMode === "repair",
@@ -639,20 +840,39 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               webIntentHeuristics: runtimeConfiguration.orchestration?.webIntentHeuristics === true,
               webIntentPrompt: request.prompt
             });
+            if (!result || typeof result !== "object") throw new Error("provider result is missing");
             if ((webEvidenceMode === "strict" || webEvidenceMode === "repair") && result.ok === true && Object.hasOwn(result, "result") && !Object.hasOwn(result, "webEvidence")) {
               throw new Error("web evidence carrier is required");
             }
-          } catch {
-            result = createRuntimeFailure(route.backend, route.model, "provider returned invalid web evidence", {
+          } catch (error) {
+            const adapterDiagnostics = result?.metrics?.diagnostics || {};
+            const evidenceFailureCode = classifyWebEvidenceValidationFailure(error);
+            result = createRuntimeFailure(route.backend, route.model, `provider returned invalid web evidence (${evidenceFailureCode})`, {
               durationMs: Date.now() - startedAt,
               retries: attemptNumber - 1,
               adapterAttempts: attemptNumber,
               reason: "web_evidence_invalid",
               metrics: {
                 totalCostUsd: result?.metrics?.totalCostUsd ?? null,
-                diagnostics: { failureStage: "result_parse", providerCode: null, settingsLockWaitMs: null, providerExecutionMs: null, stdoutBytes: null, stderrBytes: null }
+                ...(result?.metrics?.webReadStatus ? { webReadStatus: result.metrics.webReadStatus } : {}),
+                diagnostics: {
+                  settingsLockWaitMs: null,
+                  providerExecutionMs: null,
+                  stdoutBytes: null,
+                  stderrBytes: null,
+                  ...adapterDiagnostics,
+                  failureStage: "evidence_invalid",
+                  providerCode: null,
+                  webEvidenceFailureCode: evidenceFailureCode
+                }
               }
             });
+          }
+          if (result && typeof result === "object" && result.ok === false) {
+            result = {
+              ...result,
+              metrics: { ...(result.metrics || {}), diagnostics: createFailureDiagnostics(result) }
+            };
           }
           const resultValidation = validateSubagentResult(result);
           if (!resultValidation.success) {
@@ -660,7 +880,8 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               durationMs: Date.now() - startedAt,
               retries: attemptNumber - 1,
               adapterAttempts: attemptNumber,
-              reason: "schema_invalid"
+              reason: "schema_invalid",
+              metrics: { diagnostics: createFailureDiagnostics({ reason: "schema_invalid" }) }
             });
           } else {
             result = withModelIdentity(resultValidation.data, route.model);
@@ -676,8 +897,8 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
                 adapterAttempts: attemptNumber,
                 reason: validation.errorClass,
                 metrics: {
-                totalCostUsd: result?.metrics?.totalCostUsd ?? null,
-                  diagnostics: { ...(adapterDiagnostics || {}), failureStage: "result_parse" }
+                  totalCostUsd: result?.metrics?.totalCostUsd ?? null,
+                  diagnostics: { ...(adapterDiagnostics || {}), failureStage: "result_parse", webEvidenceFailureCode: null }
                 }
               });
             }
@@ -687,7 +908,8 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               durationMs: Date.now() - startedAt,
               retries: attemptNumber - 1,
               adapterAttempts: attemptNumber,
-              reason: "cancelled"
+              reason: "cancelled",
+              reviewContract: reviewContractForFailure("failed")
             });
           }
           const costKnown = Number.isFinite(result.metrics?.totalCostUsd);
@@ -703,6 +925,8 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               ? "result_parse"
               : normalizeFailureStage(diagnostics?.failureStage),
             providerCode: normalizeProviderCode(diagnostics?.providerCode),
+            osErrorCode: operatingSystemErrorCodeValues.includes(diagnostics?.osErrorCode) ? diagnostics.osErrorCode : null,
+            webEvidenceFailureCode: webEvidenceFailureCodeValues.includes(diagnostics?.webEvidenceFailureCode) ? diagnostics.webEvidenceFailureCode : null,
             exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
             signal: normalizeProcessSignal(result.metrics?.signal),
             retryDecision: "not_applicable",
@@ -721,15 +945,25 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             cacheHit: false,
             totalCostUsd: knownAttemptCosts ? totalCostUsd : null,
             adapterAttempts: attemptNumber,
-            attempts: attemptRecords
+            attempts: attemptRecords,
+            ...(request.webReadTrace ? { webReadStatus: observedWebReadStatus || "not_observed" } : {})
           });
-           if (result.ok) {
-             if (cacheKey) {
-               const currentKey = await readOnlyCache.keyFor({ workspace: trustedWorkspace, backend: route.backend, model: route.model, profile: input.profile, prompt: input.prompt });
-               if (currentKey === cacheKey) readOnlyCache.set(cacheKey, lastResult);
-             }
-             return lastResult;
-           }
+          if (reviewSourceManifest) {
+            const sourceDeliveryStatus = result.metrics?.stdinWriteStatus === "complete" ? "complete_to_cli" : "failed";
+            lastResult.reviewContract = createReviewContract({
+              sourceManifest: reviewSourceManifest,
+              sourceScopeStatus: "complete",
+              sourceDeliveryStatus,
+              taskFailed: result.ok !== true
+            });
+          }
+          if (result.ok) {
+            if (cacheKey) {
+              const currentKey = await readOnlyCache.keyFor({ workspace: trustedWorkspace, backend: route.backend, model: route.model, profile: input.profile, prompt: input.prompt });
+              if (currentKey === cacheKey) readOnlyCache.set(cacheKey, lastResult);
+            }
+            return lastResult;
+          }
           if (failureClass === "web_evidence_invalid" && input.webEvidenceRepairPrompt && input.maxWebEvidenceRepairAttempts !== undefined) {
             const repairCurrentCost = totalCostUsd + reservedCostUsd;
             const repairBudgetExhausted = (budget.maxRetryCostUsd !== undefined && repairCurrentCost >= budget.maxRetryCostUsd)
@@ -756,7 +990,19 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               attemptRecord.retryStopReason = "schema_repair_exhausted";
               return lastResult;
             }
+            const repairCurrentCost = totalCostUsd + reservedCostUsd;
+            const repairBudgetExhausted = (budget.maxRetryCostUsd !== undefined && repairCurrentCost >= budget.maxRetryCostUsd)
+              || (budget.maxRetryCostUsd !== undefined && budget.maxRetryCostReserveUsd !== undefined && repairCurrentCost + budget.maxRetryCostReserveUsd > budget.maxRetryCostUsd);
+            if (attemptNumber >= budget.maxAttempts || repairBudgetExhausted) {
+              attemptRecord.retryDecision = "stop";
+              attemptRecord.retryStopReason = "schema_repair_budget_exhausted";
+              return lastResult;
+            }
             schemaRepairAttempts += 1;
+            attemptRecord.retryDecision = "retry";
+            attemptRecord.retryStopReason = null;
+            await wait(0);
+            continue;
           }
           const retryDecision = shouldRetry(failureClass, input.mode, attemptNumber, budget.maxAttempts, {
             maxRetryCostUsd: budget.maxRetryCostUsd,
@@ -784,6 +1030,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             });
           }
           const failureClass = classifyProcessFailure({ error, stderr: "", stdout: "", code: null }) || "process_error";
+          const diagnostics = createProcessFailureDiagnostics(error);
           reservedCostUsd += budget.maxUnknownAttemptCostUsd || 0;
           const retryPolicy = shouldRetry(failureClass, input.mode, attemptNumber, budget.maxAttempts, {
             maxRetryCostUsd: budget.maxRetryCostUsd,
@@ -795,8 +1042,10 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
           attemptRecords.push({
             number: attemptNumber,
             failureClass,
-            failureStage: null,
-            providerCode: null,
+            failureStage: diagnostics.failureStage,
+            providerCode: normalizeProviderCode(diagnostics.providerCode),
+            ...(diagnostics.osErrorCode ? { osErrorCode: diagnostics.osErrorCode } : {}),
+            webEvidenceFailureCode: null,
             exitCode: null,
             signal: null,
             retryDecision: retryPolicy.retryable ? "retry" : "stop",
@@ -809,13 +1058,18 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             totalCostUsd: null
           });
           const retryDecision = retryPolicy;
-          lastResult = createRuntimeFailure(route.backend, route.model, error.message, {
+          lastResult = createRuntimeFailure(route.backend, route.model, safeRuntimeFailureMessage(failureClass), {
             durationMs: Date.now() - startedAt,
             retries: attemptNumber - 1,
             adapterAttempts: attemptNumber,
             timedOut: failureClass === "timeout",
             reason: retryDecision.reason === "mutation_state_unknown" ? "mutation_state_unknown" : failureClass,
-            metrics: { totalCostUsd: attemptRecords.every((attempt) => Number.isFinite(attempt.totalCostUsd)) ? totalCostUsd : null, attempts: attemptRecords }
+            metrics: {
+              totalCostUsd: attemptRecords.every((attempt) => Number.isFinite(attempt.totalCostUsd)) ? totalCostUsd : null,
+              attempts: attemptRecords,
+              diagnostics
+            },
+            reviewContract: reviewContractForFailure(attemptNumber > 0 ? "failed" : "not_attempted")
           });
           if (!retryDecision.retryable) return lastResult;
           await wait(retryDecision.delayMs || 0);
@@ -875,7 +1129,12 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
         if (entry && typeof probeAdapter?.probeCapabilities === "function") {
           const capabilityProbes = {};
           for (const model of probeModels) {
-            const probe = normalizeCapabilityProbe(await probeAdapter.probeCapabilities({ model, capabilities: probeCapabilities }));
+            const probe = normalizeCapabilityProbe(await probeAdapter.probeCapabilities({
+              model,
+              capabilities: probeCapabilities,
+              workspaceReadTarget: options.workspaceReadTarget,
+              trustedWorkspace: options.trustedWorkspace
+            }));
             capabilityProbes[model] = probe;
             try {
               await appendRedactedRunMetric(runtimeConfiguration, {
@@ -887,6 +1146,8 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
                   modelAccess: probe.modelAccess,
                   toolFreeResponse: probe.toolFreeResponse,
                   workspaceRead: probe.workspaceRead,
+                  sandboxStartup: probe.sandboxStartup,
+                  workspaceReadTarget: probe.workspaceReadTarget,
                   webRead: probe.webRead
                 },
                 failureClass: probe.failureClass,
@@ -1052,6 +1313,8 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
       caller: `${provider}_opencode`,
       delegationDepth: 0,
       metricBackend: provider,
+      reviewEvidenceRequirement: input.reviewEvidenceRequirement,
+      reviewScope: input.reviewScope,
       timeoutMs: input.timeout_seconds ? input.timeout_seconds * 1000 : runtimeConfiguration[provider]?.timeoutMs,
       abortSignal
     });
@@ -1105,6 +1368,8 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
       trustedWorkspace: canonicalizeTrustedWorkspace(trustedWorkspace),
       caller: "space_bunny",
       delegationDepth: 0,
+      reviewEvidenceRequirement: input.reviewEvidenceRequirement,
+      reviewScope: input.reviewScope,
       timeoutMs: input.timeout_seconds ? input.timeout_seconds * 1000 : runtimeConfiguration.opencode?.timeoutMs,
       abortSignal
     });
@@ -1497,7 +1762,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     }
   }
 
-  async function probeCapability({ target, model, trustedWorkspace }) {
+  async function probeCapability({ target, model, trustedWorkspace, probeWorkspaceRead = false }) {
     const probeTarget = typeof target === "string" && target.length > 0 ? target : "";
     if (!probeTarget) throw new Error("capability probe target is required");
     const result = await run({
@@ -1512,23 +1777,74 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     });
     const normalizedProbeOutput = typeof result.result === "string" ? result.result.trim().normalize("NFC") : "";
     const tokenObserved = result.ok && normalizedProbeOutput === "BRIDGE-PROBE-OK";
+    let sandboxStartup = "not_probed";
+    let routeBackend = null;
+    try {
+      routeBackend = resolveRuntimeRoute({ target: probeTarget, model, mode: "read_only", trustedWorkspace, caller: "capability_probe", delegationDepth: 0 }, runtimeConfiguration).backend;
+    } catch {
+    }
+    if (result.reason === "sandbox_setup") sandboxStartup = "unavailable";
+    let workspaceRead = "not_probed";
+    let workspaceReadTarget = null;
+    let workspaceReadFailureClass = null;
+    if (probeWorkspaceRead && result.ok) {
+      workspaceReadTarget = "trusted_workspace";
+      let probeWorkspace = null;
+      let cleanupFailed = false;
+      try {
+        const trustedRoot = canonicalizeTrustedWorkspace(trustedWorkspace);
+        probeWorkspace = fs.mkdtempSync(path.join(trustedRoot, ".bridge-capability-read-"));
+        const marker = `BRIDGE-WORKSPACE-READ-${crypto.randomUUID()}`;
+        const markerPath = path.join(probeWorkspace, "probe.txt");
+        fs.writeFileSync(markerPath, marker, { encoding: "utf8", flag: "wx", mode: 384 });
+        const readResult = await run({
+          target: probeTarget,
+          prompt: `Read only the file ${markerPath} and return its exact contents. Do not inspect other files.`,
+          ...(model ? { model } : {}),
+          mode: "read_only",
+          trustedWorkspace: probeWorkspace,
+          caller: "capability_probe",
+          delegationDepth: 0,
+          webEvidenceRequired: false
+        });
+        const readText = typeof readResult.result === "string" ? readResult.result.trim().normalize("NFC") : "";
+        workspaceRead = readResult.ok && readText === marker ? "available" : "unavailable";
+        if (workspaceRead === "unavailable") {
+          const rawFailureClass = readResult.ok ? "workspace_read" : classifyReturnedFailure(readResult);
+          workspaceReadFailureClass = rawFailureClass === "permission_denied" || rawFailureClass === "process_exit" ? "workspace_read" : capabilityFailureClass(rawFailureClass);
+        }
+      } catch (error) {
+        workspaceRead = "unavailable";
+        workspaceReadFailureClass = error?.code === "EACCES" || error?.code === "EPERM" ? "workspace_read" : "unclassified";
+      } finally {
+        if (probeWorkspace) {
+          try {
+            fs.rmSync(probeWorkspace, { recursive: true, force: true });
+          } catch {
+            cleanupFailed = true;
+          }
+        }
+      }
+      if (cleanupFailed) {
+        workspaceRead = "unavailable";
+        workspaceReadFailureClass = "workspace_read";
+      }
+    }
     const probe = {
       provider: probeTarget,
       model: result.resolvedModel || result.model || model || null,
       capabilities: {
         modelAccess: result.ok ? "available" : "unavailable",
         toolFreeResponse: result.ok ? (tokenObserved ? "available" : "unavailable") : "not_probed",
-        workspaceRead: "not_probed",
+        workspaceRead,
+        sandboxStartup,
+        workspaceReadTarget,
         webRead: "not_probed"
       },
-      failureClass: result.ok ? null : capabilityFailureClass(classifyReturnedFailure(result)),
+      failureClass: result.ok ? workspaceReadFailureClass : capabilityFailureClass(classifyReturnedFailure(result)),
       checkedAt: new Date().toISOString()
     };
-    let backend = probeTarget;
-    try {
-      backend = resolveRuntimeRoute({ target: probeTarget, model, mode: "read_only", trustedWorkspace, caller: "capability_probe", delegationDepth: 0 }, runtimeConfiguration).backend;
-    } catch {
-    }
+    const backend = routeBackend || probeTarget;
     try {
       await appendRedactedRunMetric(runtimeConfiguration, {
         recordType: "live_observation",
@@ -1559,6 +1875,16 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     runProfileEditPilot,
     approvePreparedEdit,
     probeCapability,
+    prepareParallelBatch: (input, trustedWorkspace) => parallelServiceFor(trustedWorkspace).prepare(input),
+    startParallelBatch: (input, trustedWorkspace) => parallelServiceFor(trustedWorkspace).start(input),
+    getParallelBatch: (input, trustedWorkspace) => parallelServiceFor(trustedWorkspace).getBatch(input),
+    getParallelTaskDetail: (input, trustedWorkspace) => parallelServiceFor(trustedWorkspace).getTaskDetail(input),
+    cancelParallelBatch: (input, trustedWorkspace) => parallelServiceFor(trustedWorkspace).cancel(input),
+    approveParallelIntegration: (input, trustedWorkspace) => parallelServiceFor(trustedWorkspace).approveIntegration(input),
+    parallelBatchEnabled: parallelBatchConfiguration.enabled === true,
+    parallelBatchRecover: (trustedWorkspace) => trustedWorkspace
+      ? parallelServiceFor(trustedWorkspace).recover()
+      : Promise.resolve({ ok: false, recovered: [], reason: "trusted_workspace_required" }),
     checkLegacyDeepSeek: () => checkLegacy(runtimeConfiguration),
     checkGlm: () => checkGlm(runtimeConfiguration),
     checkCatalogProvider: (provider) => checkCatalogProvider(runtimeConfiguration, provider),

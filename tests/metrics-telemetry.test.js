@@ -119,8 +119,8 @@ test("WP4-ALLOWLIST-01: writer yalnız explicit execution allowlist alanlarını
     "schemaVersion", "usage", "webEvidenceRepair", "workspaceHash"
   ]);
   assert.deepEqual(Object.keys(record.attempts[0]).sort(), [
-    "durationMs", "exitCode", "failureClass", "failureStage", "number", "providerCode", "providerExecutionMs",
-    "retryDecision", "retryStopReason", "settingsLockWaitMs", "signal", "stderrBucket", "stdoutBucket", "totalCostUsd"
+    "durationMs", "exitCode", "failureClass", "failureStage", "number", "osErrorCode", "providerCode", "providerExecutionMs",
+    "retryDecision", "retryStopReason", "settingsLockWaitMs", "signal", "stderrBucket", "stdoutBucket", "totalCostUsd", "webEvidenceFailureCode"
   ]);
 });
 
@@ -174,6 +174,15 @@ test("WP4-ROUNDTRIP-03: v2 metric son attempt tanısını gösterir, attempt diz
     reason: "mutation_state_unknown",
     exitCode: 1,
     durationMs: 400,
+    reviewContract: {
+      version: 1,
+      sourceScopeStatus: "complete",
+      sourceDeliveryStatus: "complete_to_cli",
+      sourceManifestSha256: hash("source manifest"),
+      sourceFileCount: 1,
+      sourceBytes: 123,
+      reviewEligibility: "unavailable"
+    },
     metrics: {
       retries: 1,
       totalCostUsd: null,
@@ -193,6 +202,7 @@ test("WP4-ROUNDTRIP-03: v2 metric son attempt tanısını gösterir, attempt diz
   assert.equal(metric.schemaVersion, 2);
   assert.equal(metric.failureClass, "process_exit");
   assert.equal(metric.retryStopReason, "mutation_state_unknown");
+  assert.deepEqual(metric.reviewContract, result.reviewContract);
   await appendRedactedRunMetric(config, metric);
   const view = readRecentRuns(config);
   assert.equal(view.runCount, 1);
@@ -204,12 +214,42 @@ test("WP4-ROUNDTRIP-03: v2 metric son attempt tanısını gösterir, attempt diz
   assert.equal(run.exitCode, 1);
   assert.equal(run.mode, "edit");
   assert.equal(run.retries, 1);
+  assert.deepEqual(run.reviewContract, result.reviewContract);
   assert.equal(Object.hasOwn(run, "attempts"), false);
   const [record] = readMetricRecords(config);
   assert.equal(record.attempts.length, 2);
   assert.equal(record.attempts[1].retryStopReason, "mutation_state_unknown");
   assert.equal(JSON.stringify(record).includes("RAW_EXECUTION_ID"), false);
   assert.equal(JSON.stringify(record).includes(path.join(root, "workspace")), false);
+});
+
+test("WP4-REVIEW-DIAGNOSTICS: error code, evidence rejection and repair stop round-trip safely", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp4-review-diagnostics-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const config = configuration(root);
+  await appendRedactedRunMetric(config, executionMetric({
+    failureClass: "web_evidence_invalid",
+    failureStage: "evidence_invalid",
+    providerCode: null,
+    retryStopReason: "web_evidence_repair_exhausted",
+    attempts: [executionAttempt({
+      failureClass: "web_evidence_invalid",
+      failureStage: "evidence_invalid",
+      providerCode: null,
+      osErrorCode: "ENAMETOOLONG",
+      webEvidenceFailureCode: "carrier_missing_or_malformed",
+      retryStopReason: "web_evidence_repair_budget_exhausted"
+    })]
+  }));
+
+  const [record] = readMetricRecords(config);
+  const view = readRecentRuns(config);
+  assert.equal(record.attempts[0].osErrorCode, "ENAMETOOLONG");
+  assert.equal(record.attempts[0].webEvidenceFailureCode, "carrier_missing_or_malformed");
+  assert.equal(record.attempts[0].retryStopReason, "web_evidence_repair_budget_exhausted");
+  assert.equal(view.runs[0].osErrorCode, "ENAMETOOLONG");
+  assert.equal(view.runs[0].webEvidenceFailureCode, "carrier_missing_or_malformed");
+  assert.equal(view.runs[0].retryStopReason, "web_evidence_repair_budget_exhausted");
 });
 
 test("WP4-MIRROR-04: mirror sanitized kaydı alır ve sentinel sızdırmaz", async (t) => {

@@ -1,6 +1,11 @@
 export function classifyProcessFailure(processResult) {
   const output = `${processResult.stderr || ""}\n${processResult.stdout || ""}`.toLocaleLowerCase("en-US");
   if (processResult.error) {
+    if (processResult.error.failureClass === "prompt_transport_limit" || ["E2BIG", "ENAMETOOLONG"].includes(processResult.error.code)) {
+      return "prompt_transport_limit";
+    }
+    if (processResult.error.code === "ENOENT") return "executable_missing";
+    if (["EACCES", "EPERM"].includes(processResult.error.code)) return "permission_denied";
     const message = String(processResult.error.message || processResult.error).toLocaleLowerCase("en-US");
     if (/timed out|timeout|zaman aşımı/.test(message)) {
       return "timeout";
@@ -26,7 +31,7 @@ export function classifyProcessFailure(processResult) {
 }
 
 export function isRetryableFailure(errorClass) {
-  return ["rate_limited", "server", "network", "timeout", "output_parse_invalid", "empty_output", "schema_invalid"].includes(errorClass);
+  return ["rate_limited", "server", "network", "timeout", "provider_temporary_error"].includes(errorClass);
 }
 
 export function calculateRetryDelayMs(attemptNumber, baseDelayMs, maxDelayMs, randomValue = Math.random(), failureClass = null) {

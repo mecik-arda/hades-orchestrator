@@ -12,6 +12,7 @@ if (!["deepseek_pro", "deepseek_flash"].includes(model)) {
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [path.join(projectRoot, "subagent-bridge", "src", "server.js")],
+  cwd: workspace,
   env: {
     ...process.env,
     SUBAGENT_BRIDGE_TRUSTED_WORKSPACE: workspace

@@ -15,11 +15,8 @@ function collectDeniedRoots(configuration) {
   return [...roots];
 }
 
-export function resolveTrustedWorkspace(configuration, environment = process.env) {
-  const trustedWorkspace = environment.SUBAGENT_BRIDGE_TRUSTED_WORKSPACE;
-  if (!trustedWorkspace) {
-    throw new Error("SUBAGENT_BRIDGE_TRUSTED_WORKSPACE is required");
-  }
+export function resolveTrustedWorkspace(configuration, environment = process.env, currentDirectory = process.cwd()) {
+  const trustedWorkspace = environment.SUBAGENT_BRIDGE_TRUSTED_WORKSPACE || currentDirectory;
   if (!Array.isArray(configuration.allowedRoots) || configuration.allowedRoots.length === 0) {
     throw new Error("trusted workspace policy requires at least one allowed root");
   }

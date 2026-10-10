@@ -4,11 +4,13 @@ import path from "node:path";
 import { z } from "zod";
 import {
   failureStageValues,
+  operatingSystemErrorCodeValues,
   outputSizeBucketValues,
   processSignalValues,
   providerCodeValues,
   retryDecisionValues,
-  retryStopReasonValues
+  retryStopReasonValues,
+  webEvidenceFailureCodeValues
 } from "./schemas/core-schemas.js";
 
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -19,6 +21,15 @@ const backendSchema = z.enum(["antigravity", "claude_code", "codex", "deepseek",
 const modeSchema = z.enum(["read_only", "edit"]);
 const outcomeSchema = z.enum(["completed", "failed"]);
 const roleSchema = z.enum(["analyst", "researcher", "reviewer", "planner"]);
+const reviewContractSchema = z.object({
+  version: z.literal(1),
+  sourceScopeStatus: z.enum(["not_requested", "complete", "blocked"]),
+  sourceDeliveryStatus: z.enum(["not_attempted", "complete_to_cli", "failed"]),
+  sourceManifestSha256: hashSchema.nullable(),
+  sourceFileCount: z.number().int().nonnegative().nullable(),
+  sourceBytes: z.number().int().nonnegative().max(256 * 1024).nullable(),
+  reviewEligibility: z.enum(["eligible_for_orchestrator_evaluation", "unverified", "unavailable"])
+}).strict();
 const usageSchema = z.object({
   durationMs: finiteNonnegativeSchema.optional().nullable(),
   apiDurationMs: finiteNonnegativeSchema.optional().nullable(),
@@ -56,6 +67,8 @@ const attemptSchemaV2 = z.object({
   failureClass: nullableTokenSchema.optional(),
   failureStage: z.enum(failureStageValues).nullable().optional(),
   providerCode: z.enum(providerCodeValues).nullable().optional(),
+  osErrorCode: z.enum(operatingSystemErrorCodeValues).nullable().optional(),
+  webEvidenceFailureCode: z.enum(webEvidenceFailureCodeValues).nullable().optional(),
   exitCode: z.number().int().optional().nullable(),
   signal: z.enum(processSignalValues).nullable().optional(),
   retryDecision: z.enum(retryDecisionValues).optional(),
@@ -96,7 +109,8 @@ const executionSchemaV2 = z.object({
     supportsModelSelection: z.boolean()
   }).strict().nullable().optional(),
   artifactHashes: z.array(hashSchema).max(100).nullable().optional(),
-  webEvidenceRepair: z.boolean().optional()
+  webEvidenceRepair: z.boolean().optional(),
+  reviewContract: reviewContractSchema.optional()
 }).strict();
 const legacySchema = z.object({
   recordedAt: z.string().datetime(),
@@ -195,6 +209,8 @@ function lastAttemptDiagnosis(attempts, fallback = {}) {
       failureStage: fallback.failureStage ?? null,
       providerCode: fallback.providerCode ?? null,
       retryStopReason: fallback.retryStopReason ?? null,
+      osErrorCode: fallback.osErrorCode ?? null,
+      webEvidenceFailureCode: fallback.webEvidenceFailureCode ?? null,
       exitCode: null,
       signal: null
     };
@@ -203,6 +219,8 @@ function lastAttemptDiagnosis(attempts, fallback = {}) {
     failureStage: lastAttempt.failureStage ?? null,
     providerCode: lastAttempt.providerCode ?? null,
     retryStopReason: lastAttempt.retryStopReason ?? null,
+    osErrorCode: lastAttempt.osErrorCode ?? null,
+    webEvidenceFailureCode: lastAttempt.webEvidenceFailureCode ?? null,
     exitCode: lastAttempt.exitCode ?? null,
     signal: lastAttempt.signal ?? null
   };
@@ -234,12 +252,15 @@ function normalizeRun(record) {
       failureStage: diagnosis.failureStage,
       providerCode: diagnosis.providerCode,
       retryStopReason: diagnosis.retryStopReason,
+      osErrorCode: diagnosis.osErrorCode,
+      webEvidenceFailureCode: diagnosis.webEvidenceFailureCode,
       exitCode: diagnosis.exitCode,
       signal: diagnosis.signal,
       durationMs: value.usage.durationMs ?? null,
       reportedCostUsd: value.usage.totalCostUsd ?? null,
       cacheHit: value.cacheHit,
-      retries: lastAttempt ? Math.max(0, value.attempts.length - 1) : value.retries
+      retries: lastAttempt ? Math.max(0, value.attempts.length - 1) : value.retries,
+      ...(value.reviewContract ? { reviewContract: value.reviewContract } : {})
     };
   }
   const execution = executionSchema.safeParse(record);
@@ -260,6 +281,8 @@ function normalizeRun(record) {
       failureStage: null,
       providerCode: null,
       retryStopReason: null,
+      osErrorCode: null,
+      webEvidenceFailureCode: null,
       exitCode: null,
       signal: null,
       durationMs: value.usage.durationMs ?? null,
@@ -286,6 +309,8 @@ function normalizeRun(record) {
     failureStage: null,
     providerCode: null,
     retryStopReason: null,
+    osErrorCode: null,
+    webEvidenceFailureCode: null,
     exitCode: null,
     signal: null,
     durationMs: value.usage.durationMs ?? null,
@@ -376,12 +401,15 @@ export function readRecentRuns(configuration, options = {}) {
       failureStage: run.failureStage,
       providerCode: run.providerCode,
       retryStopReason: run.retryStopReason,
+      osErrorCode: run.osErrorCode,
+      webEvidenceFailureCode: run.webEvidenceFailureCode,
       exitCode: run.exitCode,
       signal: run.signal,
       durationMs: run.durationMs,
       reportedCostUsd: run.reportedCostUsd,
       cacheHit: run.cacheHit,
       retries: run.retries,
+      ...(run.reviewContract ? { reviewContract: run.reviewContract } : {}),
       feedback: run.kind === "legacy" ? { routing: "not_applicable", directEdit: "not_applicable" } : {
         routing: routingFeedback.get(run.fullHash)?.outcome || "pending",
         directEdit: directEditFeedback.get(run.fullHash)?.outcome || "pending"
