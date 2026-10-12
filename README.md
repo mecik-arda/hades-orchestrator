@@ -11,6 +11,7 @@ Hades Orchestrator is a provider-neutral orchestration system in which the OpenC
 - DeepSeek, GLM, Codex, Gemini/Antigravity and native Claude Code backends through a single MCP surface.
 - Fail-closed read-only sandbox, controlled edits to selected files, promotion with rollback support.
 - Access mode, cost, retry, persistent memory and redacted metric policies.
+- Orchestration V2: an additive host-owned parallel batch scheduler (read-only DAG waves, single-wave edit batches in isolated Git worktrees, bounded summaries with opaque detail references, approval-bound integration and explicit cancellation).
 
 ## Table of contents
 
@@ -51,7 +52,7 @@ The runtime policy is loaded from `~/.config/subagent-bridge/config.json`; execu
 
 ## Verified baseline
 
-The package is `hades-orchestrator@2.2.0`, the runtime is Node.js 20.9+ and ESM. The canonical record lives under `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, with the optional view at `<workspace>/.hades/runs.jsonl`. Last full local validation: 2026-10-12. Run `npm test` for the current regression; `npm run verify`, `npm run verify:ci` and `npm run smoke` succeed. The Codex CLI version check in `verify` does not probe a model: it reports `model: null` and `modelAccess: "not_probed"`.
+The package is `hades-orchestrator@2.2.0`, the runtime is Node.js 20.9+ and ESM; CI uses Node.js 22/24. The canonical record lives under `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, with the optional view at `<workspace>/.hades/runs.jsonl`. Last full local validation: 2026-10-12. Run `npm test` for the current regression; `npm run verify`, `npm run verify:ci` and `npm run smoke` succeed. The Codex CLI version check in `verify` does not probe a model: it reports `model: null` and `modelAccess: "not_probed"`.
 
 ## Quick start
 
@@ -107,6 +108,16 @@ It passes `configVersion: 2` schema validation; unknown or missing fields are re
 ### Orchestration V2 parallel batches
 
 Orchestration V2 is an additive host-owned scheduler in the existing Node bridge; it does not replace single-subagent tools or add an agent framework. “V2” is the feature name, not the package version or `configVersion`. Read-only batches support independent tasks and sequential dependency waves. Workers return bounded JSON summaries; full details are available only through an opaque, caller/workspace/batch/task-bound reference. Edit batches use isolated Git worktrees and remain single-wave. Each edit task uses a private task repository with its own refs and no inherited remote; the host verifies source refs before accepting the task diff. Host-side promotion verification is restricted to the non-executing `git diff --check` check; arbitrary project commands are rejected until an OS-isolated verification runner exists. Run project tests separately before approving integration. `stopConditions` guide the worker and `resourceClaims` serialize tasks that share a named resource. Per-task input/output byte, file-count and diff-byte bounds cannot exceed host ceilings. Input-token limits fail closed where no host-enforced tokenizer limit exists; output-token limits require a route whose provider cap passed its canary.
+
+Orchestration V2 capability summary:
+
+- Two-step batch flow: `prepare_parallel_batch` returns a bounded preview; only a separate user approval turn starts it with the exact `planId`/`planHash`.
+- Batch shapes: read-only batches support independent tasks and sequential dependency waves; edit batches are single-wave and run in isolated Git worktrees with per-task private refs.
+- Bounded results: workers return small JSON summaries; full detail stays behind opaque, caller/workspace/batch/task-bound references instead of entering the orchestrator context.
+- Approval-bound integration: the combined diff preview, diff hash, source HEAD/ref state and changed-file hashes are verified under the source workspace write lock; a durable per-workspace journal restores partial promotions at startup.
+- Explicit cancellation: `cancel_parallel_batch` stops queued/running work; settled `result_ready`/`blocked` batches persist a terminal `cancelled` state without re-settling completed tasks or costs.
+- Fail-closed defaults: the distribution template keeps `enabled: false`, `editEnabled: false` and `opencodeOutputCapability: unavailable`; host verification currently allows only `git diff --check` because no OS-isolated runner exists yet.
+- Optional live view: `npm run parallel:watch -- <batchId>` or the opt-in auto-open Windows Terminal dashboard; `Ctrl+C` stops only the view.
 
 The MCP workflow is deliberately two-step:
 
@@ -403,7 +414,7 @@ These documents are historical plans. Each audited plan starts with a dated stat
 
 ## Continuous integration
 
-This checkout does not contain a GitHub Actions workflow. Run `npm ci`, `npm test` and `npm run verify:ci` locally or in an explicitly configured CI runner; no hosted workflow result is claimed. `verify:ci` requires no local executable, provider auth or Vault. Use `npm run config:backup` before a personal policy change and `npm run config:rollback -- <backup>` to roll back.
+`.github/workflows/validate.yml` runs `npm ci`, `npm test` and `npm run verify:ci` on Windows and Linux with Node 22/24. `verify:ci` requires no local executable, provider auth or Vault. Use `npm run config:backup` before a personal policy change and `npm run config:rollback -- <backup>` to roll back.
 
 ## Acknowledgements
 
@@ -424,6 +435,7 @@ Hades Orchestrator, OpenCode host ve ana orkestratörün yerel MCP üzerinden ba
 - Tek MCP yüzeyinden DeepSeek, GLM, Codex, Gemini/Antigravity ve native Claude Code backend’leri.
 - Fail-closed salt-okunur sandbox, seçili dosyalara kontrollü edit, rollback destekli promotion.
 - Erişim modu, maliyet, retry, kalıcı hafıza ve redacted metrik politikaları.
+- Orkestrasyon V2: yeni eklenen host-owned paralel batch scheduler'ı (salt-okunur DAG dalgaları, izole Git worktree'lerinde tek dalgalı edit batch'leri, opak detail referanslı bounded özetler, approval-bound entegrasyon ve açık iptal).
 
 ## İçindekiler
 
@@ -464,7 +476,7 @@ Runtime policy’si `~/.config/subagent-bridge/config.json`, executable ve adapt
 
 ## Doğrulanmış taban
 
-Paket `hades-orchestrator@2.2.0`, çalışma zamanı Node.js 20.9+ ve ESM’dir. Kanonik kayıt `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, isteğe bağlı görünüm `<workspace>/.hades/runs.jsonl` altındadır. Son tam yerel doğrulama: 2026-10-12. Güncel regresyon için `npm test` çalıştırılır; `npm run verify`, `npm run verify:ci` ve `npm run smoke` başarılıdır. Verify içindeki Codex CLI sürüm kontrolü model probe'u yapmaz; `model: null` ve `modelAccess: "not_probed"` raporlar.
+Paket `hades-orchestrator@2.2.0`, çalışma zamanı Node.js 20.9+ ve ESM’dir; CI Node.js 22/24 kullanır. Kanonik kayıt `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, isteğe bağlı görünüm `<workspace>/.hades/runs.jsonl` altındadır. Son tam yerel doğrulama: 2026-10-12. Güncel regresyon için `npm test` çalıştırılır; `npm run verify`, `npm run verify:ci` ve `npm run smoke` başarılıdır. Verify içindeki Codex CLI sürüm kontrolü model probe'u yapmaz; `model: null` ve `modelAccess: "not_probed"` raporlar.
 
 ## Hızlı başlangıç
 
@@ -520,6 +532,16 @@ Sonuç `sourceClass: "mcp_resource"` ile güvenilmeyen bir gözlemdir. `workspac
 ### Orkestrasyon V2 paralel batch'leri
 
 Orkestrasyon V2, mevcut Node bridge'e eklenen host-owned scheduler'dır; tekil subagent araçlarının yerini almaz ve yeni workflow framework'ü eklemez. “V2” özellik adıdır; paket sürümü veya `configVersion` değildir. Salt-okunur batch'ler bağımsız görevleri ve sıralı bağımlılık dalgalarını destekler. Worker'lar bounded JSON özet döndürür; tam ayrıntı yalnız caller/workspace/batch/task bağlamına bağlı opak referansla okunur. Edit batch'leri Git worktree izolasyonu kullanır ve tek dalgada kalır. Edit task'ları seçilmiş, host allowlist'indeki doğrulama komutlarını ister; `stopConditions` worker'a bildirilir, `resourceClaims` ortak adlı kaynağı kullanan görevleri sıralar. Task başına input/output byte, dosya sayısı ve diff byte limitleri host tavanını aşamaz. Host-enforced tokenizer sınırı olmayan rotada input-token talebi fail-closed reddedilir; output-token sınırı için provider cap canary'si gerekir.
+
+Orkestrasyon V2 yetenek özeti:
+
+- İki aşamalı batch akışı: `prepare_parallel_batch` sınırlı bir önizleme döndürür; yalnız ayrı kullanıcı onay turu aynı `planId`/`planHash` ile başlatır.
+- Batch biçimleri: salt-okunur batch'ler bağımsız görevleri ve sıralı bağımlılık dalgalarını destekler; edit batch'leri tek dalgadır ve task başına özel ref'li izole Git worktree'lerinde çalışır.
+- Bounded sonuçlar: worker'lar küçük JSON özeti döndürür; tam ayrıntı orkestratör context'ine girmeden opak, caller/workspace/batch/task bağlı referanslarda kalır.
+- Approval-bound entegrasyon: birleşik diff önizlemesi, diff hash'i, kaynak HEAD/ref durumu ve değişen dosya hash'leri kaynak workspace write lock'u altında doğrulanır; kalıcı workspace journal'ı başlangıçta yarım promotion'ları geri alır.
+- Açık iptal: `cancel_parallel_batch` kuyruktaki/çalışan işleri durdurur; sonuçları yerleşmiş `result_ready`/`blocked` batch'ler tamamlanan görevleri ve maliyeti yeniden settle etmeden kalıcı `cancelled` durumu yazar.
+- Fail-closed varsayılanlar: dağıtım şablonu `enabled: false`, `editEnabled: false` ve `opencodeOutputCapability: unavailable` tutar; OS-izole runner bulunmadığından host doğrulaması yalnız `git diff --check` ile sınırlıdır.
+- İsteğe bağlı canlı görünüm: `npm run parallel:watch -- <batchId>` veya opt-in otomatik Windows Terminal paneli; `Ctrl+C` yalnız görünümü durdurur.
 
 MCP akışı bilinçli olarak iki aşamalıdır:
 
@@ -801,7 +823,7 @@ Bu dokümanlar tarihsel planlardır. Denetlenen her planın başında tarihli du
 
 ## Sürekli entegrasyon
 
-Bu checkout'ta GitHub Actions workflow dosyası bulunmaz. `npm ci`, `npm test` ve `npm run verify:ci` yerelde veya açıkça yapılandırılmış CI runner'da çalıştırılır; hosted workflow sonucu iddia edilmez. `verify:ci` yerel executable, provider auth veya Vault gerektirmez. Kişisel policy değişikliğinden önce `npm run config:backup`, geri alma için `npm run config:rollback -- <backup>` kullanılır.
+`.github/workflows/validate.yml`, Windows ve Linux üzerinde Node 22/24 ile `npm ci`, `npm test` ve `npm run verify:ci` çalıştırır. `verify:ci` yerel executable, provider auth veya Vault gerektirmez. Kişisel policy değişikliğinden önce `npm run config:backup`, geri alma için `npm run config:rollback -- <backup>` kullanılır.
 
 ## Teşekkür
 
