@@ -51,7 +51,7 @@ The runtime policy is loaded from `~/.config/subagent-bridge/config.json`; execu
 
 ## Verified baseline
 
-The package is `hades-orchestrator@2.2.0`, the runtime is Node.js 20.9+ and ESM; CI uses Node.js 22/24. The canonical record lives under `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, with the optional view at `<workspace>/.hades/runs.jsonl`. Last full validation: 2026-10-03. Run `npm test` for the current regression; `npm run verify`, `npm run verify:ci` and `npm run smoke` succeed.
+The package is `hades-orchestrator@2.2.0`, the runtime is Node.js 20.9+ and ESM. The canonical record lives under `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, with the optional view at `<workspace>/.hades/runs.jsonl`. Last full local validation: 2026-10-12. Run `npm test` for the current regression; `npm run verify`, `npm run verify:ci` and `npm run smoke` succeed. The Codex CLI version check in `verify` does not probe a model: it reports `model: null` and `modelAccess: "not_probed"`.
 
 ## Quick start
 
@@ -115,6 +115,8 @@ The MCP workflow is deliberately two-step:
 3. `start_parallel_batch` returns a `batchId`; each `get_parallel_batch` poll returns structured progress percentage and per-task states. The percentage counts resolved tasks; `unknown` is not counted as complete, and no token/work percentage is invented for a running task. OpenCode does not currently render MCP progress notifications as a persistent TUI view. `get_parallel_task_detail` reads a bounded artifact page, and `cancel_parallel_batch` is the explicit cancellation path. A client disconnect does not cancel an accepted batch.
 4. Before approving edit integration, fetch the bounded combined diff through `get_parallel_task_detail` with `taskId: "integration"` and the approval's `detailRef`. The separate approval binds the diff hash, source HEAD/ref state and changed-file hashes and applies under the source workspace write lock. Task verification runs in each isolated task worktree, followed by integration verification. A changed source file invalidates the preview. Promotion writes a durable per-workspace recovery journal before replacing files; startup restores a partial promotion or reconciles a committed promotion with the batch manifest. Conflicting external file changes or failed recovery keep the journal and block further edit work. Files are replaced individually, so readers outside the bridge lock can observe an in-progress multi-file promotion. Cancelling a ready diff revokes its approval; once promotion has entered `integrating`, cancellation is refused. Integration does not commit or push.
 
+Cancelling a settled `result_ready` or `blocked` batch persists the terminal `cancelled` status without changing completed task results or settling costs again. Repeated cancellation is a no-op.
+
 Example `prepare_parallel_batch` arguments:
 
 ```json
@@ -167,7 +169,7 @@ Space Bunny Free is available only by explicit selection. `check_space_bunny_sub
 
 Calls use `--pure`, disable project-local OpenCode config, and receive a Bridge-generated per-invocation `OPENCODE_CONFIG_CONTENT`: `small_model` is pinned to Space Bunny, and the primary agent's effective permissions deny all tools by default except the explicitly allowed read tools (or edit tool in the disposable edit worker). Inherited config overrides are not trusted, personal OpenCode configuration is not changed, and configured task-profile fallback never routes to Space Bunny. OS-managed settings still take precedence and effective permissions must pass canary checks. Catalog health does not establish model access.
 
-For OpenCode source-bundle reviews, the Bridge sets `OPENCODE_DB=:memory:` so session and message records use the in-memory database path supported by the verified CLI version instead of persisting in the user's OpenCode session database. Run `npm run opencode:memory-db:verify` to send the two-file synthetic bundle through the installed `1.18.35` CLI to a localhost-only mock model, verify that no tool events or persistent session database are produced, and clean up the isolated data directory. The mock response is fixed, so this check does not evaluate review semantics or replace the hosted Zen Terms decision and source-bundle canary.
+For OpenCode source-bundle reviews, the Bridge sets `OPENCODE_DB=:memory:` so session and message records use the in-memory database path supported by the verified CLI version instead of persisting in the user's OpenCode session database. The source-bundle transport accepts only the verified exact CLI versions `1.18.35` and `1.19.0`; other versions fail closed before dispatch. Run `npm run opencode:memory-db:verify` with the installed `1.19.0` CLI to send the two-file synthetic bundle to a localhost-only mock model, verify that no tool events or persistent session database are produced, and clean up the isolated data directory. The mock response is fixed, so this check does not evaluate review semantics or replace the hosted Zen Terms decision and source-bundle canary.
 
 The current OpenCode Terms (effective August 15, 2026) prohibit automatically or programmatically extracting data or Output. Official CLI docs describe `run` for scripting/automation and `--format json` for raw JSON events; the SDK supports programmatic control, and the Zen page says “Use with any agent.” These product docs establish technical/product support but do not expressly define an exception to the Terms restriction. The user reports that a written clarification request was sent to OpenCode on 2026-10-10; its response is pending. A new hosted Space Bunny source-bundle canary remains gated until that response is evaluated. The CLI's local in-memory session database does not change upstream data handling or Terms applicability.
 
@@ -401,7 +403,7 @@ These documents are historical plans. Each audited plan starts with a dated stat
 
 ## Continuous integration
 
-`.github/workflows/validate.yml` runs `npm ci`, `npm test` and `npm run verify:ci` on Windows and Linux with Node 22/24. `verify:ci` requires no local executable, provider auth or Vault. Use `npm run config:backup` before a personal policy change and `npm run config:rollback -- <backup>` to roll back.
+This checkout does not contain a GitHub Actions workflow. Run `npm ci`, `npm test` and `npm run verify:ci` locally or in an explicitly configured CI runner; no hosted workflow result is claimed. `verify:ci` requires no local executable, provider auth or Vault. Use `npm run config:backup` before a personal policy change and `npm run config:rollback -- <backup>` to roll back.
 
 ## Acknowledgements
 
@@ -462,7 +464,7 @@ Runtime policy’si `~/.config/subagent-bridge/config.json`, executable ve adapt
 
 ## Doğrulanmış taban
 
-Paket `hades-orchestrator@2.2.0`, çalışma zamanı Node.js 20.9+ ve ESM’dir; CI Node.js 22/24 kullanır. Kanonik kayıt `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, isteğe bağlı görünüm `<workspace>/.hades/runs.jsonl` altındadır. Son tam doğrulama: 2026-10-03. Güncel regresyon için `npm test` çalıştırılır; `npm run verify`, `npm run verify:ci` ve `npm run smoke` başarılıdır.
+Paket `hades-orchestrator@2.2.0`, çalışma zamanı Node.js 20.9+ ve ESM’dir. Kanonik kayıt `%LOCALAPPDATA%\subagent-bridge\logs\metrics`, isteğe bağlı görünüm `<workspace>/.hades/runs.jsonl` altındadır. Son tam yerel doğrulama: 2026-10-12. Güncel regresyon için `npm test` çalıştırılır; `npm run verify`, `npm run verify:ci` ve `npm run smoke` başarılıdır. Verify içindeki Codex CLI sürüm kontrolü model probe'u yapmaz; `model: null` ve `modelAccess: "not_probed"` raporlar.
 
 ## Hızlı başlangıç
 
@@ -525,6 +527,8 @@ MCP akışı bilinçli olarak iki aşamalıdır:
 2. Ana orkestratör önizlemeyi kullanıcıya gösterir. Yalnız ayrı ve açık kullanıcı onay turundan sonra aynı plan ID/hash ile `start_parallel_batch` çağrılır.
 3. `start_parallel_batch` hemen `batchId` döndürür; her `get_parallel_batch` poll'u yapılandırılmış ilerleme yüzdesi ve task durumlarını döndürür. Yüzde çözümlenmiş task'ları sayar; `unknown` tamamlanmış sayılmaz ve çalışan task içindeki token/iş yüzdesi uydurulmaz. OpenCode MCP progress notification'larını kalıcı bir TUI görünümü olarak çizmez. `get_parallel_task_detail` artifact sayfası okur, `cancel_parallel_batch` açık iptal sağlar. MCP istemcisinin bağlantı kesmesi kabul edilmiş batch'i iptal etmez.
 4. Edit entegrasyonunu onaylamadan önce `taskId: "integration"` ve onay özetindeki `detailRef` ile `get_parallel_task_detail` çağırıp birleşik diff'in sınırlı sayfalarını inceleyin. Ayrı onay diff hash'i, kaynak HEAD/ref durumu ve değişen dosya hash'lerine bağlanır; kaynak workspace write lock altında uygulanır. Doğrulama komutları her izole task worktree'sinde ve ardından integration worktree'sinde çalışır. Kaynak dosya değişmişse önizleme geçersizleşir. Dosyalar değiştirilmeden önce workspace'e bağlı durable recovery journal yazılır; başlangıç kurtarması yarım promotion'ı geri alır veya commit edilmiş promotion'ı batch manifestiyle uzlaştırır. Kaynakta çakışan harici değişiklik veya kurtarma hatası journal'ı koruyup yeni edit işlemlerini bloke eder. Dosyalar tek tek değiştirildiğinden bridge write lock'u dışındaki okuyucular tamamlanmakta olan çok dosyalı promotion'ın ara durumunu görebilir. Hazır diff'i iptal etmek onayı düşürür; `integrating` başladıktan sonra iptal reddedilir. Git commit/push yapmaz.
+
+Sonuçları yerleşmiş `result_ready` veya `blocked` batch'inin iptali, tamamlanan task sonuçlarını ve maliyet settlement'ını değiştirmeden kalıcı `cancelled` durumu yazar. Tekrar iptal no-op'tur.
 
 `prepare_parallel_batch` için örnek argümanlar:
 
@@ -797,7 +801,7 @@ Bu dokümanlar tarihsel planlardır. Denetlenen her planın başında tarihli du
 
 ## Sürekli entegrasyon
 
-`.github/workflows/validate.yml`, Windows ve Linux üzerinde Node 22/24 ile `npm ci`, `npm test` ve `npm run verify:ci` çalıştırır. `verify:ci` yerel executable, provider auth veya Vault gerektirmez. Kişisel policy değişikliğinden önce `npm run config:backup`, geri alma için `npm run config:rollback -- <backup>` kullanılır.
+Bu checkout'ta GitHub Actions workflow dosyası bulunmaz. `npm ci`, `npm test` ve `npm run verify:ci` yerelde veya açıkça yapılandırılmış CI runner'da çalıştırılır; hosted workflow sonucu iddia edilmez. `verify:ci` yerel executable, provider auth veya Vault gerektirmez. Kişisel policy değişikliğinden önce `npm run config:backup`, geri alma için `npm run config:rollback -- <backup>` kullanılır.
 
 ## Teşekkür
 

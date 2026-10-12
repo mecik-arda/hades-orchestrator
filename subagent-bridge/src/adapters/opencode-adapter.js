@@ -20,7 +20,7 @@ const OPENCODE_MODEL_MAP = {
 };
 
 const ANTIGRAVITY_MODEL_ALIASES = new Set(["gemini", "gemini_pro", "gemini_flash", "gemini_flash_3_7", "gemini_flash_3_8", "claude_sonnet"]);
-const VERIFIED_REVIEW_STDIN_VERSION = "1.18.35";
+const VERIFIED_REVIEW_STDIN_VERSIONS = new Set(["1.18.35", "1.19.0"]);
 
 const activeExecutionHandles = new Map();
 
@@ -329,7 +329,7 @@ export function createOpenCodeAdapter(configuration) {
         const reportedVersion = versionResult.code === 0
           ? /(?:^|\s)v?(\d+\.\d+\.\d+)(?:\s|$)/u.exec(`${versionResult.stdout} ${versionResult.stderr}`)?.[1]
           : null;
-        if (reportedVersion !== VERIFIED_REVIEW_STDIN_VERSION) {
+        if (!VERIFIED_REVIEW_STDIN_VERSIONS.has(reportedVersion)) {
           return createFailureSubagentResult("opencode", model.model, {
             error: "OpenCode source-bundle stdin transport is not verified for this CLI version",
             reason: "review_source_transport_unsupported",

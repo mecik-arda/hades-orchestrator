@@ -5,7 +5,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { spawn } from "node:child_process";
 
-const expectedVersion = "1.18.35";
+const expectedVersion = "1.19.0";
 const responseText = "LOCAL_MOCK_RESPONSE_OK";
 const promptText = "Review only the supplied synthetic source bundle. Report any conflict between the contract and example.";
 const contractText = "Allowed status values: queued, completed.\nA completed entry requires verified: true.\n";

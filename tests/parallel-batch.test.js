@@ -226,6 +226,36 @@ test("V2-BATCH: duplicate start consumes the plan exactly once", async (t) => {
   assert.equal(batches.length, 1);
 });
 
+for (const initialStatus of ["result_ready", "blocked"]) {
+  test(`V2-BATCH: cancelling a settled ${initialStatus} batch persists terminal state without resettling costs`, async (t) => {
+    const { service, registry, runtime } = createFixture(t);
+    const prepared = await service.prepare({ objective: "Inspect one file", batchMaxReservedCostUsd: 1, tasks: [baseTask("settled-task")] });
+    const started = await service.start({ planId: prepared.planId, planHash: prepared.planHash });
+    await waitForBatch(service, started.batchId, ["result_ready"]);
+    if (initialStatus === "blocked") {
+      const update = await registry.updateBatch(started.batchId, manifest => {
+        manifest.status = "blocked";
+        return manifest;
+      });
+      assert.equal(update.ok, true);
+    }
+    const before = await registry.getBatch(started.batchId);
+    assert.equal(before.status, initialStatus);
+    const cancelled = await service.cancel({ batchId: started.batchId });
+    assert.equal(cancelled.ok, true);
+    assert.equal(cancelled.summary.status, "cancelled");
+    assert.equal(cancelled.cancellation.requested, true);
+    const after = await registry.getBatch(started.batchId);
+    assert.equal(after.status, "cancelled");
+    assert.deepEqual(after.tasks, before.tasks);
+    assert.deepEqual(after.budget, before.budget);
+    assert.equal(runtime.executions.length, 1);
+    const repeated = await service.cancel({ batchId: started.batchId });
+    assert.equal(repeated.cancellation.requested, false);
+    assert.equal(repeated.cancellation.reason, "already_terminal");
+  });
+}
+
 test("V2-BATCH: read-only multi-wave plans are accepted", async (t) => {
   const { service } = createFixture(t);
   const result = await service.prepare({

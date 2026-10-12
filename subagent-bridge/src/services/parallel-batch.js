@@ -1696,7 +1696,7 @@ export function createParallelBatchService({
           }
         }
         candidate.status = "cancel_requested";
-      } else if (candidate.status === "ready_for_approval") {
+      } else if (["ready_for_approval", "result_ready", "blocked"].includes(candidate.status)) {
         candidate.status = "cancelled";
         candidate.endedAt = nowIso();
       } else if (candidate.status === "cancel_requested" || candidate.status === "cancelling") {

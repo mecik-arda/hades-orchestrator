@@ -402,35 +402,37 @@ test("OC-REVIEW-01: host source reviewer has no workspace or tool permissions", 
   assert.equal(spaceBunnyArgs[spaceBunnyArgs.indexOf("--agent") + 1], "space-bunny-source-review");
 });
 
-test("OC-REVIEW-02: required source-bundle stdin is accepted only on the verified OpenCode CLI version", async () => {
-  const script = "const args=process.argv.slice(1); if(args.includes('--version')) process.stdout.write('1.18.35'); else { let input=''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { const agent = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT).agent['host-source-review']; process.stdout.write(JSON.stringify({type:'text',part:{text:JSON.stringify({input,permission:agent.permission,database:process.env.OPENCODE_DB})}})+'\\n'); }); }";
-  const adapter = createOpenCodeAdapter({
-    opencode: {
-      executable: process.execPath,
-      execArgs: ["-e", script, "--"],
-      allowedModels: ["deepseek/deepseek-v4-pro"]
-    }
-  });
-  const result = await adapter.execute({
-    executionId: "source-bundle-transport-supported",
-    backend: "opencode",
-    prompt: "Review the host-delivered source.",
-    model: "deepseek/deepseek-v4-pro",
-    mode: "read_only",
-    workspace: process.cwd(),
-    delegationDepth: 0,
-    caller: "test_review",
-    timeoutMs: 5000,
-    reviewSourcePayload: "host source payload"
-  });
+for (const verifiedVersion of ["1.18.35", "1.19.0"]) {
+  test(`OC-REVIEW-02: required source-bundle stdin is accepted on verified OpenCode ${verifiedVersion}`, async () => {
+    const script = `const args=process.argv.slice(1); if(args.includes('--version')) process.stdout.write('${verifiedVersion}'); else { let input=''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { const agent = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT).agent['host-source-review']; process.stdout.write(JSON.stringify({type:'text',part:{text:JSON.stringify({input,permission:agent.permission,database:process.env.OPENCODE_DB})}})+'\\n'); }); }`;
+    const adapter = createOpenCodeAdapter({
+      opencode: {
+        executable: process.execPath,
+        execArgs: ["-e", script, "--"],
+        allowedModels: ["deepseek/deepseek-v4-pro"]
+      }
+    });
+    const result = await adapter.execute({
+      executionId: `source-bundle-transport-supported-${verifiedVersion}`,
+      backend: "opencode",
+      prompt: "Review the host-delivered source.",
+      model: "deepseek/deepseek-v4-pro",
+      mode: "read_only",
+      workspace: process.cwd(),
+      delegationDepth: 0,
+      caller: "test_review",
+      timeoutMs: 5000,
+      reviewSourcePayload: "host source payload"
+    });
 
-  assert.equal(result.ok, true, JSON.stringify(result));
-  const observed = JSON.parse(result.result);
-  assert.equal(observed.input, "host source payload");
-  assert.equal(observed.permission["*"], "deny");
-  assert.equal(observed.permission.external_directory, "deny");
-  assert.equal(observed.database, ":memory:");
-});
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const observed = JSON.parse(result.result);
+    assert.equal(observed.input, "host source payload");
+    assert.equal(observed.permission["*"], "deny");
+    assert.equal(observed.permission.external_directory, "deny");
+    assert.equal(observed.database, ":memory:");
+  });
+}
 
 test("OC-REVIEW-03: unverified OpenCode CLI version rejects required source bundle before run", async () => {
   const script = "const args=process.argv.slice(1); if(args.includes('--version')) process.stdout.write('1.18.36'); else process.stdout.write(JSON.stringify({type:'text',part:{text:'run started'}})+'\\n');";

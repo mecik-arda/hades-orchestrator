@@ -16,6 +16,16 @@ export function buildCodexCheck(configuration) {
     : { status: 1, stdout: "", stderr: "Codex configuration unavailable" };
 }
 
+export function buildCodexVerificationReport(codexCheck) {
+  return {
+    ok: codexCheck.status === 0,
+    version: (codexCheck.stdout || codexCheck.stderr || "").trim(),
+    model: null,
+    modelAccess: "not_probed",
+    role: "subagent"
+  };
+}
+
 export async function runVerification() {
   const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
   const projectRoot = path.resolve(scriptDirectory, "..");
@@ -110,12 +120,7 @@ export async function runVerification() {
     node: process.version,
     files: fileChecks,
     skills: skillChecks,
-    codex: {
-      ok: codexCheck.status === 0,
-      version: (codexCheck.stdout || codexCheck.stderr || "").trim(),
-      model: "gpt-5.6-sol",
-      role: "lead"
-    },
+    codex: buildCodexVerificationReport(codexCheck),
     deepSeek: {
       ok: deepSeekCheck.available,
       version: deepSeekCheck.version,
