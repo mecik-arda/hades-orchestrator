@@ -118,13 +118,53 @@ test("CAP-PROBE-06: trusted workspace read probe is explicit, scoped to a host s
   assert.equal(probe.capabilities.modelAccess, "available");
   assert.equal(probe.capabilities.toolFreeResponse, "available");
   assert.equal(probe.capabilities.workspaceRead, "available");
+  assert.equal(probe.capabilities.workspaceReadCleanupStatus, "complete");
   assert.equal(probe.capabilities.workspaceReadTarget, "trusted_workspace");
   assert.ok(path.relative(root, observedProbeWorkspace).startsWith(".bridge-capability-read-"));
   assert.equal(fs.readdirSync(root).some((entry) => entry.startsWith(".bridge-capability-read-")), false);
   assert.equal(JSON.stringify(probe).includes(root), false);
   const record = readLiveObservation(root);
   assert.equal(record.capabilities.workspaceRead, "available");
+  assert.equal(record.capabilities.workspaceReadCleanupStatus, "complete");
   assert.equal(record.capabilities.workspaceReadTarget, "trusted_workspace");
+});
+
+test("CAP-PROBE-08: marker içeren açıklamalı yanıt workspace okuması olarak doğrulanır", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cap-probe-verbose-read-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const adapter = createFakeAdapter("codex", async (request) => {
+    if (!request.prompt.includes("Read only the file")) {
+      return createSuccessSubagentResult("codex", request.model || "gpt-5.6-sol", { result: "BRIDGE-PROBE-OK", durationMs: 5 });
+    }
+    const markerPath = path.join(request.workspace, "probe.txt");
+    const marker = fs.readFileSync(markerPath, "utf8");
+    return createSuccessSubagentResult("codex", request.model || "gpt-5.6-sol", { result: `The file contains ${marker}.`, durationMs: 5 });
+  });
+  const runtime = createBridgeRuntime({ configuration: configuration(root), adapters: { codex: adapter }, sleep: async () => {} });
+  const probe = await runtime.probeCapability({ target: "codex", model: "gpt-5.6-sol", trustedWorkspace: root, probeWorkspaceRead: true });
+
+  assert.equal(probe.capabilities.workspaceRead, "available");
+  assert.equal(probe.capabilities.workspaceReadCleanupStatus, "complete");
+  assert.equal(probe.failureClass, null);
+});
+
+test("CAP-PROBE-09: marker olmayan başarılı yanıt inconclusive olur ve cleanup ayrı raporlanır", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cap-probe-inconclusive-read-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const adapter = createFakeAdapter("codex", async (request) => createSuccessSubagentResult(
+    "codex",
+    request.model || "gpt-5.6-sol",
+    { result: request.prompt.includes("Read only the file") ? "I cannot confirm the file contents." : "BRIDGE-PROBE-OK", durationMs: 5 }
+  ));
+  const runtime = createBridgeRuntime({ configuration: configuration(root), adapters: { codex: adapter }, sleep: async () => {} });
+  const probe = await runtime.probeCapability({ target: "codex", model: "gpt-5.6-sol", trustedWorkspace: root, probeWorkspaceRead: true });
+
+  assert.equal(probe.capabilities.workspaceRead, "inconclusive");
+  assert.equal(probe.capabilities.workspaceReadCleanupStatus, "complete");
+  assert.equal(probe.failureClass, null);
+  const record = readLiveObservation(root);
+  assert.equal(record.capabilities.workspaceRead, "inconclusive");
+  assert.equal(record.capabilities.workspaceReadCleanupStatus, "complete");
 });
 
 test("CAP-PROBE-07: sandbox startup failure is separate from auth and workspace-read status", async (t) => {

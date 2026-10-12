@@ -99,6 +99,8 @@ export const processSignalValues = [
 export const outputSizeBucketValues = ["empty", "lte_1_kib", "lte_64_kib", "lte_1_mib", "gt_1_mib"];
 export const webReadStatusValues = ["not_traced", "not_observed", "unavailable", "not_invoked", "used", "permission_denied", "failed"];
 export const capabilityStatusValues = ["not_probed", "available", "unavailable"];
+export const workspaceReadStatusValues = [...capabilityStatusValues, "inconclusive"];
+export const workspaceReadCleanupStatusValues = ["not_attempted", "complete", "failed"];
 export const capabilityNames = ["modelAccess", "toolFreeResponse", "workspaceRead", "webRead", "sandboxStartup"];
 export const capabilityFailureClassValues = [
   "timeout",
@@ -136,7 +138,8 @@ export const reviewSourceDeliveryStatusValues = ["complete_to_cli", "failed"];
 export const capabilityProbeSchema = z.object({
   modelAccess: z.enum(capabilityStatusValues),
   toolFreeResponse: z.enum(capabilityStatusValues),
-  workspaceRead: z.enum(capabilityStatusValues),
+  workspaceRead: z.enum(workspaceReadStatusValues),
+  workspaceReadCleanupStatus: z.enum(workspaceReadCleanupStatusValues).optional(),
   sandboxStartup: z.enum(capabilityStatusValues),
   workspaceReadTarget: z.enum(["not_probed", "temp_workspace", "trusted_workspace"]).nullable(),
   webRead: z.enum(capabilityStatusValues),
@@ -164,7 +167,7 @@ export const healthResultSchema = z.object({
     cli: z.enum(["available", "unavailable"]),
     modelAccess: z.enum(capabilityStatusValues),
     toolFreeResponse: z.enum(capabilityStatusValues),
-    workspaceRead: z.enum(capabilityStatusValues),
+    workspaceRead: z.enum(workspaceReadStatusValues),
     sandboxStartup: z.enum(capabilityStatusValues),
     webRead: z.enum(capabilityStatusValues)
   }).strict().optional(),

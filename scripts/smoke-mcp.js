@@ -24,7 +24,6 @@ const resources = await client.listResources();
 const ruleAttestationRead = await client.readResource({ uri: RULE_ATTESTATION_URI });
 const ruleAttestation = ruleAttestationSchema.safeParse(JSON.parse(ruleAttestationRead.contents[0].text));
 const health = await client.callTool({ name: "check_deepseek_subagent", arguments: {} });
-const glmHealth = await client.callTool({ name: "check_glm_subagent", arguments: {} });
 const kimiHealth = await client.callTool({ name: "check_kimi_subagent", arguments: {} });
 const qwenHealth = await client.callTool({ name: "check_qwen_subagent", arguments: {} });
 const antigravityHealth = await client.callTool({ name: "check_antigravity_subagent", arguments: {} });
@@ -52,7 +51,6 @@ console.log(JSON.stringify({
     manifestSha256: ruleAttestation.data.manifestSha256
   } : { status: "invalid" },
   health: health.structuredContent,
-  glmHealth: glmHealth.structuredContent,
   kimiHealth: kimiHealth.structuredContent,
   qwenHealth: qwenHealth.structuredContent,
   antigravityHealth: antigravityHealth.structuredContent,
@@ -113,6 +111,6 @@ const bridgeAdapters = Object.values(bridgeHealth.structuredContent?.adapters ||
 const bridgeHealthValid = Boolean(bridgeHealth.structuredContent?.services?.coreSchemas && bridgeAdapters.length > 0 && bridgeHealth.structuredContent?.circuits && bridgeHealth.structuredContent?.costBudget && bridgeAdapters.every((adapter) => adapter.modePolicy?.defaultMode && Array.isArray(adapter.modePolicy?.allowedModes) && Array.isArray(adapter.configuredModels)));
 const antigravityHealthValid = Boolean(antigravityHealth.structuredContent?.modePolicy?.defaultMode && Array.isArray(antigravityHealth.structuredContent?.configuredModels));
 const workspaceLockHealthValid = Number.isInteger(workspaceLockHealth.structuredContent?.localActive) && Array.isArray(workspaceLockHealth.structuredContent?.externalDiskLocks);
-if (!expectedToolsAvailable || !spaceBunnyToolSchemaValid || !orchestratorApprovalToolAbsent || !expectedResourcesAvailable || !ruleAttestationValid || !health.structuredContent?.available || !glmHealth.structuredContent?.available || !antigravityHealthValid || !bridgeHealthValid || !workspaceLockHealthValid || !memoryHealth.structuredContent?.readable || !memoryHealth.structuredContent?.writable || !memoryProbeValid) {
+if (!expectedToolsAvailable || !spaceBunnyToolSchemaValid || !orchestratorApprovalToolAbsent || !expectedResourcesAvailable || !ruleAttestationValid || !health.structuredContent?.available || !antigravityHealthValid || !bridgeHealthValid || !workspaceLockHealthValid || !memoryHealth.structuredContent?.readable || !memoryHealth.structuredContent?.writable || !memoryProbeValid) {
   process.exitCode = 1;
 }

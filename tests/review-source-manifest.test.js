@@ -94,6 +94,7 @@ test("RSM-03: secret-like and invalid UTF-8 files fail closed without exposing c
 
   assert.throws(() => createReviewSourceManifest(root, ["credential.js"]), (error) => {
     assert.equal(error.code, "review_scope_secret_detected");
+    assert.deepEqual(error.diagnostic, { sortedScopeIndex: 1, signal: "mixed", highEntropyCandidateCount: 1 });
     assert.equal(error.message.includes(syntheticKey), false);
     return true;
   });
@@ -266,4 +267,85 @@ test("RSM-07: DeepSeek and GLM wrapper results retain the host review contract",
   const glm = createGlmCheckpoint({ taskId: "test", role: "reviewer", model: "glm_5_2" }, runtimeResult);
   assert.deepEqual(deepSeek.reviewContract, reviewContract);
   assert.deepEqual(glm.reviewContract, reviewContract);
+});
+
+test("RSM-08: unsupported Antigravity source transport is classified as preflight without adapter execution", async (t) => {
+  const root = createWorkspace(t);
+  const adapter = createAdapter("antigravity", { canRead: true, canWrite: false, supportsSandbox: true, supportsModelSelection: true });
+  let adapterCalls = 0;
+  adapter.execute = async () => {
+    adapterCalls += 1;
+    return createSuccessSubagentResult("antigravity", "gemini-3.8-flash-high", { result: "not expected" });
+  };
+  const runtime = createBridgeRuntime({
+    configuration: {
+      allowedRoots: [root],
+      statePaths: { logs: path.join(root, "logs"), state: path.join(root, "state"), cache: path.join(root, "cache") },
+      reliability: { maxAttempts: 1, maxTotalDurationMs: 30000, maxRetryCostUsd: 1, maxRetryCostReserveUsd: 0.1, maxUnknownAttemptCostUsd: 0.1 },
+      orchestration: { scheduler: { maxQueuedPerWorkspace: 10, staleLockMs: 60000, leaseHeartbeatMs: 1000 }, readOnlyCache: { enabled: false, ttlMs: 1000, maxEntryBytes: 1024 }, taskProfiles: {} },
+      observability: { maxMetricFileBytes: 1048576, maxMetricRetentionDays: 30 }
+    },
+    adapters: { antigravity: adapter },
+    sleep: async () => {}
+  });
+
+  const result = await runtime.run({
+    target: "gemini_flash_3_8",
+    prompt: "Review the selected source.",
+    model: "gemini_flash_3_8",
+    mode: "read_only",
+    trustedWorkspace: root,
+    caller: "test_review",
+    delegationDepth: 0,
+    reviewEvidenceRequirement: "required",
+    reviewScope: ["README.md"]
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "review_source_transport_unsupported");
+  assert.equal(result.metrics.adapterAttempts, 0);
+  assert.equal(result.metrics.diagnostics.failureStage, "mcp_preflight");
+  assert.equal(result.reviewContract.sourceScopeStatus, "blocked");
+  assert.equal(adapterCalls, 0);
+});
+
+test("RSM-09: secret-like preflight returns only sorted scope index and detector class", async (t) => {
+  const root = createWorkspace(t);
+  const highEntropyFixture = ["A9mX2qT7", "vB4nC8sD", "1eF5hJ0k", "L3pR6wY9", "zQ2cN7mK"].join("");
+  fs.writeFileSync(path.join(root, "sensitive.md"), `Example: ${highEntropyFixture}\n`, "utf8");
+  const configuration = {
+    allowedRoots: [root],
+    statePaths: { logs: path.join(root, "logs"), state: path.join(root, "state"), cache: path.join(root, "cache") },
+    reliability: { maxAttempts: 1, maxTotalDurationMs: 30000, maxRetryCostUsd: 1, maxRetryCostReserveUsd: 0.1, maxUnknownAttemptCostUsd: 0.1 },
+    orchestration: { scheduler: { maxQueuedPerWorkspace: 10, staleLockMs: 60000, leaseHeartbeatMs: 1000 }, readOnlyCache: { enabled: false, ttlMs: 1000, maxEntryBytes: 1024 }, taskProfiles: {} },
+    observability: { maxMetricFileBytes: 1048576, maxMetricRetentionDays: 30 }
+  };
+  let adapterCalls = 0;
+  const adapter = createAdapter("codex", { canRead: true, canWrite: false, supportsSandbox: true, supportsModelSelection: true });
+  adapter.execute = async () => {
+    adapterCalls += 1;
+    return createSuccessSubagentResult("codex", "gpt-6.1-sol", { result: "not expected" });
+  };
+  const runtime = createBridgeRuntime({ configuration, adapters: { codex: adapter }, sleep: async () => {} });
+
+  const result = await runtime.run({
+    target: "codex",
+    prompt: "Review the selected source.",
+    model: "gpt-6.1-sol",
+    mode: "read_only",
+    trustedWorkspace: root,
+    caller: "test_review",
+    delegationDepth: 0,
+    reviewEvidenceRequirement: "required",
+    reviewScope: ["sensitive.md"]
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "review_scope_secret_detected");
+  assert.match(result.error, /sorted scope item 1; signal high_entropy; high-entropy candidates 1/u);
+  assert.equal(result.error.includes(highEntropyFixture), false);
+  assert.equal(result.error.includes("sensitive.md"), false);
+  assert.equal(result.metrics.adapterAttempts, 0);
+  assert.equal(result.metrics.diagnostics.failureStage, "mcp_preflight");
+  assert.equal(adapterCalls, 0);
 });

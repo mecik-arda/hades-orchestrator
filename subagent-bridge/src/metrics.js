@@ -12,7 +12,9 @@ import {
   providerCodeValues,
   retryDecisionValues,
   retryStopReasonValues,
-  webEvidenceFailureCodeValues
+  webEvidenceFailureCodeValues,
+  workspaceReadCleanupStatusValues,
+  workspaceReadStatusValues
 } from "./schemas/core-schemas.js";
 import { normalizeMemoryHookSessionId } from "./services/memory-hook-identity.js";
 import { memoryHookNamedCohorts, memoryHookProjectCohorts, memoryHookReportCohorts } from "./services/memory-hook-cohort.js";
@@ -427,7 +429,8 @@ function sanitizeProbeStatusMap(probes) {
   const sanitized = {};
   if (["available", "unavailable"].includes(source.cli)) sanitized.cli = source.cli;
   for (const key of ["modelAccess", "toolFreeResponse", "workspaceRead", "sandboxStartup", "webRead"]) {
-    if (capabilityStatusValues.includes(source[key])) sanitized[key] = source[key];
+    const allowedStatuses = key === "workspaceRead" ? workspaceReadStatusValues : capabilityStatusValues;
+    if (allowedStatuses.includes(source[key])) sanitized[key] = source[key];
   }
   return Object.keys(sanitized).length > 0 ? sanitized : null;
 }
@@ -440,7 +443,8 @@ function sanitizeCapabilityProbes(capabilityProbes) {
     sanitized[model] = {
       modelAccess: capabilityStatusValues.includes(probe.modelAccess) ? probe.modelAccess : "not_probed",
       toolFreeResponse: capabilityStatusValues.includes(probe.toolFreeResponse) ? probe.toolFreeResponse : "not_probed",
-      workspaceRead: capabilityStatusValues.includes(probe.workspaceRead) ? probe.workspaceRead : "not_probed",
+      workspaceRead: workspaceReadStatusValues.includes(probe.workspaceRead) ? probe.workspaceRead : "not_probed",
+      ...(workspaceReadCleanupStatusValues.includes(probe.workspaceReadCleanupStatus) ? { workspaceReadCleanupStatus: probe.workspaceReadCleanupStatus } : {}),
       sandboxStartup: capabilityStatusValues.includes(probe.sandboxStartup) ? probe.sandboxStartup : "not_probed",
       workspaceReadTarget: ["not_probed", "temp_workspace", "trusted_workspace"].includes(probe.workspaceReadTarget) ? probe.workspaceReadTarget : null,
       webRead: capabilityStatusValues.includes(probe.webRead) ? probe.webRead : "not_probed",
@@ -463,7 +467,8 @@ function sanitizeLiveObservationMetric(metric) {
     capabilities: {
       modelAccess: capabilityStatusValues.includes(capabilities.modelAccess) ? capabilities.modelAccess : "not_probed",
       toolFreeResponse: capabilityStatusValues.includes(capabilities.toolFreeResponse) ? capabilities.toolFreeResponse : "not_probed",
-      workspaceRead: capabilityStatusValues.includes(capabilities.workspaceRead) ? capabilities.workspaceRead : "not_probed",
+      workspaceRead: workspaceReadStatusValues.includes(capabilities.workspaceRead) ? capabilities.workspaceRead : "not_probed",
+      ...(workspaceReadCleanupStatusValues.includes(capabilities.workspaceReadCleanupStatus) ? { workspaceReadCleanupStatus: capabilities.workspaceReadCleanupStatus } : {}),
       sandboxStartup: capabilityStatusValues.includes(capabilities.sandboxStartup) ? capabilities.sandboxStartup : "not_probed",
       workspaceReadTarget: ["not_probed", "temp_workspace", "trusted_workspace"].includes(capabilities.workspaceReadTarget) ? capabilities.workspaceReadTarget : null,
       webRead: capabilityStatusValues.includes(capabilities.webRead) ? capabilities.webRead : "not_probed"

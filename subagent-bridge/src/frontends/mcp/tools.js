@@ -27,6 +27,11 @@ const refineDirectReviewScope = (value, context) => {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["reviewScope"], message: "reviewScope is only available for read-only tasks" });
   }
 };
+const refineAntigravityReviewScope = (value, context) => {
+  if (value.reviewEvidenceRequirement === "required" || value.reviewScope?.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["reviewScope"], message: "Antigravity does not support host source-bundle reviewScope" });
+  }
+};
 const riskSignalsSchema = z.object({
   externalService: z.boolean().optional(),
   irreversible: z.boolean().optional()
@@ -72,7 +77,7 @@ export const publicToolSchemas = {
     workspace: z.string().min(1).optional(),
     reviewEvidenceRequirement: reviewEvidenceRequirementSchema,
     reviewScope: reviewScopeSchema
-  }).strict().superRefine(refineDirectReviewScope),
+  }).strict().superRefine(refineAntigravityReviewScope),
   runClaudeCode: z.object({
     prompt: z.string().min(1).max(60000),
     model: z.string().min(1).optional(),

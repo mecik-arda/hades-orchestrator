@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { hasSecretLikeContent } from "../memory.js";
+import { classifySecretLikeContent } from "../memory.js";
 
 export const REVIEW_SOURCE_MANIFEST_VERSION = 1;
 export const REVIEW_SOURCE_MAX_FILES = 50;
@@ -14,11 +14,12 @@ const deniedPathSegments = new Set([".aws", ".git", ".ssh", "memory", "node_modu
 const windowsDeviceNamePattern = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?$/i;
 
 export class ReviewSourceManifestError extends Error {
-  constructor(code) {
+  constructor(code, diagnostic = null) {
     super(code);
     this.name = "ReviewSourceManifestError";
     this.code = code;
     this.failureClass = code;
+    this.diagnostic = diagnostic;
   }
 }
 
@@ -82,7 +83,7 @@ function assertSafeComponents(rootPath, filePath) {
   }
 }
 
-function readSourceFile(rootPath, relativePath) {
+function readSourceFile(rootPath, relativePath, sortedScopeIndex) {
   let descriptor;
   try {
     const candidatePath = path.resolve(rootPath, ...relativePath.split("/"));
@@ -126,7 +127,14 @@ function readSourceFile(rootPath, relativePath) {
     if (!Buffer.from(text, "utf8").equals(content) || text.includes("\u0000")) {
       throw new ReviewSourceManifestError("review_scope_invalid_encoding");
     }
-    if (hasSecretLikeContent(text)) throw new ReviewSourceManifestError("review_scope_secret_detected");
+    const secretClassification = classifySecretLikeContent(text);
+    if (secretClassification.matches) {
+      throw new ReviewSourceManifestError("review_scope_secret_detected", {
+        sortedScopeIndex,
+        signal: secretClassification.signal,
+        highEntropyCandidateCount: secretClassification.highEntropyCandidateCount
+      });
+    }
     return {
       relativePath,
       content,
@@ -175,8 +183,9 @@ export function createReviewSourceManifest(trustedWorkspace, requestedPaths) {
   const entries = [];
   const canonicalPathKeys = new Set();
   let totalBytes = 0;
-  for (const relativePath of paths) {
-    const entry = readSourceFile(rootPath, relativePath);
+  for (let index = 0; index < paths.length; index += 1) {
+    const relativePath = paths[index];
+    const entry = readSourceFile(rootPath, relativePath, index + 1);
     const canonicalPathKey = process.platform === "win32" || process.platform === "darwin"
       ? entry.relativePath.toLocaleLowerCase("en-US")
       : entry.relativePath;

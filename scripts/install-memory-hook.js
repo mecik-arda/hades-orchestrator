@@ -95,18 +95,10 @@ function openCodePluginSource(projectCohort) {
   ].join("\n");
 }
 
-function isShellSafePath(value) {
-  const text = String(value);
-  return text.length > 0 && !/[\s"'%]/.test(text);
-}
-
 function codexCommand(projectCohort) {
   if (process.platform === "win32") {
-    for (const candidate of [process.execPath, clientScriptPath]) {
-      if (!isShellSafePath(candidate)) throw new Error("unsafe_command_path");
-    }
     const cohortSuffix = projectCohort === undefined ? "" : ` --cohort=${projectCohort}`;
-    return `${process.execPath} ${clientScriptPath} --client=codex${cohortSuffix}`;
+    return `${quoteWindows(process.execPath)} ${quoteWindows(clientScriptPath)} --client=codex${cohortSuffix}`;
   }
   const cohortSuffix = projectCohort === undefined ? "" : ` --cohort=${projectCohort}`;
   return `${quotePosix(process.execPath)} ${quotePosix(clientScriptPath)} --client=codex${cohortSuffix}`;
@@ -196,6 +188,13 @@ function codexHandlerIdentity(handler) {
     : null;
 }
 
+function isCodexMemoryHookHandler(handler) {
+  if (!isPlainObject(handler) || handler.type !== "command") return false;
+  const commandText = [handler.command, handler.commandWindows].filter((value) => typeof value === "string").join("\n");
+  return /(?:^|[\\/\"]|\s)memory-hook-client\.js(?:[\"\s]|$)/i.test(commandText)
+    && /(?:^|\s)--client=codex(?:\s|$)/.test(commandText);
+}
+
 function mergeCodexHookConfiguration(existing, addition) {
   if (!isPlainObject(existing) || !isPlainObject(existing.hooks)) return { ok: false, reason: "settings_shape_invalid" };
   const existingEvents = existing.hooks.UserPromptSubmit;
@@ -208,14 +207,30 @@ function mergeCodexHookConfiguration(existing, addition) {
   }
   const expected = addition.hooks.UserPromptSubmit[0].hooks[0];
   const expectedIdentity = codexHandlerIdentity(expected);
-  if (events.some((group) => group.hooks.some((handler) => codexHandlerIdentity(handler) === expectedIdentity))) {
+  const existingMemoryHandlers = events.flatMap((group) => group.hooks.filter(isCodexMemoryHookHandler));
+  if (existingMemoryHandlers.length === 1 && codexHandlerIdentity(existingMemoryHandlers[0]) === expectedIdentity) {
     return { ok: true, merged: existing, changed: false };
   }
+  let replacementInserted = false;
+  const mergedEvents = [];
+  for (const group of events) {
+    const hooks = [];
+    for (const handler of group.hooks) {
+      if (!isCodexMemoryHookHandler(handler)) {
+        hooks.push(handler);
+      } else if (!replacementInserted) {
+        hooks.push(expected);
+        replacementInserted = true;
+      }
+    }
+    if (hooks.length > 0 || group.hooks.length === 0) mergedEvents.push({ ...group, hooks });
+  }
+  if (!replacementInserted) mergedEvents.push({ hooks: [expected] });
   const merged = {
     ...existing,
     hooks: {
       ...existing.hooks,
-      UserPromptSubmit: [...events, { hooks: [expected] }]
+      UserPromptSubmit: mergedEvents
     }
   };
   return { ok: true, merged, changed: true };
@@ -387,7 +402,7 @@ const result = {
   mode: apply ? "apply" : "dry_run",
   client,
   targetPath,
-  commandQuoted: client === "codex" ? process.platform !== "win32" : null,
+  commandQuoted: client === "codex" ? true : null,
   projectScope: projectInstall,
   requestedProjectCohort: requestedCohort ?? null,
   runtimeCohort: runtimeCohort ?? "dynamic_registry_resolution",

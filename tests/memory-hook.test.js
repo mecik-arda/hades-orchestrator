@@ -162,7 +162,7 @@ test("HOOK-09: named OpenCode install exact registry kökü ve cohort gerektirir
   assert.equal(JSON.parse(mismatch.stdout).reason, "cohort_mismatch");
 });
 
-test("HOOK-07: codex hook komutu Windows'ta tirnaksiz ve kabuk uyumlu uretilir", { skip: process.platform !== "win32" }, (context) => {
+test("HOOK-07: codex hook komutu Windows'ta yolları güvenli biçimde quote eder", { skip: process.platform !== "win32" }, (context) => {
   const targetDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-codex-dry-run-"));
   context.after(() => fs.rmSync(targetDirectory, { recursive: true, force: true }));
   const target = path.join(targetDirectory, ".codex", "hooks.json");
@@ -172,14 +172,15 @@ test("HOOK-07: codex hook komutu Windows'ta tirnaksiz ve kabuk uyumlu uretilir",
     env: { ...process.env, HOME: targetDirectory, USERPROFILE: targetDirectory }
   });
   const result = JSON.parse(output.slice(output.indexOf("{"), output.indexOf("}") + 1));
-  assert.equal(result.commandQuoted, false);
+  assert.equal(result.commandQuoted, true);
   const sourceIndex = output.indexOf('{\n  "hooks"');
   assert.ok(sourceIndex > 0);
   const configuration = JSON.parse(output.slice(sourceIndex));
   const handler = configuration.hooks.UserPromptSubmit[0].hooks[0];
   assert.equal(handler.type, "command");
   assert.equal(handler.command, handler.commandWindows);
-  assert.equal(/["']/.test(handler.command), false);
+  assert.equal(handler.command.startsWith('"'), true);
+  assert.match(handler.command, /"[^"]*memory-hook-client\.js"/);
   assert.ok(handler.command.includes(process.execPath));
   assert.ok(handler.command.includes("memory-hook-client.js"));
   assert.equal(handler.additionalContextLimit, 1200);

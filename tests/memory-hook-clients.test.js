@@ -55,6 +55,19 @@ function createCohortFixture() {
   return { root, projectRoot, registryPath };
 }
 
+function createInstallerFixtureWithSpacedRoot() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-hook-spaced-root-"));
+  const projectRoot = path.join(root, "Orkestrasyon V2");
+  fs.mkdirSync(path.join(projectRoot, "scripts"), { recursive: true });
+  fs.mkdirSync(path.join(projectRoot, "subagent-bridge"), { recursive: true });
+  fs.copyFileSync(path.resolve("scripts/install-memory-hook.js"), path.join(projectRoot, "scripts/install-memory-hook.js"));
+  fs.copyFileSync(path.resolve("scripts/memory-hook-client.js"), path.join(projectRoot, "scripts/memory-hook-client.js"));
+  fs.cpSync(path.resolve("subagent-bridge/src"), path.join(projectRoot, "subagent-bridge/src"), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, "package.json"), JSON.stringify({ type: "module" }), "utf8");
+  fs.symlinkSync(path.resolve("node_modules"), path.join(projectRoot, "node_modules"), "junction");
+  return { root, projectRoot, installerPath: path.join(projectRoot, "scripts/install-memory-hook.js") };
+}
+
 test("CLIENT-01: hook girdisinden istem promptu güvenle çıkarılır", () => {
   assert.equal(parsePromptFromHookInput(JSON.stringify({ prompt: "  ikinci   beyin  " })), "ikinci beyin");
   assert.equal(parsePromptFromHookInput(JSON.stringify({ prompt: "x".repeat(600) })).length, 512);
@@ -243,6 +256,53 @@ test("CLIENT-06: global Codex hook'u yazılır ve yinelenen kurulum idempotent k
   const repeated = childProcess.spawnSync(process.execPath, [installerPath, "--client=codex", "--apply"], { encoding: "utf8", env });
   assert.equal(repeated.status, 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(target, "utf8")), written);
+});
+
+test("CLIENT-14: global Codex hook boşluklu checkout path'ini quote eder ve eski handler'ı değiştirir", { skip: process.platform !== "win32" }, (context) => {
+  const fixture = createInstallerFixtureWithSpacedRoot();
+  context.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
+  const target = path.join(fixture.root, ".codex", "hooks.json");
+  const legacyCommand = "C:\\old-root\\scripts\\memory-hook-client.js --client=codex";
+  const unrelatedHook = { type: "command", command: "preserve-unrelated-hook", commandWindows: "preserve-unrelated-hook" };
+  const legacyHandler = {
+    type: "command",
+    command: legacyCommand,
+    commandWindows: legacyCommand,
+    additionalContextLimit: 1200,
+    statusMessage: "Second brain memory (read-only)"
+  };
+  const existing = {
+    description: "preserve-settings",
+    hooks: {
+      SessionStart: [{ hooks: [{ type: "command", command: "preserve-session-hook" }] }],
+      UserPromptSubmit: [
+        { matcher: "*", hooks: [unrelatedHook, legacyHandler] },
+        { hooks: [legacyHandler] }
+      ]
+    }
+  };
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, JSON.stringify(existing), "utf8");
+  const env = { ...process.env, HOME: fixture.root, USERPROFILE: fixture.root };
+  const applied = childProcess.spawnSync(process.execPath, [fixture.installerPath, "--client=codex", "--global", "--apply"], { encoding: "utf8", env });
+  assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+  const mergedText = fs.readFileSync(target, "utf8");
+  const merged = JSON.parse(mergedText);
+  const handlers = merged.hooks.UserPromptSubmit.flatMap((group) => group.hooks);
+  const memoryHandlers = handlers.filter((handler) => [handler.command, handler.commandWindows].some((command) => typeof command === "string" && /memory-hook-client\.js/.test(command) && /--client=codex/.test(command)));
+  assert.equal(merged.description, existing.description);
+  assert.deepEqual(merged.hooks.SessionStart, existing.hooks.SessionStart);
+  assert.equal(merged.hooks.UserPromptSubmit.length, 1);
+  assert.equal(merged.hooks.UserPromptSubmit[0].matcher, "*");
+  assert.deepEqual(merged.hooks.UserPromptSubmit[0].hooks[0], unrelatedHook);
+  assert.equal(memoryHandlers.length, 1);
+  assert.equal(memoryHandlers[0].command.includes("C:\\old-root"), false);
+  assert.equal(memoryHandlers[0].command.startsWith('"'), true);
+  assert.match(memoryHandlers[0].command, /"[^"]*memory-hook-client\.js"/);
+  assert.equal(memoryHandlers[0].commandWindows, memoryHandlers[0].command);
+  const repeated = childProcess.spawnSync(process.execPath, [fixture.installerPath, "--client=codex", "--global", "--apply"], { encoding: "utf8", env });
+  assert.equal(repeated.status, 0, repeated.stderr || repeated.stdout);
+  assert.equal(fs.readFileSync(target, "utf8"), mergedText);
 });
 
 test("CLIENT-08: Codex project config mevcut ayarları koruyarak güvenle merge edilir", (context) => {

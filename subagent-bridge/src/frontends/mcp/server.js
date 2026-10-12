@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { z } from "zod";
 import { ANTIGRAVITY_MODEL_MAP } from "../../adapters/antigravity-adapter.js";
 import { analyzePersistentMemoryWrite, checkPersistentMemory, promotePersistentMemory, readPersistentMemory, reviewPersistentMemory, searchPersistentMemory, storePersistentMemory } from "../../memory.js";
-import { capabilityProbeSchema, capabilityStatusValues } from "../../schemas/core-schemas.js";
+import { capabilityProbeSchema, capabilityStatusValues, workspaceReadStatusValues } from "../../schemas/core-schemas.js";
 import { createMcpToolHandlers, publicToolSchemas, antigravityProbeSchema, storeMemorySchema } from "./tools.js";
 import { createRuleAttestation, RULE_ATTESTATION_MIME_TYPE, RULE_ATTESTATION_NAME, RULE_ATTESTATION_URI } from "./rule-attestation.js";
 
@@ -65,9 +65,16 @@ function safeHealth(handler) {
 
 function sanitizeHealth(health) {
   const probes = health.probes && typeof health.probes === "object"
-    ? Object.fromEntries(["cli", "modelAccess", "toolFreeResponse", "workspaceRead", "sandboxStartup", "webRead"]
-      .filter((key) => capabilityStatusValues.includes(health.probes[key]))
-      .map((key) => [key, health.probes[key]]))
+    ? Object.fromEntries(Object.entries({
+      cli: ["available", "unavailable"],
+      modelAccess: capabilityStatusValues,
+      toolFreeResponse: capabilityStatusValues,
+      workspaceRead: workspaceReadStatusValues,
+      sandboxStartup: capabilityStatusValues,
+      webRead: capabilityStatusValues
+    })
+      .filter(([key, statuses]) => statuses.includes(health.probes[key]))
+      .map(([key]) => [key, health.probes[key]]))
     : {};
   const capabilityProbes = health.capabilityProbes && typeof health.capabilityProbes === "object"
     ? Object.fromEntries(Object.entries(health.capabilityProbes)
@@ -314,7 +321,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
 
   server.registerTool("run_antigravity_subagent", {
     title: "Antigravity subagent çalıştır",
-    description: "Antigravity CLI üzerinden Gemini Pro, Gemini Flash, Gemini 3.7 Flash, Gemini 3.8 Flash veya Claude Sonnet görevi devreder. İsteğe bağlı workspace yalnızca salt okunur modda ve izinli kökler altında kullanılabilir.",
+    description: "Antigravity CLI üzerinden Gemini Pro, Gemini Flash, Gemini 3.7 Flash, Gemini 3.8 Flash veya Claude Sonnet görevi devreder. İsteğe bağlı workspace yalnızca salt okunur modda ve izinli kökler altında kullanılabilir. Host source-bundle reviewScope transport'u desteklenmez; reviewScope veya required review evidence isteği reddedilir.",
     inputSchema: publicToolInputShape(publicToolSchemas.runAntigravity),
     annotations: executionAnnotations
   }, safe(handlers.runAntigravity));

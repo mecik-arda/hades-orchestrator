@@ -11,7 +11,7 @@ import { buildDeepSeekEditPrompt, checkDeepSeek, createDeepSeekCheckpoint, creat
 import { buildGlmEditPrompt, buildGlmProfileReadOnlyPrompt, buildGlmSchemaRepairPrompt, checkGlm, createGlmCheckpoint, createGlmRuntimeRequest, normalizeOpenCodeGlmResult, resolveGlmModel, writeGlmCheckpoint } from "../glm.js";
 import { buildCatalogEditPrompt, buildCatalogReadOnlyPrompt, checkCatalogProvider, resolveCatalogModel } from "../catalog-provider.js";
 import { checkSpaceBunnyCatalog, SPACE_BUNNY_MODEL_ID } from "../space-bunny.js";
-import { capabilityFailureClassValues, capabilityProbeSchema, capabilityStatusValues, createFailureSubagentResult, healthResultSchema, operatingSystemErrorCodeValues, subagentExecutionRequestSchema, validateControlledEditResult, validateSubagentResult, webEvidenceFailureCodeValues } from "../schemas/core-schemas.js";
+import { capabilityFailureClassValues, capabilityProbeSchema, capabilityStatusValues, createFailureSubagentResult, healthResultSchema, operatingSystemErrorCodeValues, subagentExecutionRequestSchema, validateControlledEditResult, validateSubagentResult, webEvidenceFailureCodeValues, workspaceReadCleanupStatusValues, workspaceReadStatusValues } from "../schemas/core-schemas.js";
 import { checkCapability } from "../services/capability-service.js";
 import { createDelegationGuard } from "../services/delegation-guard.js";
 import { createExecutionId, createProcessFailureDiagnostics } from "../services/execution-service.js";
@@ -140,7 +140,8 @@ function normalizeCapabilityProbe(probe) {
   const projected = {
     modelAccess: capabilityStatusValues.includes(source.modelAccess) ? source.modelAccess : "not_probed",
     toolFreeResponse: capabilityStatusValues.includes(source.toolFreeResponse) ? source.toolFreeResponse : "not_probed",
-    workspaceRead: capabilityStatusValues.includes(source.workspaceRead) ? source.workspaceRead : "not_probed",
+    workspaceRead: workspaceReadStatusValues.includes(source.workspaceRead) ? source.workspaceRead : "not_probed",
+    ...(workspaceReadCleanupStatusValues.includes(source.workspaceReadCleanupStatus) ? { workspaceReadCleanupStatus: source.workspaceReadCleanupStatus } : {}),
     sandboxStartup: capabilityStatusValues.includes(source.sandboxStartup) ? source.sandboxStartup : "not_probed",
     workspaceReadTarget: ["not_probed", "temp_workspace", "trusted_workspace"].includes(source.workspaceReadTarget) ? source.workspaceReadTarget : null,
     webRead: capabilityStatusValues.includes(source.webRead) ? source.webRead : "not_probed",
@@ -155,11 +156,18 @@ function normalizeCapabilityProbe(probe) {
 function normalizeHealthResult(health) {
   const source = health && typeof health === "object" ? health : {};
   const sourceProbes = source.probes && typeof source.probes === "object" ? source.probes : {};
+  const probeStatusValues = {
+    modelAccess: capabilityStatusValues,
+    toolFreeResponse: capabilityStatusValues,
+    workspaceRead: workspaceReadStatusValues,
+    sandboxStartup: capabilityStatusValues,
+    webRead: capabilityStatusValues
+  };
   const probes = {
     ...(sourceProbes.cli === "available" || sourceProbes.cli === "unavailable" ? { cli: sourceProbes.cli } : {}),
-    ...Object.fromEntries(["modelAccess", "toolFreeResponse", "workspaceRead", "sandboxStartup", "webRead"]
-      .filter((key) => capabilityStatusValues.includes(sourceProbes[key]))
-      .map((key) => [key, sourceProbes[key]]))
+    ...Object.fromEntries(Object.entries(probeStatusValues)
+      .filter(([key, statuses]) => statuses.includes(sourceProbes[key]))
+      .map(([key]) => [key, sourceProbes[key]]))
   };
   const sourceCapabilityProbes = source.capabilityProbes && typeof source.capabilityProbes === "object" ? source.capabilityProbes : {};
   const capabilityProbes = Object.fromEntries(Object.entries(sourceCapabilityProbes)
@@ -275,7 +283,7 @@ function createFailureDiagnostics(result) {
     else if (reason === "workspace_read_failure") failureStage = "workspace_read";
     else if (["schema_invalid", "output_parse_invalid", "empty_output"].includes(reason)) failureStage = "result_parse";
     else if (reason === "web_evidence_invalid") failureStage = "evidence_invalid";
-    else if (["invalid_model", "mode_not_allowed", "review_scope_invalid", "review_scope_denied", "review_scope_unsafe_file", "review_scope_not_found", "review_scope_unreadable", "review_scope_invalid_encoding", "review_scope_secret_detected", "review_scope_too_large", "review_scope_unavailable", "review_scope_read_failed", "review_scope_changed"].includes(reason)) failureStage = "mcp_preflight";
+    else if (["invalid_model", "mode_not_allowed", "review_source_transport_unsupported", "review_scope_invalid", "review_scope_denied", "review_scope_unsafe_file", "review_scope_not_found", "review_scope_unreadable", "review_scope_invalid_encoding", "review_scope_secret_detected", "review_scope_too_large", "review_scope_unavailable", "review_scope_read_failed", "review_scope_changed"].includes(reason)) failureStage = "mcp_preflight";
     else failureStage = "provider_execution";
   }
   const providerCode = existing.providerCode || ({
@@ -695,12 +703,14 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     if (input.reviewEvidenceRequirement === "required" && !input.reviewScope?.length) {
       return createRuntimeFailure(route.backend, route.model, "required review source scope is missing", {
         reason: "review_scope_invalid",
+        metrics: { diagnostics: createFailureDiagnostics({ reason: "review_scope_invalid" }) },
         reviewContract: createReviewContract({ sourceScopeStatus: "blocked" })
       });
     }
     if (input.reviewScope?.length && !["codex", "opencode", "claude_code"].includes(route.backend)) {
       return createRuntimeFailure(route.backend, route.model, "provider transport cannot guarantee source bundle delivery", {
         reason: "review_source_transport_unsupported",
+        metrics: { diagnostics: createFailureDiagnostics({ reason: "review_source_transport_unsupported" }) },
         reviewContract: createReviewContract({ sourceScopeStatus: "blocked" })
       });
     }
@@ -710,8 +720,17 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
         reviewSourceManifest = createReviewSourceManifest(trustedWorkspace, input.reviewScope);
       } catch (error) {
         const failureCode = error instanceof ReviewSourceManifestError ? error.code : "review_scope_read_failed";
-        return createRuntimeFailure(route.backend, route.model, "review source scope rejected", {
+        const diagnostic = error instanceof ReviewSourceManifestError && error.diagnostic ? error.diagnostic : null;
+        const safeSignals = new Set(["known_signature", "high_entropy", "mixed"]);
+        const detail = failureCode === "review_scope_secret_detected"
+          && Number.isInteger(diagnostic?.sortedScopeIndex)
+          && safeSignals.has(diagnostic?.signal)
+          && Number.isInteger(diagnostic?.highEntropyCandidateCount)
+          ? ` (sorted scope item ${diagnostic.sortedScopeIndex}; signal ${diagnostic.signal}; high-entropy candidates ${diagnostic.highEntropyCandidateCount})`
+          : "";
+        return createRuntimeFailure(route.backend, route.model, `review source scope rejected${detail}`, {
           reason: failureCode,
+          metrics: { diagnostics: createFailureDiagnostics({ reason: failureCode }) },
           reviewContract: createReviewContract({ sourceScopeStatus: "blocked" })
         });
       }
@@ -1786,6 +1805,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     if (result.reason === "sandbox_setup") sandboxStartup = "unavailable";
     let workspaceRead = "not_probed";
     let workspaceReadTarget = null;
+    let workspaceReadCleanupStatus = "not_attempted";
     let workspaceReadFailureClass = null;
     if (probeWorkspaceRead && result.ok) {
       workspaceReadTarget = "trusted_workspace";
@@ -1808,9 +1828,11 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
           webEvidenceRequired: false
         });
         const readText = typeof readResult.result === "string" ? readResult.result.trim().normalize("NFC") : "";
-        workspaceRead = readResult.ok && readText === marker ? "available" : "unavailable";
-        if (workspaceRead === "unavailable") {
-          const rawFailureClass = readResult.ok ? "workspace_read" : classifyReturnedFailure(readResult);
+        if (readResult.ok) {
+          workspaceRead = readText.includes(marker) ? "available" : "inconclusive";
+        } else {
+          workspaceRead = "unavailable";
+          const rawFailureClass = classifyReturnedFailure(readResult);
           workspaceReadFailureClass = rawFailureClass === "permission_denied" || rawFailureClass === "process_exit" ? "workspace_read" : capabilityFailureClass(rawFailureClass);
         }
       } catch (error) {
@@ -1820,13 +1842,14 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
         if (probeWorkspace) {
           try {
             fs.rmSync(probeWorkspace, { recursive: true, force: true });
+            workspaceReadCleanupStatus = "complete";
           } catch {
             cleanupFailed = true;
+            workspaceReadCleanupStatus = "failed";
           }
         }
       }
       if (cleanupFailed) {
-        workspaceRead = "unavailable";
         workspaceReadFailureClass = "workspace_read";
       }
     }
@@ -1837,6 +1860,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
         modelAccess: result.ok ? "available" : "unavailable",
         toolFreeResponse: result.ok ? (tokenObserved ? "available" : "unavailable") : "not_probed",
         workspaceRead,
+        workspaceReadCleanupStatus,
         sandboxStartup,
         workspaceReadTarget,
         webRead: "not_probed"

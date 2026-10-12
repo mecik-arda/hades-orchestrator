@@ -96,6 +96,22 @@ test("P0-ROUTE: canonical targets resolve to one backend", () => {
   assert.equal(publicToolSchemas.runAntigravity.safeParse({ prompt: "inspect", model: "gemini_flash_3_7", mode: "read_only" }).success, true);
   assert.equal(publicToolSchemas.runAntigravity.safeParse({ prompt: "inspect", model: "gemini_flash_3_8", mode: "read_only" }).success, true);
   assert.equal(publicToolSchemas.runAntigravity.safeParse({ prompt: "inspect", model: "gemini_flash_3_6", mode: "read_only" }).success, false);
+  const scopedAntigravity = publicToolSchemas.runAntigravity.safeParse({
+    prompt: "inspect",
+    model: "gemini_flash_3_8",
+    mode: "read_only",
+    reviewScope: ["docs/overview.md"]
+  });
+  assert.equal(scopedAntigravity.success, false);
+  assert.match(scopedAntigravity.error.issues.at(-1).message, /Antigravity does not support host source-bundle reviewScope/u);
+  const requiredAntigravityReview = publicToolSchemas.runAntigravity.safeParse({
+    prompt: "inspect",
+    model: "gemini_flash_3_8",
+    mode: "read_only",
+    reviewEvidenceRequirement: "required"
+  });
+  assert.equal(requiredAntigravityReview.success, false);
+  assert.match(requiredAntigravityReview.error.issues.at(-1).message, /Antigravity does not support host source-bundle reviewScope/u);
 });
 
 test("P0-PUBLIC: bridge-owned metadata is rejected by every public schema", () => {

@@ -137,21 +137,37 @@ function readLockOwner(lockPath) {
   }
 }
 
-function hasHighEntropyToken(content) {
+function countHighEntropyTokens(content) {
   const candidates = content.match(/[A-Za-z0-9+/_=-]{32,}/g) || [];
-  return candidates.some((candidate) => {
+  return candidates.reduce((total, candidate) => {
     const frequencies = new Map();
     for (const character of candidate) frequencies.set(character, (frequencies.get(character) || 0) + 1);
     const entropy = [...frequencies.values()].reduce((total, count) => {
       const probability = count / candidate.length;
       return total - probability * Math.log2(probability);
     }, 0);
-    return entropy >= 4.2;
-  });
+    return total + (entropy >= 4.2 ? 1 : 0);
+  }, 0);
 }
 
 export function hasSecretLikeContent(content) {
-  return hasSecretPatternContent(content) || hasHighEntropyToken(content);
+  return hasSecretPatternContent(content) || countHighEntropyTokens(content) > 0;
+}
+
+export function classifySecretLikeContent(content) {
+  const secretPatternMatched = hasSecretPatternContent(content);
+  const highEntropyCandidateCount = countHighEntropyTokens(content);
+  return {
+    matches: secretPatternMatched || highEntropyCandidateCount > 0,
+    signal: secretPatternMatched && highEntropyCandidateCount > 0
+      ? "mixed"
+      : secretPatternMatched
+        ? "known_signature"
+        : highEntropyCandidateCount > 0
+          ? "high_entropy"
+          : "none",
+    highEntropyCandidateCount
+  };
 }
 
 function hasSecretPatternContent(content) {

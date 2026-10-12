@@ -14,6 +14,7 @@
     "accept:read:glm": "node scripts/accept-glm-read-only.js",
     "p0:e2e": "node scripts/p0-portability-e2e.js",
     "p2a:e2e": "node scripts/p2a-opencode-v1-e2e.js",
+    "opencode:memory-db:verify": "node scripts/verify-opencode-memory-db.js",
     "p2b:e2e": "node scripts/p2b-personal-global-e2e.js",
     "opencode-tools:install": "node scripts/install-opencode-global-tools.js --write",
     "opencode-tools:check": "node scripts/install-opencode-global-tools.js --check",
