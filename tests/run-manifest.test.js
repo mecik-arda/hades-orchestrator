@@ -113,6 +113,34 @@ test("REPLAY-01: replay projeksiyonu yalniz allowlist alanlarini gosterir ve kay
   });
   assert.deepEqual(hardened.capability, { canRead: true, canWrite: false, supportsSandbox: true, supportsModelSelection: false });
   assert.deepEqual(hardened.artifactHashes, ["a".repeat(64)]);
+  const admissionResult = createSuccessSubagentResult("codex", "gpt-5.6-sol", {
+    result: "ok result",
+    metrics: {
+      retries: 0,
+      totalCostUsd: 0,
+      attempts: [{
+        number: 1,
+        failureClass: null,
+        failureStage: null,
+        providerCode: null,
+        osErrorCode: null,
+        webEvidenceFailureCode: null,
+        retryDecision: "not_applicable",
+        retryStopReason: null,
+        exitCode: 0,
+        signal: null,
+        settingsLockWaitMs: null,
+        providerExecutionMs: 4,
+        providerAdmissionLeaseMs: 6,
+        stdoutBucket: "empty",
+        stderrBucket: "empty",
+        durationMs: 6,
+        totalCostUsd: 0
+      }]
+    }
+  });
+  const admissionReplay = projectRunManifest(metric(admissionResult));
+  assert.equal(admissionReplay.attempts[0].providerAdmissionLeaseMs, 6);
 });
 
 test("REPLAY-02: replay modulu runtime veya adapter cagrisi icermez", () => {

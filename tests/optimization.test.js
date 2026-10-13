@@ -86,6 +86,43 @@ test("OPT-01a: eski guard sahibi yeni guard dosyasını silemez", (t) => {
   assert.equal(fs.readFileSync(guardPath, "utf8"), "replacement");
 });
 
+test("OPT-PROVIDER-TRY-01: non-blocking lease aynı host süreçleri arasında slot sınırını uygular", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-provider-slot-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lockDirectory = path.join(root, "locks");
+  const first = createWorkspaceCoordinator({ lockDirectory });
+  const second = createWorkspaceCoordinator({ lockDirectory });
+  const profileSlot = "provider-admission:opencode:deepseek:slot:0";
+
+  assert.ok(first.tryAcquire(profileSlot, "provider-slot-owner"));
+  assert.equal(second.tryAcquire(profileSlot, "provider-slot-waiter"), null);
+  first.release("provider-slot-owner");
+  assert.ok(second.tryAcquire(profileSlot, "provider-slot-waiter"));
+  second.release("provider-slot-waiter");
+});
+
+test("OPT-PROVIDER-TRY-02: bağımsız Node processleri aynı provider slotunu paylaşır", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-provider-slot-process-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lockDirectory = path.join(root, "locks");
+  const moduleUrl = pathToFileURL(path.resolve("subagent-bridge/src/services/workspace-coordinator.js")).href;
+  const profileSlot = "provider-admission:opencode:deepseek:slot:0";
+  const coordinator = createWorkspaceCoordinator({ lockDirectory });
+  const probe = (executionId) => {
+    const source = `import { createWorkspaceCoordinator } from ${JSON.stringify(moduleUrl)}; const coordinator = createWorkspaceCoordinator({ lockDirectory: ${JSON.stringify(lockDirectory)} }); const grant = coordinator.tryAcquire(${JSON.stringify(profileSlot)}, ${JSON.stringify(executionId)}); if (!grant) { process.stdout.write("busy"); } else { process.stdout.write("acquired"); coordinator.release(${JSON.stringify(executionId)}); }`;
+    return childProcess.spawnSync(process.execPath, ["--input-type=module", "--eval", source], { encoding: "utf8", timeout: 5000 });
+  };
+
+  assert.ok(coordinator.tryAcquire(profileSlot, "provider-slot-parent"));
+  const busy = probe("provider-slot-child-busy");
+  assert.equal(busy.status, 0, busy.stderr);
+  assert.equal(busy.stdout, "busy");
+  coordinator.release("provider-slot-parent");
+  const available = probe("provider-slot-child-available");
+  assert.equal(available.status, 0, available.stderr);
+  assert.equal(available.stdout, "acquired");
+});
+
 test("OPT-01aa: etkin lease staleLockMs aşılırken silinmez", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-lease-heartbeat-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

@@ -222,8 +222,37 @@ test("CODEX-DIAG-07/08: non-zero stdout başarı sayılmaz ve permission ayrış
 
   assert.equal(result.ok, false);
   assert.equal(result.exitCode, 7);
+  assert.equal(result.metrics.diagnostics.failureStage, "provider_process_exit");
+  assert.equal(result.metrics.diagnostics.providerExecutionMs > 0, true);
+  assert.equal(result.metrics.diagnostics.stdoutBytes, Buffer.byteLength("provider failure", "utf8"));
+  assert.equal(result.metrics.diagnostics.stderrBytes, 0);
   assert.equal(classifyCodexError(null, 1, "", "sandbox violation: permission denied").errorClass, "permission_denied");
   assert.equal(classifyCodexError(null, 1, "", "model is not supported").errorClass, "invalid_model");
+});
+
+test("CODEX-DIAG-10: signal ile sonlanan manuel iptal cancelled olarak raporlanır", async () => {
+  const adapter = createCodexAdapter({
+    codex: { executable: process.execPath, execArgs: ["-e", "process.stdout.write('partial'); setTimeout(() => {}, 5000);"] }
+  });
+  const pending = adapter.execute({
+    executionId: "codex-cancel-diagnostics",
+    backend: "codex",
+    prompt: "inspect",
+    model: "gpt-5",
+    mode: "read_only",
+    workspace: process.cwd(),
+    delegationDepth: 0,
+    caller: "test",
+    timeoutMs: 5000
+  });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  await adapter.cancel("codex-cancel-diagnostics");
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "cancelled");
+  assert.equal(result.metrics.diagnostics.failureStage, "cancelled");
+  assert.equal(Number.isInteger(result.metrics.diagnostics.stdoutBytes), true);
+  assert.equal(validateSubagentResult(result).success, true);
 });
 
 test("CODEX-DIAG-01/02/03: missing executable fail-fast ve runtime executable kullanır", async () => {

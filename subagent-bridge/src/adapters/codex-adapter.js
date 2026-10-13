@@ -94,6 +94,53 @@ function parseCodexOutput(stdout) {
   return { ok: true, text: stdout.trim() };
 }
 
+function codexFailureStage(errorClass) {
+  if (["sandbox_setup", "workspace_read", "cancelled"].includes(errorClass)) return errorClass;
+  if (["auth_invalid", "authentication_failure"].includes(errorClass)) return "provider_auth";
+  if (errorClass === "rate_limited") return "provider_rate_limit";
+  if (["prompt_transport_limit", "executable_missing"].includes(errorClass)) return "process_spawn";
+  if (["empty_output", "output_limit", "output_parse_invalid", "schema_invalid"].includes(errorClass)) return "result_parse";
+  if (["process_exit", "non_zero_exit"].includes(errorClass)) return "provider_process_exit";
+  if (["invalid_model", "mode_not_allowed", "git_repository_required"].includes(errorClass)) return "mcp_preflight";
+  return "provider_execution";
+}
+
+function codexProviderCode(errorClass, classification = null) {
+  if (typeof classification?.providerCode === "string") return classification.providerCode;
+  return ({
+    authentication_failure: "unauthenticated",
+    auth_invalid: "unauthenticated",
+    executable_missing: "executable_missing",
+    invalid_model: "invalid_model",
+    network: "network_error",
+    permission_denied: "permission_denied",
+    process_error: "process_error",
+    process_exit: "process_exit",
+    non_zero_exit: "process_exit",
+    prompt_transport_limit: "prompt_transport_limit",
+    rate_limited: "rate_limited",
+    server: "unavailable",
+    timeout: "timeout",
+    output_limit: "output_limit",
+    empty_output: "empty_output"
+  })[errorClass] || null;
+}
+
+function createCodexDiagnostics(errorClass, { classification = null, error = null, stdout = "", stderr = "", durationMs = null } = {}) {
+  const failureStage = errorClass === null ? null : codexFailureStage(errorClass);
+  const providerCode = errorClass === null ? null : codexProviderCode(errorClass, classification);
+  const diagnostics = createProcessFailureDiagnostics(error, {
+    failureStage,
+    providerCode,
+    providerExecutionMs: Number.isInteger(durationMs) ? durationMs : null,
+    stdoutBytes: Buffer.byteLength(String(stdout || ""), "utf8"),
+    stderrBytes: Buffer.byteLength(String(stderr || ""), "utf8")
+  });
+  diagnostics.failureStage = failureStage;
+  diagnostics.providerCode = providerCode;
+  return diagnostics;
+}
+
 function buildCodexArgs(request, configuration) {
   const model = resolveCodexModel(request.model || "default");
   if (!model.valid) {
@@ -229,6 +276,25 @@ export function createCodexAdapter(configuration) {
 
         activeExecutionHandles.delete(request.executionId);
 
+        if (handle.abortController.signal.aborted) {
+          return createFailureSubagentResult("codex", resultModel, {
+            error: "execution cancelled",
+            retryable: false,
+            timedOut: false,
+            exitCode: null,
+            durationMs: Date.now() - startedAt,
+            reason: "cancelled",
+            metrics: {
+              signal: processResult.signal ?? null,
+              diagnostics: createCodexDiagnostics("cancelled", {
+                stdout: processResult.stdout,
+                stderr: processResult.stderr,
+                durationMs: Date.now() - startedAt
+              })
+            }
+          });
+        }
+
         const classification = classifyCodexError(null, processResult.code, processResult.stdout, processResult.stderr, processResult.signal);
         if (!classification.valid) {
           return createFailureSubagentResult("codex", resultModel, {
@@ -238,7 +304,16 @@ export function createCodexAdapter(configuration) {
             exitCode: processResult.code,
             durationMs: Date.now() - startedAt,
             reason: classification.errorClass,
-            metrics: { signal: processResult.signal ?? null, ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {}) }
+            metrics: {
+              signal: processResult.signal ?? null,
+              diagnostics: createCodexDiagnostics(classification.errorClass, {
+                classification,
+                stdout: processResult.stdout,
+                stderr: processResult.stderr,
+                durationMs: Date.now() - startedAt
+              }),
+              ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {})
+            }
           });
         }
 
@@ -248,14 +323,29 @@ export function createCodexAdapter(configuration) {
             error: parsed.error,
             durationMs: Date.now() - startedAt,
             exitCode: processResult.code || 1,
-            metrics: { ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {}) }
+            reason: "empty_output",
+            metrics: {
+              diagnostics: createCodexDiagnostics("empty_output", {
+                stdout: processResult.stdout,
+                stderr: processResult.stderr,
+                durationMs: Date.now() - startedAt
+              }),
+              ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {})
+            }
           });
         }
 
         return createSuccessSubagentResult("codex", resultModel, {
           result: parsed.text || "",
           durationMs: Date.now() - startedAt,
-          metrics: { ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {}) }
+          metrics: {
+            diagnostics: createCodexDiagnostics(null, {
+              stdout: processResult.stdout,
+              stderr: processResult.stderr,
+              durationMs: Date.now() - startedAt
+            }),
+            ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {})
+          }
         });
       } catch (error) {
         activeExecutionHandles.delete(request.executionId);
@@ -269,7 +359,7 @@ export function createCodexAdapter(configuration) {
             exitCode: null,
             durationMs: Date.now() - startedAt,
             reason: "cancelled",
-            metrics: { diagnostics: createProcessFailureDiagnostics(error, { failureStage: "cancelled" }) }
+            metrics: { diagnostics: createCodexDiagnostics("cancelled", { error, stdout: error.stdout, stderr: error.stderr, durationMs: Date.now() - startedAt }) }
           });
         }
 
@@ -282,7 +372,7 @@ export function createCodexAdapter(configuration) {
             exitCode: null,
             durationMs: Date.now() - startedAt,
             reason: "timeout",
-            metrics: { diagnostics: createProcessFailureDiagnostics(error, { providerCode: "timeout" }) }
+            metrics: { diagnostics: createCodexDiagnostics("timeout", { error, stdout: error.stdout, stderr: error.stderr, durationMs: Date.now() - startedAt }) }
           });
         }
 
@@ -294,7 +384,7 @@ export function createCodexAdapter(configuration) {
           exitCode: 1,
           durationMs: Date.now() - startedAt,
           reason: classification.errorClass,
-          metrics: { diagnostics: createProcessFailureDiagnostics(error, { providerCode: classification.providerCode || null }) }
+          metrics: { diagnostics: createCodexDiagnostics(classification.errorClass, { classification, error, stdout: error.stdout, stderr: error.stderr, durationMs: Date.now() - startedAt }) }
         });
       }
     },

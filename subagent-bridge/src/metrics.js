@@ -7,11 +7,13 @@ import {
   capabilityStatusValues,
   failureStageValues,
   operatingSystemErrorCodeValues,
+  outputIntegrityValues,
   outputSizeBucketValues,
   processSignalValues,
   providerCodeValues,
   retryDecisionValues,
   retryStopReasonValues,
+  taskCompletionValues,
   webEvidenceFailureCodeValues,
   workspaceReadCleanupStatusValues,
   workspaceReadStatusValues
@@ -215,10 +217,12 @@ function sanitizeTimestamp(value) {
 }
 
 function sanitizeReviewContract(value) {
-  if (!value || typeof value !== "object" || value.version !== 1) return null;
+  if (!value || typeof value !== "object" || ![1, 2].includes(value.version)) return null;
   if (!reviewScopeStatuses.includes(value.sourceScopeStatus)
     || !reviewDeliveryStatuses.includes(value.sourceDeliveryStatus)
     || !reviewEligibilityStatuses.includes(value.reviewEligibility)) return null;
+  if (value.version === 2
+    && (!outputIntegrityValues.includes(value.outputIntegrity) || !taskCompletionValues.includes(value.taskCompletion))) return null;
   const sourceManifestSha256 = typeof value.sourceManifestSha256 === "string" && hashPattern.test(value.sourceManifestSha256)
     ? value.sourceManifestSha256
     : null;
@@ -228,8 +232,8 @@ function sanitizeReviewContract(value) {
   const sourceBytes = Number.isInteger(value.sourceBytes) && value.sourceBytes >= 0 && value.sourceBytes <= 256 * 1024
     ? value.sourceBytes
     : null;
-  return {
-    version: 1,
+  const contract = {
+    version: value.version,
     sourceScopeStatus: value.sourceScopeStatus,
     sourceDeliveryStatus: value.sourceDeliveryStatus,
     sourceManifestSha256,
@@ -237,6 +241,11 @@ function sanitizeReviewContract(value) {
     sourceBytes,
     reviewEligibility: value.reviewEligibility
   };
+  if (value.version === 2) {
+    contract.outputIntegrity = value.outputIntegrity;
+    contract.taskCompletion = value.taskCompletion;
+  }
+  return contract;
 }
 
 function sanitizeRecordedAt(value) {
@@ -281,6 +290,8 @@ function sanitizeAttemptV2(attempt) {
   sanitized.retryStopReason = normalizeRetryStopReason(source.retryStopReason);
   sanitized.settingsLockWaitMs = sanitizeDurationMs(source.settingsLockWaitMs);
   sanitized.providerExecutionMs = sanitizeDurationMs(source.providerExecutionMs);
+  const providerAdmissionLeaseMs = sanitizeDurationMs(source.providerAdmissionLeaseMs);
+  if (providerAdmissionLeaseMs !== null) sanitized.providerAdmissionLeaseMs = providerAdmissionLeaseMs;
   sanitized.stdoutBucket = normalizeOutputSizeBucket(source.stdoutBucket);
   sanitized.stderrBucket = normalizeOutputSizeBucket(source.stderrBucket);
   sanitized.durationMs = sanitizeDurationMs(source.durationMs) ?? 0;
@@ -329,6 +340,8 @@ export function createRedactedExecutionMetric({ executionId, workspace, mode, pr
     failureStage: result.ok ? null : (lastAttempt?.failureStage ?? null),
     providerCode: result.ok ? null : (lastAttempt?.providerCode ?? null),
     retryStopReason: result.ok ? null : (lastAttempt?.retryStopReason ?? null),
+    ...(outputIntegrityValues.includes(result.metrics?.outputIntegrity) ? { outputIntegrity: result.metrics.outputIntegrity } : {}),
+    ...(taskCompletionValues.includes(result.metrics?.taskCompletion) ? { taskCompletion: result.metrics.taskCompletion } : {}),
     usage: {
       durationMs: sanitizeDurationMs(result.durationMs),
       totalCostUsd: Number.isFinite(result.metrics?.totalCostUsd) && result.metrics.totalCostUsd >= 0 ? result.metrics.totalCostUsd : null
@@ -403,6 +416,8 @@ function sanitizeExecutionMetricV2(metric) {
     failureStage: failed ? (lastAttempt ? lastAttempt.failureStage : normalizeFailureStage(metric.failureStage)) : null,
     providerCode: failed ? (lastAttempt ? lastAttempt.providerCode : normalizeProviderCode(metric.providerCode)) : null,
     retryStopReason: failed ? (lastAttempt ? lastAttempt.retryStopReason : normalizeRetryStopReason(metric.retryStopReason)) : null,
+    ...(outputIntegrityValues.includes(metric.outputIntegrity) ? { outputIntegrity: metric.outputIntegrity } : {}),
+    ...(taskCompletionValues.includes(metric.taskCompletion) ? { taskCompletion: metric.taskCompletion } : {}),
     usage: {
       durationMs: sanitizeDurationMs(usage.durationMs),
       totalCostUsd: Number.isFinite(usage.totalCostUsd) && usage.totalCostUsd >= 0 ? usage.totalCostUsd : null

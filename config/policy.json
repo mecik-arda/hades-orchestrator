@@ -432,10 +432,20 @@
                                                  "openMs":  30000
                                              },
                           "scheduler":  {
-                                            "maxQueuedPerWorkspace":  100,
-                                            "staleLockMs":  1500000,
-                                            "leaseHeartbeatMs":  300000
-                                        },
+                                             "maxQueuedPerWorkspace":  100,
+                                             "staleLockMs":  1500000,
+                                             "leaseHeartbeatMs":  300000
+                                         },
+                          "providerAdmission":  {
+                                                    "defaultConcurrency":  2,
+                                                    "profileConcurrency":  {
+                                                                                "opencode:deepseek":  1
+                                                                            },
+                                                    "profileByRoute":  {},
+                                                    "maxQueuedPerProfile":  50,
+                                                    "pollIntervalMs":  50,
+                                                    "maxWaitMs":  600000
+                                                },
                           "readOnlyCache":  {
                                                 "enabled":  true,
                                                 "ttlMs":  600000,

@@ -22,6 +22,7 @@ import { calculateChangeSetHash, classifyChangeSet, isPreparedEditApprovable } f
 import { createPreparedEditRegistry } from "../services/prepared-edit-registry.js";
 import { containsHttpUrl, containsSensitiveWebValue, containsWebMarkup, detectWebIntent, normalizeUntrustedWebEvidence, providerWebEvidenceCarrierSchema } from "../web-evidence.js";
 import { createProviderCircuitBreaker } from "../services/provider-circuit-breaker.js";
+import { createProviderAdmission, resolveProviderAdmissionProfile } from "../services/provider-admission.js";
 import { isOrchestratorApprovalEnabled } from "../services/orchestrator-approval.js";
 import { createReadOnlyResultCache } from "../services/read-only-cache.js";
 import { remainingDurationMs, resolveReliabilityBudget } from "../services/reliability-budget.js";
@@ -257,6 +258,7 @@ function safeRuntimeFailureMessage(failureClass) {
     executable_missing: "provider executable not found",
     network: "provider network failure",
     output_limit: "provider output exceeded the configured limit",
+    provider_admission_unavailable: "provider admission queue unavailable",
     permission_denied: "provider permission denied",
     process_error: "provider process failed",
     process_exit: "provider process exited unsuccessfully",
@@ -276,6 +278,7 @@ function createFailureDiagnostics(result) {
   let failureStage = existing.failureStage;
   if (!failureStage) {
     if (["prompt_transport_limit", "executable_missing"].includes(reason)) failureStage = "process_spawn";
+    else if (reason === "provider_admission_unavailable") failureStage = "provider_admission";
     else if (["sandbox_setup", "workspace_read", "provider_auth", "provider_rate_limit", "provider_process_exit", "evidence_invalid", "cancelled"].includes(reason)) failureStage = reason;
     else if (["auth_invalid", "authentication_failure"].includes(reason)) failureStage = "provider_auth";
     else if (reason === "rate_limited") failureStage = "provider_rate_limit";
@@ -311,9 +314,29 @@ function createFailureDiagnostics(result) {
     ...(webEvidenceFailureCodeValues.includes(existing.webEvidenceFailureCode) ? { webEvidenceFailureCode: existing.webEvidenceFailureCode } : {}),
     settingsLockWaitMs: Number.isInteger(existing.settingsLockWaitMs) ? existing.settingsLockWaitMs : null,
     providerExecutionMs: Number.isInteger(existing.providerExecutionMs) ? existing.providerExecutionMs : null,
+    ...(Number.isInteger(existing.providerAdmissionLeaseMs) ? { providerAdmissionLeaseMs: existing.providerAdmissionLeaseMs } : {}),
     stdoutBytes: Number.isInteger(existing.stdoutBytes) ? existing.stdoutBytes : null,
     stderrBytes: Number.isInteger(existing.stderrBytes) ? existing.stderrBytes : null
   };
+}
+
+function withProviderAdmissionLease(result, leaseMs) {
+  if (!result || typeof result !== "object" || !Number.isInteger(leaseMs) || leaseMs < 0) return result;
+  const source = result.metrics?.diagnostics || {};
+  const diagnostics = createProcessFailureDiagnostics(null, {
+    failureStage: normalizeFailureStage(source.failureStage),
+    providerCode: normalizeProviderCode(source.providerCode),
+    settingsLockWaitMs: source.settingsLockWaitMs,
+    providerExecutionMs: source.providerExecutionMs,
+    providerAdmissionLeaseMs: leaseMs,
+    stdoutBytes: source.stdoutBytes,
+    stderrBytes: source.stderrBytes
+  });
+  diagnostics.failureStage = normalizeFailureStage(source.failureStage);
+  diagnostics.providerCode = normalizeProviderCode(source.providerCode);
+  if (operatingSystemErrorCodeValues.includes(source.osErrorCode)) diagnostics.osErrorCode = source.osErrorCode;
+  if (webEvidenceFailureCodeValues.includes(source.webEvidenceFailureCode)) diagnostics.webEvidenceFailureCode = source.webEvidenceFailureCode;
+  return { ...result, metrics: { ...(result.metrics || {}), diagnostics } };
 }
 
 const maxNoChangesSummaryCharacters = 4000;
@@ -328,22 +351,80 @@ function createReviewContract({
   sourceManifest = null,
   sourceScopeStatus = "not_requested",
   sourceDeliveryStatus = "not_attempted",
-  taskFailed = false
+  taskFailed = false,
+  outputIntegrity = "unknown",
+  taskCompletion = "unknown"
 } = {}) {
-  const reviewEligibility = sourceScopeStatus === "blocked" || sourceDeliveryStatus === "failed" || taskFailed
-    ? "unavailable"
-    : sourceScopeStatus === "complete" && sourceDeliveryStatus === "complete_to_cli" && !taskFailed
-      ? "eligible_for_orchestrator_evaluation"
-      : "unverified";
+  const eligible = sourceScopeStatus === "complete"
+    && sourceDeliveryStatus === "complete_to_cli"
+    && outputIntegrity === "complete"
+    && taskCompletion === "completed"
+    && !taskFailed;
+  const unavailable = sourceScopeStatus === "blocked"
+    || sourceDeliveryStatus === "failed"
+    || taskFailed
+    || outputIntegrity === "truncated"
+    || taskCompletion === "partial"
+    || taskCompletion === "unavailable";
+  const reviewEligibility = eligible ? "eligible_for_orchestrator_evaluation" : unavailable ? "unavailable" : "unverified";
   return {
-    version: 1,
+    version: 2,
     sourceScopeStatus,
     sourceDeliveryStatus,
     sourceManifestSha256: sourceManifest?.manifestSha256 || null,
     sourceFileCount: sourceManifest?.fileCount ?? null,
     sourceBytes: sourceManifest?.sourceBytes ?? null,
+    outputIntegrity,
+    taskCompletion,
     reviewEligibility
   };
+}
+
+function deriveHostTaskOutcome(result) {
+  const diagnostics = result?.metrics?.diagnostics || {};
+  const attempts = Array.isArray(result?.metrics?.attempts) ? result.metrics.attempts : [];
+  const failureClass = result?.reason === "mutation_state_unknown"
+    ? attempts.at(-1)?.failureClass || result.reason
+    : result?.reason;
+  const stdoutBytes = Number.isInteger(diagnostics.stdoutBytes) ? diagnostics.stdoutBytes : null;
+  if (failureClass === "output_limit" || diagnostics.providerCode === "output_limit") {
+    return { outputIntegrity: "truncated", taskCompletion: "partial" };
+  }
+  if (result?.timedOut === true || ["timeout", "cancelled"].includes(failureClass)) {
+    return { outputIntegrity: "unknown", taskCompletion: stdoutBytes > 0 ? "partial" : "unavailable" };
+  }
+  if (Number.isInteger(result?.exitCode) && stdoutBytes !== null) {
+    if (result.ok === true && result.exitCode === 0 && typeof result.result === "string" && result.result.trim()) {
+      return { outputIntegrity: "complete", taskCompletion: "completed" };
+    }
+    return { outputIntegrity: "complete", taskCompletion: stdoutBytes > 0 ? "partial" : "unavailable" };
+  }
+  return { outputIntegrity: "unknown", taskCompletion: result?.ok === true ? "unknown" : "unavailable" };
+}
+
+function applyHostTaskOutcome(result, reviewRequested) {
+  const taskOutcome = deriveHostTaskOutcome(result);
+  const metrics = { ...(result.metrics || {}), ...taskOutcome };
+  let reviewContract = result.reviewContract;
+  if (reviewContract || reviewRequested) {
+    const sourceScopeStatus = reviewContract?.sourceScopeStatus || "blocked";
+    const sourceDeliveryStatus = reviewContract?.sourceDeliveryStatus || "not_attempted";
+    const sourceManifest = reviewContract?.sourceManifestSha256
+      ? {
+        manifestSha256: reviewContract.sourceManifestSha256,
+        fileCount: reviewContract.sourceFileCount,
+        sourceBytes: reviewContract.sourceBytes
+      }
+      : null;
+    reviewContract = createReviewContract({
+      sourceManifest,
+      sourceScopeStatus,
+      sourceDeliveryStatus,
+      taskFailed: result.ok !== true,
+      ...taskOutcome
+    });
+  }
+  return { ...result, metrics, ...(reviewContract ? { reviewContract } : {}) };
 }
 
 function withRuntimeMetrics(result, retries, extras = {}) {
@@ -443,6 +524,17 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     leaseHeartbeatMs: scheduler.leaseHeartbeatMs,
     maxQueuedPerWorkspace: scheduler.maxQueuedPerWorkspace
   });
+  const providerCoordinator = createWorkspaceCoordinator({
+    lockDirectory: path.join(runtimeConfiguration.statePaths.cache, "provider-admission-locks"),
+    staleLockMs: scheduler.staleLockMs,
+    leaseHeartbeatMs: scheduler.leaseHeartbeatMs,
+    maxQueuedPerWorkspace: scheduler.maxQueuedPerWorkspace
+  });
+  const providerAdmissionConfiguration = runtimeConfiguration.orchestration?.providerAdmission || {};
+  const providerAdmission = createProviderAdmission({
+    workspaceCoordinator: providerCoordinator,
+    ...providerAdmissionConfiguration
+  });
   const preparedEditRegistry = createPreparedEditRegistry({
     ttlMs: runtimeConfiguration.approval?.ttlMs,
     maxEntries: runtimeConfiguration.approval?.maxEntries,
@@ -502,6 +594,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     const execution = activeExecutions.get(executionId);
     if (!execution) return false;
     execution.cancelled = true;
+    providerAdmission.cancel(executionId);
     coordinator.cancel(executionId);
     await execution.adapter.cancel(executionId);
     return true;
@@ -516,9 +609,13 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     const providerCircuitKey = route ? circuitKey(route) : null;
     const admission = providerCircuitKey ? await circuitBreaker.beforeCall(providerCircuitKey) : { allowed: true, state: "unavailable" };
     if (!admission.allowed) {
-      return createRuntimeFailure(route.backend, route.model, "provider circuit is open", { reason: "provider_circuit_open" });
+      return applyHostTaskOutcome(
+        createRuntimeFailure(route.backend, route.model, "provider circuit is open", { reason: "provider_circuit_open" }),
+        rawRequest.reviewEvidenceRequirement === "required" || rawRequest.reviewScope?.length > 0
+      );
     }
-    const result = await runInternal({ ...rawRequest, executionId });
+    let result = await runInternal({ ...rawRequest, executionId });
+    result = applyHostTaskOutcome(result, rawRequest.reviewEvidenceRequirement === "required" || rawRequest.reviewScope?.length > 0);
     if (route?.glm) result.metricBackend = "glm";
     const routeAdapters = route ? runtimeAdapters[route.backend] : null;
     if (routeAdapters?.capabilities) {
@@ -527,7 +624,9 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     if (route) {
       const attemptRecords = Array.isArray(result.metrics?.attempts) ? result.metrics.attempts : [];
       const failureClass = attemptRecords.at(-1)?.failureClass || result.reason;
-      if (result.ok || (admission.probe && !isRetryableFailure(failureClass))) {
+      if (failureClass === "provider_admission_unavailable") {
+        await circuitBreaker.recordNeutral(providerCircuitKey);
+      } else if (result.ok || (admission.probe && !isRetryableFailure(failureClass))) {
         await circuitBreaker.recordSuccess(providerCircuitKey);
       } else if (isContentValidationFailure(failureClass)) {
         await circuitBreaker.recordNeutral(providerCircuitKey);
@@ -539,7 +638,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
       try {
         const attempts = Array.isArray(result.metrics?.attempts) ? result.metrics.attempts : [];
         const knownAttemptCosts = attempts.length > 0 && attempts.every((attempt) => Number.isFinite(attempt.totalCostUsd));
-        const actualCostUsd = result.metrics?.cacheHit || (attempts.length === 0 && ["queue_unavailable", "cancelled"].includes(result.reason))
+        const actualCostUsd = result.metrics?.cacheHit || (attempts.length === 0 && ["queue_unavailable", "provider_admission_unavailable", "cancelled"].includes(result.reason))
           ? 0
           : knownAttemptCosts ? attempts.reduce((total, attempt) => total + attempt.totalCostUsd, 0) : null;
         await settleCostBudget(runtimeConfiguration, executionId, actualCostUsd);
@@ -659,6 +758,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     if (!modePolicy.allowed) {
       return createRuntimeFailure(route.backend, route.model, modePolicy.error, { reason: "mode_not_allowed" });
     }
+    const providerProfileId = resolveProviderAdmissionProfile(route, providerAdmissionConfiguration);
     let trustedWorkspace;
     try {
       trustedWorkspace = canonicalizeTrustedWorkspace(input.trustedWorkspace);
@@ -788,6 +888,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
         reviewContract: reviewContractForFailure()
       });
     }
+    let totalQueueWaitMs = grant.queueWaitMs;
     try {
       cacheKey = input.mode === "read_only" && profile?.cacheable === true && !reviewSourceManifest
         ? await readOnlyCache.keyFor({ workspace: trustedWorkspace, backend: route.backend, model: route.model, profile: input.profile, prompt: input.prompt })
@@ -798,7 +899,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
         if (verifiedKey === cacheKey) {
           return withRuntimeMetrics(withModelIdentity({ ...cachedResult, metrics: { ...(cachedResult.metrics || {}), attempts: [] } }, route.model), 0, {
             cacheHit: true,
-            queueWaitMs: grant.queueWaitMs,
+            queueWaitMs: totalQueueWaitMs,
             adapterAttempts: 0
           });
         }
@@ -820,9 +921,54 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             retries: Math.max(0, attemptNumber - 1),
             adapterAttempts: attemptNumber,
             reason: "total_duration_budget_exhausted",
+            metrics: { queueWaitMs: totalQueueWaitMs },
             reviewContract: reviewContractForFailure(attemptNumber > 0 ? "failed" : "not_attempted")
           });
         }
+        const admission = await providerAdmission.acquire(providerProfileId, executionId, {
+          signal: input.abortSignal,
+          timeoutMs: remainingMs
+        });
+        totalQueueWaitMs += admission.queueWaitMs;
+        if (!admission.ok) {
+          if (admission.reason === "cancelled" || activeExecution.cancelled || input.abortSignal?.aborted) {
+            return createRuntimeFailure(route.backend, route.model, "execution cancelled", {
+              durationMs: Date.now() - startedAt,
+              retries: Math.max(0, attemptNumber - 1),
+              adapterAttempts: attemptNumber,
+              reason: "cancelled",
+              metrics: { queueWaitMs: totalQueueWaitMs, attempts: attemptRecords },
+              reviewContract: reviewContractForFailure(attemptNumber > 0 ? "failed" : "not_attempted")
+            });
+          }
+          const queueError = admission.reason === "provider_queue_full" ? "provider admission queue full" : "provider admission wait timed out";
+          return createRuntimeFailure(route.backend, route.model, queueError, {
+            durationMs: Date.now() - startedAt,
+            retries: Math.max(0, attemptNumber - 1),
+            adapterAttempts: attemptNumber,
+            timedOut: admission.reason === "provider_queue_timeout",
+            reason: "provider_admission_unavailable",
+            metrics: {
+              queueWaitMs: totalQueueWaitMs,
+              attempts: attemptRecords,
+              diagnostics: { failureStage: "provider_admission", providerCode: null }
+            },
+            reviewContract: reviewContractForFailure(attemptNumber > 0 ? "failed" : "not_attempted")
+          });
+        }
+        const providerRemainingMs = remainingDurationMs(budget, startedAt);
+        if (providerRemainingMs <= 0) {
+          admission.release();
+          return createRuntimeFailure(route.backend, route.model, "execution duration budget exhausted", {
+            durationMs: Date.now() - startedAt,
+            retries: Math.max(0, attemptNumber - 1),
+            adapterAttempts: attemptNumber,
+            reason: "total_duration_budget_exhausted",
+            metrics: { queueWaitMs: totalQueueWaitMs, attempts: attemptRecords },
+            reviewContract: reviewContractForFailure(attemptNumber > 0 ? "failed" : "not_attempted")
+          });
+        }
+        let providerAdmissionLeaseMs = null;
         attemptNumber += 1;
         try {
           const repairDetails = schemaValidationIssues.slice(0, 20).map((issue) => {
@@ -845,7 +991,15 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
                 request.prompt
               ].join("\n")
               : request.prompt;
-          let result = await adapter.execute({ ...executionRequest, prompt, timeoutMs: Math.min(timeoutMs, remainingMs) });
+          let result;
+          const providerStartedAt = Date.now();
+          try {
+            result = await adapter.execute({ ...executionRequest, prompt, timeoutMs: Math.min(timeoutMs, providerRemainingMs) });
+          } finally {
+            admission.release();
+            providerAdmissionLeaseMs = Date.now() - providerStartedAt;
+          }
+          result = withProviderAdmissionLease(result, providerAdmissionLeaseMs);
           if (request.webReadTrace && typeof result?.metrics?.webReadStatus === "string") {
             if (result.metrics.webReadStatus === "used" || observedWebReadStatus !== "used") {
               observedWebReadStatus = result.metrics.webReadStatus;
@@ -928,6 +1082,10 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               retries: attemptNumber - 1,
               adapterAttempts: attemptNumber,
               reason: "cancelled",
+              metrics: {
+                queueWaitMs: totalQueueWaitMs,
+                diagnostics: createProcessFailureDiagnostics(null, { failureStage: "cancelled", providerAdmissionLeaseMs })
+              },
               reviewContract: reviewContractForFailure("failed")
             });
           }
@@ -952,6 +1110,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             retryStopReason: null,
             settingsLockWaitMs: Number.isInteger(diagnostics?.settingsLockWaitMs) ? diagnostics.settingsLockWaitMs : null,
             providerExecutionMs: Number.isInteger(diagnostics?.providerExecutionMs) ? diagnostics.providerExecutionMs : null,
+            providerAdmissionLeaseMs: Number.isInteger(diagnostics?.providerAdmissionLeaseMs) ? diagnostics.providerAdmissionLeaseMs : null,
             stdoutBucket: outputSizeBucket(diagnostics?.stdoutBytes),
             stderrBucket: outputSizeBucket(diagnostics?.stderrBytes),
             durationMs: Number.isInteger(result.durationMs) ? result.durationMs : 0,
@@ -960,7 +1119,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
           attemptRecords.push(attemptRecord);
           const knownAttemptCosts = attemptRecords.length > 0 && attemptRecords.every((attempt) => Number.isFinite(attempt.totalCostUsd));
           lastResult = withRuntimeMetrics(result, attemptNumber - 1, {
-            queueWaitMs: grant.queueWaitMs,
+            queueWaitMs: totalQueueWaitMs,
             cacheHit: false,
             totalCostUsd: knownAttemptCosts ? totalCostUsd : null,
             adapterAttempts: attemptNumber,
@@ -1045,11 +1204,15 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
               durationMs: Date.now() - startedAt,
               retries: attemptNumber - 1,
               adapterAttempts: attemptNumber,
-              reason: "cancelled"
+              reason: "cancelled",
+              metrics: {
+                queueWaitMs: totalQueueWaitMs,
+                diagnostics: createProcessFailureDiagnostics(error, { failureStage: "cancelled", providerAdmissionLeaseMs })
+              }
             });
           }
           const failureClass = classifyProcessFailure({ error, stderr: "", stdout: "", code: null }) || "process_error";
-          const diagnostics = createProcessFailureDiagnostics(error);
+          const diagnostics = createProcessFailureDiagnostics(error, { providerAdmissionLeaseMs });
           reservedCostUsd += budget.maxUnknownAttemptCostUsd || 0;
           const retryPolicy = shouldRetry(failureClass, input.mode, attemptNumber, budget.maxAttempts, {
             maxRetryCostUsd: budget.maxRetryCostUsd,
@@ -1071,6 +1234,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             retryStopReason: retryPolicy.retryable ? null : retryPolicy.reason,
             settingsLockWaitMs: null,
             providerExecutionMs: null,
+            providerAdmissionLeaseMs: Number.isInteger(diagnostics.providerAdmissionLeaseMs) ? diagnostics.providerAdmissionLeaseMs : null,
             stdoutBucket: null,
             stderrBucket: null,
             durationMs: Date.now() - startedAt,
@@ -1084,6 +1248,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
             timedOut: failureClass === "timeout",
             reason: retryDecision.reason === "mutation_state_unknown" ? "mutation_state_unknown" : failureClass,
             metrics: {
+              queueWaitMs: totalQueueWaitMs,
               totalCostUsd: attemptRecords.every((attempt) => Number.isFinite(attempt.totalCostUsd)) ? totalCostUsd : null,
               attempts: attemptRecords,
               diagnostics

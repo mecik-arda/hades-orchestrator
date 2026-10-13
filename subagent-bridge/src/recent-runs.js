@@ -5,11 +5,13 @@ import { z } from "zod";
 import {
   failureStageValues,
   operatingSystemErrorCodeValues,
+  outputIntegrityValues,
   outputSizeBucketValues,
   processSignalValues,
   providerCodeValues,
   retryDecisionValues,
   retryStopReasonValues,
+  taskCompletionValues,
   webEvidenceFailureCodeValues
 } from "./schemas/core-schemas.js";
 
@@ -21,7 +23,7 @@ const backendSchema = z.enum(["antigravity", "claude_code", "codex", "deepseek",
 const modeSchema = z.enum(["read_only", "edit"]);
 const outcomeSchema = z.enum(["completed", "failed"]);
 const roleSchema = z.enum(["analyst", "researcher", "reviewer", "planner"]);
-const reviewContractSchema = z.object({
+const reviewContractV1Schema = z.object({
   version: z.literal(1),
   sourceScopeStatus: z.enum(["not_requested", "complete", "blocked"]),
   sourceDeliveryStatus: z.enum(["not_attempted", "complete_to_cli", "failed"]),
@@ -30,6 +32,18 @@ const reviewContractSchema = z.object({
   sourceBytes: z.number().int().nonnegative().max(256 * 1024).nullable(),
   reviewEligibility: z.enum(["eligible_for_orchestrator_evaluation", "unverified", "unavailable"])
 }).strict();
+const reviewContractV2Schema = z.object({
+  version: z.literal(2),
+  sourceScopeStatus: z.enum(["not_requested", "complete", "blocked"]),
+  sourceDeliveryStatus: z.enum(["not_attempted", "complete_to_cli", "failed"]),
+  sourceManifestSha256: hashSchema.nullable(),
+  sourceFileCount: z.number().int().nonnegative().nullable(),
+  sourceBytes: z.number().int().nonnegative().max(256 * 1024).nullable(),
+  outputIntegrity: z.enum(outputIntegrityValues),
+  taskCompletion: z.enum(taskCompletionValues),
+  reviewEligibility: z.enum(["eligible_for_orchestrator_evaluation", "unverified", "unavailable"])
+}).strict();
+const reviewContractSchema = z.union([reviewContractV1Schema, reviewContractV2Schema]);
 const usageSchema = z.object({
   durationMs: finiteNonnegativeSchema.optional().nullable(),
   apiDurationMs: finiteNonnegativeSchema.optional().nullable(),
@@ -75,6 +89,7 @@ const attemptSchemaV2 = z.object({
   retryStopReason: z.enum(retryStopReasonValues).nullable().optional(),
   settingsLockWaitMs: finiteNonnegativeSchema.optional().nullable(),
   providerExecutionMs: finiteNonnegativeSchema.optional().nullable(),
+  providerAdmissionLeaseMs: finiteNonnegativeSchema.optional().nullable(),
   stdoutBucket: z.enum(outputSizeBucketValues).optional().nullable(),
   stderrBucket: z.enum(outputSizeBucketValues).optional().nullable(),
   durationMs: finiteNonnegativeSchema.optional().nullable(),
@@ -97,6 +112,8 @@ const executionSchemaV2 = z.object({
   failureStage: z.enum(failureStageValues).nullable(),
   providerCode: z.enum(providerCodeValues).nullable(),
   retryStopReason: z.enum(retryStopReasonValues).nullable(),
+  outputIntegrity: z.enum(outputIntegrityValues).optional(),
+  taskCompletion: z.enum(taskCompletionValues).optional(),
   usage: usageSchema,
   attempts: z.array(attemptSchemaV2).max(100),
   retries: z.number().int().nonnegative(),
@@ -212,7 +229,8 @@ function lastAttemptDiagnosis(attempts, fallback = {}) {
       osErrorCode: fallback.osErrorCode ?? null,
       webEvidenceFailureCode: fallback.webEvidenceFailureCode ?? null,
       exitCode: null,
-      signal: null
+      signal: null,
+      providerAdmissionLeaseMs: fallback.providerAdmissionLeaseMs ?? null
     };
   }
   return {
@@ -222,7 +240,8 @@ function lastAttemptDiagnosis(attempts, fallback = {}) {
     osErrorCode: lastAttempt.osErrorCode ?? null,
     webEvidenceFailureCode: lastAttempt.webEvidenceFailureCode ?? null,
     exitCode: lastAttempt.exitCode ?? null,
-    signal: lastAttempt.signal ?? null
+    signal: lastAttempt.signal ?? null,
+    providerAdmissionLeaseMs: lastAttempt.providerAdmissionLeaseMs ?? null
   };
 }
 
@@ -256,6 +275,9 @@ function normalizeRun(record) {
       webEvidenceFailureCode: diagnosis.webEvidenceFailureCode,
       exitCode: diagnosis.exitCode,
       signal: diagnosis.signal,
+      ...(Number.isFinite(diagnosis.providerAdmissionLeaseMs) ? { providerAdmissionLeaseMs: diagnosis.providerAdmissionLeaseMs } : {}),
+      ...(value.outputIntegrity ? { outputIntegrity: value.outputIntegrity } : {}),
+      ...(value.taskCompletion ? { taskCompletion: value.taskCompletion } : {}),
       durationMs: value.usage.durationMs ?? null,
       reportedCostUsd: value.usage.totalCostUsd ?? null,
       cacheHit: value.cacheHit,
@@ -405,6 +427,9 @@ export function readRecentRuns(configuration, options = {}) {
       webEvidenceFailureCode: run.webEvidenceFailureCode,
       exitCode: run.exitCode,
       signal: run.signal,
+      ...(Number.isFinite(run.providerAdmissionLeaseMs) ? { providerAdmissionLeaseMs: run.providerAdmissionLeaseMs } : {}),
+      ...(run.outputIntegrity ? { outputIntegrity: run.outputIntegrity } : {}),
+      ...(run.taskCompletion ? { taskCompletion: run.taskCompletion } : {}),
       durationMs: run.durationMs,
       reportedCostUsd: run.reportedCostUsd,
       cacheHit: run.cacheHit,

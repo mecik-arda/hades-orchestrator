@@ -1121,7 +1121,13 @@ export function createAntigravityAdapter(configuration) {
             classification.errorClass, classification.reason || error.message,
             "antigravity", model.model,
             Date.now() - startedAt, 0, null, null,
-            createAttemptDiagnostics(failureStageForClassification(classification.errorClass), classification.providerCode, { settingsLockWaitMs, providerExecutionMs, osErrorCode: error?.code })
+            createAttemptDiagnostics(failureStageForClassification(classification.errorClass), classification.providerCode, {
+              settingsLockWaitMs,
+              providerExecutionMs,
+              stdoutBytes: Buffer.byteLength(error.stdout || "", "utf8"),
+              stderrBytes: Buffer.byteLength(error.stderr || "", "utf8"),
+              osErrorCode: error?.code
+            })
           );
         }
       } finally {

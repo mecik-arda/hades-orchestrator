@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assertOpenCodeModelsAllowed, loadConfiguration, loadRuntimeConfiguration, validateWorkspace } from "../subagent-bridge/src/config.js";
+import { assertOpenCodeModelsAllowed, loadConfiguration, loadRuntimeConfiguration, validateConfiguration, validateWorkspace } from "../subagent-bridge/src/config.js";
 
 test("izinli kök içindeki workspace kabul edilir", () => {
   const root = path.resolve("C:\\Users\\ornek\\Desktop\\Projeler");
@@ -124,6 +124,16 @@ test("provider rol profilleri exact model kullanır ve edit fallback policy ile 
     { target: "opencode", model: "deepseek/deepseek-flash" }
   ]);
   assert.deepEqual({ target: profiles.low_cost_analysis.target, model: profiles.low_cost_analysis.model, mode: profiles.low_cost_analysis.mode }, { target: "opencode", model: "deepseek/deepseek-flash", mode: "read_only" });
+});
+
+test("provider admission profili canonical DeepSeek modellerini ortak limitle sınırlar", () => {
+  const policy = JSON.parse(fs.readFileSync(path.resolve("config/policy.json"), "utf8"));
+  assert.equal(policy.orchestration.providerAdmission.defaultConcurrency, 2);
+  assert.equal(policy.orchestration.providerAdmission.profileConcurrency["opencode:deepseek"], 1);
+  assert.equal(policy.orchestration.providerAdmission.maxQueuedPerProfile, 50);
+  assert.equal(validateConfiguration(policy).success, true);
+  policy.orchestration.providerAdmission.profileConcurrency["opencode:deepseek"] = 11;
+  assert.equal(validateConfiguration(policy).success, false);
 });
 
 test("deepseek-readonly agent dış dizin erişimini açıkça reddeder", () => {

@@ -4,6 +4,7 @@ import { webEvidenceEnvelopeSchema } from "../web-evidence.js";
 export const failureStageValues = [
   "mcp_preflight",
   "process_spawn",
+  "provider_admission",
   "sandbox_setup",
   "workspace_read",
   "settings_lock",
@@ -124,7 +125,9 @@ export const capabilityFailureClassValues = [
 export const reviewScopeStatusValues = ["not_requested", "complete", "blocked"];
 export const reviewContractDeliveryStatusValues = ["not_attempted", "complete_to_cli", "failed"];
 export const reviewEligibilityValues = ["eligible_for_orchestrator_evaluation", "unverified", "unavailable"];
-export const reviewContractSchema = z.object({
+export const outputIntegrityValues = ["complete", "truncated", "unknown"];
+export const taskCompletionValues = ["completed", "partial", "unavailable", "unknown"];
+const reviewContractV1Schema = z.object({
   version: z.literal(1),
   sourceScopeStatus: z.enum(reviewScopeStatusValues),
   sourceDeliveryStatus: z.enum(reviewContractDeliveryStatusValues),
@@ -133,6 +136,18 @@ export const reviewContractSchema = z.object({
   sourceBytes: z.number().int().min(0).nullable(),
   reviewEligibility: z.enum(reviewEligibilityValues)
 }).strict();
+const reviewContractV2Schema = z.object({
+  version: z.literal(2),
+  sourceScopeStatus: z.enum(reviewScopeStatusValues),
+  sourceDeliveryStatus: z.enum(reviewContractDeliveryStatusValues),
+  sourceManifestSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  sourceFileCount: z.number().int().min(0).nullable(),
+  sourceBytes: z.number().int().min(0).nullable(),
+  outputIntegrity: z.enum(outputIntegrityValues),
+  taskCompletion: z.enum(taskCompletionValues),
+  reviewEligibility: z.enum(reviewEligibilityValues)
+}).strict();
+export const reviewContractSchema = z.union([reviewContractV1Schema, reviewContractV2Schema]);
 export const reviewSourceDeliveryStatusValues = ["complete_to_cli", "failed"];
 
 export const capabilityProbeSchema = z.object({
@@ -154,6 +169,7 @@ export const attemptDiagnosticsSchema = z.object({
   webEvidenceFailureCode: z.enum(webEvidenceFailureCodeValues).nullable().optional(),
   settingsLockWaitMs: z.number().int().min(0).nullable(),
   providerExecutionMs: z.number().int().min(0).nullable(),
+  providerAdmissionLeaseMs: z.number().int().min(0).nullable().optional(),
   stdoutBytes: z.number().int().min(0).nullable(),
   stderrBytes: z.number().int().min(0).nullable()
 }).strict();
@@ -196,6 +212,8 @@ export const subagentResultSchema = z.object({
     cacheHit: z.boolean().optional(),
     fallbacks: z.number().int().min(0).optional(),
     totalCostUsd: z.number().min(0).nullable().optional(),
+    outputIntegrity: z.enum(outputIntegrityValues).optional(),
+    taskCompletion: z.enum(taskCompletionValues).optional(),
     stdinWriteStatus: z.enum(["not_used", "pending", "complete", "failed"]).optional(),
     stdinBytes: z.number().int().min(0).nullable().optional(),
     reviewContract: reviewContractSchema.optional(),
@@ -221,6 +239,7 @@ export const subagentResultSchema = z.object({
       signal: z.string().nullable().optional(),
       settingsLockWaitMs: z.number().int().min(0).nullable().optional(),
       providerExecutionMs: z.number().int().min(0).nullable().optional(),
+      providerAdmissionLeaseMs: z.number().int().min(0).nullable().optional(),
       stdoutBucket: z.enum(outputSizeBucketValues).nullable().optional(),
       stderrBucket: z.enum(outputSizeBucketValues).nullable().optional(),
       exitCode: z.number().int().nullable(),

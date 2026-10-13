@@ -59,6 +59,7 @@ export function createProcessFailureDiagnostics(error, overrides = {}) {
     ...(osErrorCode ? { osErrorCode } : {}),
     settingsLockWaitMs: Number.isInteger(overrides.settingsLockWaitMs) ? overrides.settingsLockWaitMs : null,
     providerExecutionMs: Number.isInteger(overrides.providerExecutionMs) ? overrides.providerExecutionMs : null,
+    ...(Number.isInteger(overrides.providerAdmissionLeaseMs) ? { providerAdmissionLeaseMs: overrides.providerAdmissionLeaseMs } : {}),
     stdoutBytes: Number.isInteger(overrides.stdoutBytes) ? overrides.stdoutBytes : null,
     stderrBytes: Number.isInteger(overrides.stderrBytes) ? overrides.stderrBytes : null
   };

@@ -352,14 +352,14 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
 
   server.registerTool("run_space_bunny_subagent", {
     title: "Space Bunny Free subagent çalıştır",
-    description: "Sabit opencode/space-bunny-free kimliğiyle read-only görev veya seçilmiş dosyalarda kontrollü edit yürütür. `webResearch: true` yalnız read-only researcher rolünde, OS temp çalışma alanında websearch/webfetch araçlarını açar. Edit sonucu yalnız açık approve_prepared_edit onayıyla trusted workspace'e terfi eder.",
+    description: "Güncel durum (2026-10-13): OpenCode Free Tier, Bridge CLI üretim çağrısını HTTP 403 FreeTierError ile reddetti; bu route non-retryable permission_denied döndürür. Katalog/fiyat kontrolü canlı erişim kanıtı değildir. Erişim yolu izinli hale gelene kadar Space Bunny üretim çağrıları başarısız olur. Erişim sağlandığında sabit opencode/space-bunny-free modeliyle read-only görev, yalnız read-only researcher rolü ve OS-temp çalışma alanında webResearch, veya seçilmiş dosyalarda kontrollü edit yürütür; edit yalnız açık approve_prepared_edit ile trusted workspace'e terfi eder.",
     inputSchema: publicToolSchemas.runSpaceBunny.innerType().shape,
     annotations: executionAnnotations
   }, safe(handlers.runSpaceBunny));
 
   server.registerTool("run_space_bunny_edit_pilot", {
     title: "Space Bunny disposable edit pilotu çalıştır",
-    description: "Space Bunny Free'yi yalnız seçilmiş dosyaların bridge-owned disposable kopyasında dener; ana workspace'e hiçbir değişiklik terfi ettirmez.",
+    description: "Space Bunny Free Bridge CLI yolu şu anda provider HTTP 403 FreeTierError nedeniyle non-retryable permission_denied ile blokludur; katalog kontrolü bu erişimi doğrulamaz. Erişim yolu izinli hale gelirse yalnız seçilmiş dosyaların bridge-owned disposable kopyasında dener ve ana workspace'e hiçbir değişiklik terfi ettirmez.",
     inputSchema: publicToolInputShape(publicToolSchemas.runSpaceBunnyEditPilot),
     annotations: executionAnnotations
   }, safe(handlers.runSpaceBunnyEditPilot));

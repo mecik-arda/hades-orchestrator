@@ -71,6 +71,93 @@ function parseOpenCodeOutput(stdout) {
   return { ok: true, text: textContent, usage: finalUsage };
 }
 
+function isOpenCodeRateLimitMessage(value) {
+  const lines = String(value || "").split(/\r?\n/u);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!event || typeof event !== "object" || Array.isArray(event) || event.type !== "error") continue;
+    const error = event.error && typeof event.error === "object" ? event.error : event;
+    const code = typeof error.code === "string" ? error.code.toLocaleLowerCase("en-US") : "";
+    if (["rate_limited", "too_many_requests", "resource_exhausted"].includes(code)) return true;
+  }
+  return false;
+}
+
+function isOpenCodeFreeTierRestriction(value) {
+  const lines = String(value || "").split(/\r?\n/u);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!event || typeof event !== "object" || Array.isArray(event) || event.type !== "error") continue;
+    const error = event.error && typeof event.error === "object" ? event.error : event;
+    const data = error.data && typeof error.data === "object" ? error.data : null;
+    if (data?.statusCode !== 403 || typeof data.responseBody !== "string") continue;
+    try {
+      const body = JSON.parse(data.responseBody);
+      if (body?.error?.type === "FreeTierError") return true;
+    } catch {
+    }
+  }
+  return false;
+}
+
+function openCodeFailureStage(errorClass) {
+  if (errorClass === "cancelled") return "cancelled";
+  if (errorClass === "model_access_denied") return "mcp_preflight";
+  if (errorClass === "permission_denied") return "provider_execution";
+  if (["auth_invalid", "authentication_failure"].includes(errorClass)) return "provider_auth";
+  if (errorClass === "rate_limited") return "provider_rate_limit";
+  if (errorClass === "executable_missing" || errorClass === "prompt_transport_limit") return "process_spawn";
+  if (["output_parse_invalid", "empty_output", "output_limit"].includes(errorClass)) return "result_parse";
+  if (["non_zero_exit", "process_exit"].includes(errorClass)) return "provider_process_exit";
+  return "provider_execution";
+}
+
+function openCodeProviderCode(errorClass) {
+  if (errorClass === "cancelled") return null;
+  return ({
+    auth_invalid: "unauthenticated",
+    authentication_failure: "unauthenticated",
+    rate_limited: "rate_limited",
+    permission_denied: "permission_denied",
+    server: "unavailable",
+    network: "network_error",
+    executable_missing: "executable_missing",
+    prompt_transport_limit: "prompt_transport_limit",
+    output_limit: "output_limit",
+    empty_output: "empty_output",
+    non_zero_exit: "process_exit",
+    process_exit: "process_exit",
+    process_error: "process_error"
+  })[errorClass] || "unclassified";
+}
+
+function createOpenCodeDiagnostics(errorClass, { error = null, stdout = "", stderr = "", durationMs = null } = {}) {
+  const diagnostics = createProcessFailureDiagnostics(error, {
+    failureStage: openCodeFailureStage(errorClass),
+    providerCode: openCodeProviderCode(errorClass),
+    providerExecutionMs: Number.isInteger(durationMs) ? durationMs : null,
+    stdoutBytes: Buffer.byteLength(String(stdout || ""), "utf8"),
+    stderrBytes: Buffer.byteLength(String(stderr || ""), "utf8")
+  });
+  diagnostics.failureStage = errorClass ? openCodeFailureStage(errorClass) : null;
+  diagnostics.providerCode = errorClass ? openCodeProviderCode(errorClass) : null;
+  return diagnostics;
+}
+
 function classifyOpenCodeError(error, exitCode, stdout, stderr, signal = null) {
   if (error) {
     if (error.failureClass === "prompt_transport_limit" || ["E2BIG", "ENAMETOOLONG"].includes(error.code)) {
@@ -81,6 +168,12 @@ function classifyOpenCodeError(error, exitCode, stdout, stderr, signal = null) {
     if (error.code === "ETIMEDOUT") return { valid: false, errorClass: "timeout", reason: "execution timed out" };
     const message = String(error.message || error).toLocaleLowerCase("en-US");
 
+    if (isOpenCodeFreeTierRestriction(`${error.stdout || ""}\n${error.stderr || ""}`)) {
+      return { valid: false, errorClass: "permission_denied", reason: "OpenCode Free Tier rejected CLI access", providerCode: "permission_denied" };
+    }
+    if (isOpenCodeRateLimitMessage(`${error.stdout || ""}\n${error.stderr || ""}`)) {
+      return { valid: false, errorClass: "rate_limited", reason: "provider rate limited", providerCode: "rate_limited" };
+    }
     if (/timed out|timeout|zaman aşımı/i.test(message)) {
       return { valid: false, errorClass: "timeout", reason: "execution timed out" };
     }
@@ -93,6 +186,14 @@ function classifyOpenCodeError(error, exitCode, stdout, stderr, signal = null) {
     return { valid: false, errorClass: "process_error", reason: "opencode process failed" };
   }
 
+  if (isOpenCodeFreeTierRestriction(`${stdout || ""}\n${stderr || ""}`)) {
+    return { valid: false, errorClass: "permission_denied", reason: "OpenCode Free Tier rejected CLI access", providerCode: "permission_denied" };
+  }
+
+  if (isOpenCodeRateLimitMessage(`${stdout || ""}\n${stderr || ""}`)) {
+    return { valid: false, errorClass: "rate_limited", reason: "provider rate limited", providerCode: "rate_limited" };
+  }
+
   if (signal || exitCode === null) {
     return { valid: false, errorClass: "non_zero_exit", reason: signal ? `process terminated by signal ${signal}` : "process did not report an exit code" };
   }
@@ -102,23 +203,16 @@ function classifyOpenCodeError(error, exitCode, stdout, stderr, signal = null) {
     if (/auth|login|credential|unauthorized|api.key/i.test(output)) {
       return { valid: false, errorClass: "auth_invalid", reason: "authentication failure" };
     }
-    if (/rate.limit|429|quota/i.test(output)) {
-      return { valid: false, errorClass: "rate_limited", reason: "provider rate limited" };
-    }
     if (/\b5\d\d\b|internal server error|service unavailable|bad gateway|gateway timeout/i.test(output)) {
-      return { valid: false, errorClass: "server", reason: "provider service unavailable" };
+      return { valid: false, errorClass: "server", reason: "provider service unavailable", providerCode: "unavailable" };
     }
     if (/econn|enotfound|eai_again|socket|network|fetch failed|connection reset/i.test(output)) {
-      return { valid: false, errorClass: "network", reason: "provider network failure" };
+      return { valid: false, errorClass: "network", reason: "provider network failure", providerCode: "network_error" };
     }
     return { valid: false, errorClass: "non_zero_exit", reason: `process exited with code ${exitCode}` };
   }
 
   return { valid: true };
-}
-
-function isOpenCodeRateLimitMessage(value) {
-  return /quota exceeded|rate limit|429|too many requests/i.test(value);
 }
 
 function isOpenCodeModelAccessDeniedMessage(value) {
@@ -379,7 +473,6 @@ export function createOpenCodeAdapter(configuration) {
 
       const handle = createExecutionHandle(request.executionId);
       activeExecutionHandles.set(request.executionId, handle);
-      let rateLimitDetected = false;
       let modelAccessDeniedDetected = false;
 
       try {
@@ -396,10 +489,7 @@ export function createOpenCodeAdapter(configuration) {
             onSpawn: (child) => handle.attachChild(child),
             onStderr(chunk) {
               const output = chunk.toString("utf8");
-              if (isOpenCodeRateLimitMessage(output)) {
-                rateLimitDetected = true;
-                handle.cancel();
-              } else if (isOpenCodeModelAccessDeniedMessage(output)) {
+              if (isOpenCodeModelAccessDeniedMessage(output)) {
                 modelAccessDeniedDetected = true;
                 handle.cancel();
               }
@@ -409,14 +499,41 @@ export function createOpenCodeAdapter(configuration) {
 
         activeExecutionHandles.delete(request.executionId);
 
-        if (rateLimitDetected || modelAccessDeniedDetected) {
+        if (modelAccessDeniedDetected) {
           return createFailureSubagentResult("opencode", model.model, {
-            error: modelAccessDeniedDetected ? "current subscription does not include access to the requested model" : "provider rate limited",
-            retryable: rateLimitDetected && !modelAccessDeniedDetected,
+            error: "current subscription does not include access to the requested model",
+            retryable: false,
             timedOut: false,
             exitCode: 1,
             durationMs: Date.now() - startedAt,
-            reason: modelAccessDeniedDetected ? "model_access_denied" : "rate_limited"
+            reason: "model_access_denied",
+            metrics: {
+              signal: processResult.signal ?? null,
+              diagnostics: createOpenCodeDiagnostics("model_access_denied", {
+                stdout: processResult.stdout,
+                stderr: processResult.stderr,
+                durationMs: Date.now() - startedAt
+              })
+            }
+          });
+        }
+
+        if (handle.abortController.signal.aborted) {
+          return createFailureSubagentResult("opencode", model.model, {
+            error: "execution cancelled",
+            retryable: false,
+            timedOut: false,
+            exitCode: null,
+            durationMs: Date.now() - startedAt,
+            reason: "cancelled",
+            metrics: {
+              signal: processResult.signal ?? null,
+              diagnostics: createOpenCodeDiagnostics("cancelled", {
+                stdout: processResult.stdout,
+                stderr: processResult.stderr,
+                durationMs: Date.now() - startedAt
+              })
+            }
           });
         }
 
@@ -429,7 +546,15 @@ export function createOpenCodeAdapter(configuration) {
             exitCode: processResult.code,
             durationMs: Date.now() - startedAt,
             reason: classification.errorClass,
-            metrics: { signal: processResult.signal ?? null, ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {}) }
+            metrics: {
+              signal: processResult.signal ?? null,
+              diagnostics: createOpenCodeDiagnostics(classification.errorClass, {
+                stdout: processResult.stdout,
+                stderr: processResult.stderr,
+                durationMs: Date.now() - startedAt
+              }),
+              ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {})
+            }
           });
         }
 
@@ -439,7 +564,15 @@ export function createOpenCodeAdapter(configuration) {
             error: parsed.error,
             durationMs: Date.now() - startedAt,
             exitCode: processResult.code || 1,
-            metrics: { ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {}) }
+            reason: parsed.error === "empty output" ? "empty_output" : "output_parse_invalid",
+            metrics: {
+              diagnostics: createOpenCodeDiagnostics(parsed.error === "empty output" ? "empty_output" : "output_parse_invalid", {
+                stdout: processResult.stdout,
+                stderr: processResult.stderr,
+                durationMs: Date.now() - startedAt
+              }),
+              ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {})
+            }
           });
         }
 
@@ -450,6 +583,11 @@ export function createOpenCodeAdapter(configuration) {
           durationMs: Date.now() - startedAt,
           metrics: {
             totalCostUsd: Number.isFinite(parsed.usage?.cost) ? parsed.usage.cost : null,
+            diagnostics: createOpenCodeDiagnostics(null, {
+              stdout: processResult.stdout,
+              stderr: processResult.stderr,
+              durationMs: Date.now() - startedAt
+            }),
             ...(processResult.stdinWriteStatus ? { stdinWriteStatus: processResult.stdinWriteStatus, stdinBytes: processResult.stdinBytes } : {})
           },
           artifacts: parsed.usage ? {
@@ -459,19 +597,6 @@ export function createOpenCodeAdapter(configuration) {
       } catch (error) {
         activeExecutionHandles.delete(request.executionId);
 
-        if (rateLimitDetected) {
-          return createFailureSubagentResult("opencode", model.model, {
-            error: "provider rate limited",
-            retryable: true,
-            timedOut: false,
-            exitCode: 1,
-            durationMs: Date.now() - startedAt,
-            reason: "rate_limited",
-            metrics: { diagnostics: createProcessFailureDiagnostics(null, { failureStage: "provider_rate_limit", providerCode: "rate_limited" }) }
-          });
-        }
-
-
         if (modelAccessDeniedDetected) {
           return createFailureSubagentResult("opencode", model.model, {
             error: "current subscription does not include access to the requested model",
@@ -480,7 +605,7 @@ export function createOpenCodeAdapter(configuration) {
             exitCode: 1,
             durationMs: Date.now() - startedAt,
             reason: "model_access_denied",
-            metrics: { diagnostics: createProcessFailureDiagnostics(null, { failureStage: "mcp_preflight", providerCode: "permission_denied" }) }
+            metrics: { diagnostics: createOpenCodeDiagnostics("model_access_denied", { error, stdout: error.stdout, stderr: error.stderr, durationMs: Date.now() - startedAt }) }
           });
         }
 
@@ -493,7 +618,7 @@ export function createOpenCodeAdapter(configuration) {
             exitCode: null,
             durationMs: Date.now() - startedAt,
             reason: "cancelled",
-            metrics: { diagnostics: createProcessFailureDiagnostics(error, { failureStage: "cancelled" }) }
+            metrics: { diagnostics: createOpenCodeDiagnostics("cancelled", { error, stdout: error.stdout, stderr: error.stderr, durationMs: Date.now() - startedAt }) }
           });
         }
 
@@ -506,7 +631,7 @@ export function createOpenCodeAdapter(configuration) {
             exitCode: null,
             durationMs: Date.now() - startedAt,
             reason: "timeout",
-            metrics: { diagnostics: createProcessFailureDiagnostics(error, { failureStage: "provider_execution", providerCode: "timeout" }) }
+            metrics: { diagnostics: createOpenCodeDiagnostics("timeout", { error, stdout: error.stdout, stderr: error.stderr, durationMs: Date.now() - startedAt }) }
           });
         }
 
@@ -518,7 +643,7 @@ export function createOpenCodeAdapter(configuration) {
           exitCode: 1,
           durationMs: Date.now() - startedAt,
           reason: classification.errorClass,
-          metrics: { diagnostics: createProcessFailureDiagnostics(error, { providerCode: classification.errorClass === "executable_missing" ? "executable_missing" : null }) }
+          metrics: { diagnostics: createOpenCodeDiagnostics(classification.errorClass, { error, stdout: error.stdout, stderr: error.stderr, durationMs: Date.now() - startedAt }) }
         });
       } finally {
         if (parallelConfigPath) {

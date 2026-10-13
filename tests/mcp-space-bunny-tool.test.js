@@ -22,6 +22,7 @@ test("SPACE-BUNNY-MCP-01: MCP read-only tool publishes its schema and dispatches
     const tools = await client.listTools();
     const tool = tools.tools.find((entry) => entry.name === "run_space_bunny_subagent");
     assert.ok(tool);
+    assert.match(tool.description, /HTTP 403 FreeTierError/);
     assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), [
       "acceptanceCriteria",
       "contextFiles",

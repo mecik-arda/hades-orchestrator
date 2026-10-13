@@ -197,6 +197,9 @@ test("OC-AC-11c: non-zero OpenCode exit parse edilebilir stdout olsa da hata dö
   assert.equal(result.ok, false);
   assert.equal(result.reason, "non_zero_exit");
   assert.equal(result.exitCode, 2);
+  assert.equal(result.metrics.diagnostics.failureStage, "provider_process_exit");
+  assert.equal(result.metrics.diagnostics.stdoutBytes, Buffer.byteLength('{"type":"text","part":{"text":"unexpected"}}\n', "utf8"));
+  assert.equal(result.metrics.diagnostics.stderrBytes, 0);
 });
 
 test("OC-AC-11d: sinyalle sonlanan OpenCode süreci başarı sayılmaz", () => {
@@ -269,8 +272,104 @@ test("OC-AC-14: classifyOpenCodeError auth failure", () => {
 });
 
 test("OC-AC-14a: provider quota mesajı rate limit olarak tanınır", () => {
-  assert.equal(isOpenCodeRateLimitMessage("Quota exceeded for model requests"), true);
+  assert.equal(isOpenCodeRateLimitMessage(JSON.stringify({ type: "error", error: { code: "rate_limited" } })), true);
+  assert.equal(isOpenCodeRateLimitMessage(JSON.stringify({ type: "error", error: { status: 429, code: "too_many_requests" } })), true);
+  assert.equal(isOpenCodeRateLimitMessage("Quota exceeded for model requests"), false);
+  assert.equal(isOpenCodeRateLimitMessage('Task output quoted: {"type":"error","error":{"code":"rate_limited"}}'), false);
   assert.equal(isOpenCodeRateLimitMessage("repository inspection complete"), false);
+  assert.equal(classifyOpenCodeError(null, 1, JSON.stringify({ type: "error", error: { code: "rate_limited" } }), "").errorClass, "rate_limited");
+  assert.equal(classifyOpenCodeError(null, 0, JSON.stringify({ type: "error", error: { code: "rate_limited" } }), "").errorClass, "rate_limited");
+  assert.equal(classifyOpenCodeError(null, 1, "", "The log says quota exceeded for model requests").errorClass, "non_zero_exit");
+});
+
+test("OC-AC-14e: structured FreeTierError 403 becomes a non-retryable provider denial", async () => {
+  const responseBody = JSON.stringify({ type: "error", error: { type: "FreeTierError", message: "OpenCode Free Tier rejected CLI access" } });
+  const providerEvent = JSON.stringify({ type: "error", error: { name: "APIError", data: { statusCode: 403, responseBody } } });
+  const unrelated403 = JSON.stringify({ type: "error", error: { name: "APIError", data: { statusCode: 403, responseBody: JSON.stringify({ type: "error", error: { type: "ForbiddenError" } }) } } });
+  assert.equal(classifyOpenCodeError(null, 1, `${unrelated403}\n`, "").errorClass, "non_zero_exit");
+
+  const catalogEntry = { id: "space-bunny-free", providerID: "opencode", status: "active", cost: { input: 0, output: 0, cache: { read: 0, write: 0 } }, capabilities: { toolcall: true } };
+  const script = `if (process.argv.includes("models")) process.stdout.write(${JSON.stringify(`opencode/space-bunny-free\n${JSON.stringify(catalogEntry)}\n`)}); else { process.stdout.write(${JSON.stringify(`${providerEvent}\n`)}); process.exit(1); }`;
+  const adapter = createOpenCodeAdapter({
+    opencode: {
+      executable: process.execPath,
+      execArgs: ["-e", script],
+      allowedModels: ["opencode/space-bunny-free"]
+    }
+  });
+  const result = await adapter.execute({
+    executionId: "opencode-free-tier-denial",
+    backend: "opencode",
+    prompt: "inspect",
+    model: "opencode/space-bunny-free",
+    mode: "read_only",
+    workspace: process.cwd(),
+    caller: "test",
+    delegationDepth: 0,
+    timeoutMs: 5000
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.retryable, false);
+  assert.equal(result.reason, "permission_denied");
+  assert.equal(result.error, "OpenCode Free Tier rejected CLI access");
+  assert.equal(result.metrics.diagnostics.failureStage, "provider_execution");
+  assert.equal(result.metrics.diagnostics.providerCode, "permission_denied");
+  assert.equal(validateSubagentResult(result).success, true);
+});
+
+test("OC-AC-14d: serbest stderr içindeki 429 metni OpenCode sürecini iptal etmez", async () => {
+  const script = `process.stderr.write("Quota exceeded for model requests\\n"); setTimeout(() => process.stdout.write(JSON.stringify({ type: "text", part: { text: "complete" } }) + "\\n"), 80);`;
+  const adapter = createOpenCodeAdapter({ opencode: { executable: process.execPath, execArgs: ["-e", script] } });
+  const result = await adapter.execute({
+    executionId: "opencode-rate-limit-prose",
+    backend: "opencode",
+    prompt: "inspect",
+    model: "deepseek/deepseek-v4-pro",
+    mode: "read_only",
+    workspace: process.cwd(),
+    caller: "test",
+    delegationDepth: 0,
+    timeoutMs: 5000
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.result, "complete");
+  assert.ok(result.durationMs >= 50);
+  assert.equal(result.metrics.diagnostics.stderrBytes, Buffer.byteLength("Quota exceeded for model requests\n", "utf8"));
+});
+
+test("OC-DIAG-01: timeout ve cancel yolları strict diagnostics taşır", async () => {
+  const adapter = createOpenCodeAdapter({
+    opencode: { executable: process.execPath, execArgs: ["-e", "process.stdout.write('partial'); setTimeout(() => {}, 5000);"] }
+  });
+  const request = (executionId) => ({
+    executionId,
+    backend: "opencode",
+    prompt: "inspect",
+    model: "deepseek/deepseek-v4-pro",
+    mode: "read_only",
+    workspace: process.cwd(),
+    delegationDepth: 0,
+    caller: "test",
+    timeoutMs: 5000
+  });
+  const timedOut = await createOpenCodeAdapter({
+    opencode: { executable: process.execPath, execArgs: ["-e", "process.stdout.write('partial'); setTimeout(() => {}, 5000);"] }
+  }).execute({ ...request("opencode-timeout-diagnostics"), timeoutMs: 80 });
+  assert.equal(timedOut.ok, false);
+  assert.equal(timedOut.reason, "timeout");
+  assert.equal(timedOut.metrics.diagnostics.failureStage, "provider_execution");
+  assert.equal(Number.isInteger(timedOut.metrics.diagnostics.stdoutBytes), true);
+  assert.equal(validateSubagentResult(timedOut).success, true);
+
+  const pending = adapter.execute(request("opencode-cancel-diagnostics"));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  await adapter.cancel("opencode-cancel-diagnostics");
+  const cancelled = await pending;
+  assert.equal(cancelled.ok, false);
+  assert.equal(cancelled.reason, "cancelled");
+  assert.equal(cancelled.metrics.diagnostics.failureStage, "cancelled");
+  assert.equal(Number.isInteger(cancelled.metrics.diagnostics.stdoutBytes), true);
+  assert.equal(validateSubagentResult(cancelled).success, true);
 });
 
 test("OC-AC-14b: abonelik model erişim reddi kalıcı hata olarak tanınır", () => {
@@ -379,6 +478,8 @@ test("OC-AC-21: task output byte cap is enforced by the OpenCode process collect
   });
   assert.equal(result.ok, false);
   assert.equal(result.reason, "output_limit", JSON.stringify(result));
+  assert.equal(result.metrics.diagnostics.failureStage, "result_parse");
+  assert.equal(validateSubagentResult(result).success, true);
 });
 
 test("OC-REVIEW-01: host source reviewer has no workspace or tool permissions", () => {

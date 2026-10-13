@@ -171,6 +171,14 @@ const configurationSchema = z.object({
       staleLockMs: z.number().int().positive(),
       leaseHeartbeatMs: z.number().int().positive()
     }).strict(),
+    providerAdmission: z.object({
+      defaultConcurrency: z.number().int().min(1).max(10),
+      profileConcurrency: z.record(z.string().min(1).max(64), z.number().int().min(1).max(10)).optional(),
+      profileByRoute: z.record(z.string().min(1).max(256), z.string().min(1).max(64)).optional(),
+      maxQueuedPerProfile: z.number().int().min(1).max(10000),
+      pollIntervalMs: z.number().int().min(10).max(1000),
+      maxWaitMs: z.number().int().positive().max(1200000)
+    }).strict().optional(),
     readOnlyCache: z.object({
       enabled: z.boolean(),
       ttlMs: z.number().int().positive(),
@@ -276,7 +284,17 @@ export function loadConfiguration(options = {}) {
     },
     reliability: configuration.reliability,
     observability: configuration.observability,
-    orchestration: configuration.orchestration || {},
+    orchestration: {
+      ...(configuration.orchestration || {}),
+      providerAdmission: {
+        defaultConcurrency: configuration.orchestration?.providerAdmission?.defaultConcurrency ?? 2,
+        profileConcurrency: configuration.orchestration?.providerAdmission?.profileConcurrency || {},
+        profileByRoute: configuration.orchestration?.providerAdmission?.profileByRoute || {},
+        maxQueuedPerProfile: configuration.orchestration?.providerAdmission?.maxQueuedPerProfile ?? 50,
+        pollIntervalMs: configuration.orchestration?.providerAdmission?.pollIntervalMs ?? 50,
+        maxWaitMs: configuration.orchestration?.providerAdmission?.maxWaitMs ?? 600000
+      }
+    },
     parallelBatch: {
       enabled: configuration.parallelBatch?.enabled === true,
       editEnabled: configuration.parallelBatch?.editEnabled === true,

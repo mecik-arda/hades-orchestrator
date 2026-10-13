@@ -281,6 +281,17 @@ export function createWorkspaceCoordinator({ lockDirectory, staleLockMs = 150000
     });
   }
 
+  function tryAcquire(workspace, executionId, priority = 0) {
+    if (active.has(executionId) || pending.has(executionId)) return null;
+    const enqueuedAt = Date.now();
+    if (!registerWriterIntent(workspace, executionId, priority, enqueuedAt)) return null;
+    const release = acquireExternal(workspace, "edit", executionId, priority, enqueuedAt);
+    clearWriterIntent(workspace, executionId);
+    if (!release) return null;
+    active.set(executionId, { workspace, release, isOwner: release.isOwner });
+    return { queueWaitMs: 0 };
+  }
+
   function release(executionId) {
     const entry = active.get(executionId);
     if (!entry) return;
@@ -342,5 +353,5 @@ export function createWorkspaceCoordinator({ lockDirectory, staleLockMs = 150000
     };
   }
 
-  return { acquire, release, cancel, assertOwner, snapshot };
+  return { acquire, tryAcquire, release, cancel, assertOwner, snapshot };
 }
