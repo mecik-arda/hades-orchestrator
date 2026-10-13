@@ -27,6 +27,13 @@ function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
+function countSourceLines(text) {
+  if (text.length === 0) return 0;
+  const lines = text.split(/\r\n|[\r\n\u2028\u2029]/u);
+  if (/(?:\r\n|[\r\n\u2028\u2029])$/u.test(text)) lines.pop();
+  return lines.length;
+}
+
 function sameResolvedPath(left, right) {
   const first = path.resolve(left);
   const second = path.resolve(right);
@@ -223,6 +230,7 @@ export function createReviewSourceManifest(trustedWorkspace, requestedPaths) {
     fileCount: entries.length,
     sourceBytes: totalBytes,
     sourcePayload,
-    sourcePayloadBytes
+    sourcePayloadBytes,
+    sourceFileLineCounts: entries.map(({ relativePath, text }) => ({ path: relativePath, lineCount: countSourceLines(text) }))
   };
 }

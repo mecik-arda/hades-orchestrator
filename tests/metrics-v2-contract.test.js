@@ -123,6 +123,87 @@ test("V2-01: başarılı run v2 kaydı strict okuyucudan geçer ve operatör gö
   assert.equal(record.queueWaitMs, 5);
 });
 
+test("V2-12: eski v2 eligible review sonucu host result validation kanıtı olmadan unverified olur", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "v2-12-review-contract-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const config = configuration(root);
+  await writeExecutionMetric(config, {
+    executionId: "exec-review-without-host-validation",
+    workspace: root,
+    mode: "read_only",
+    profile: "review",
+    result: baseResult({
+      ok: true,
+      error: null,
+      result: "Review completed",
+      exitCode: 0,
+      reason: undefined,
+      reviewContract: {
+        version: 2,
+        sourceScopeStatus: "complete",
+        sourceDeliveryStatus: "complete_to_cli",
+        sourceManifestSha256: "a".repeat(64),
+        sourceFileCount: 1,
+        sourceBytes: 12,
+        outputIntegrity: "complete",
+        taskCompletion: "completed",
+        reviewEligibility: "eligible_for_orchestrator_evaluation"
+      },
+      metrics: {
+        retries: 0,
+        totalCostUsd: 0.01,
+        attempts: [executionAttempt({ failureClass: null, failureStage: null, providerCode: null, exitCode: 0, retryDecision: "not_applicable", retryStopReason: null, totalCostUsd: 0.01 })]
+      }
+    })
+  });
+
+  const recent = readRecentRuns(config, { days: 7, limit: 10 });
+  assert.equal(recent.runCount, 1);
+  assert.equal(recent.runs[0].reviewContract.reviewResultValidated, false);
+  assert.equal(recent.runs[0].reviewContract.reviewEligibility, "unverified");
+});
+
+test("V2-13: host tarafından doğrulanan required review durumu redacted kayıtta korunur", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "v2-13-review-contract-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const config = configuration(root);
+  await writeExecutionMetric(config, {
+    executionId: "exec-review-host-validated",
+    workspace: root,
+    mode: "read_only",
+    profile: "review",
+    result: baseResult({
+      ok: true,
+      error: null,
+      result: "Structured review result",
+      exitCode: 0,
+      reason: undefined,
+      reviewContract: {
+        version: 2,
+        sourceScopeStatus: "complete",
+        sourceDeliveryStatus: "complete_to_cli",
+        sourceManifestSha256: "b".repeat(64),
+        sourceFileCount: 1,
+        sourceBytes: 12,
+        outputIntegrity: "complete",
+        taskCompletion: "completed",
+        reviewResultValidated: true,
+        reviewEligibility: "eligible_for_orchestrator_evaluation"
+      },
+      metrics: {
+        retries: 0,
+        totalCostUsd: 0.01,
+        attempts: [executionAttempt({ failureClass: null, failureStage: null, providerCode: null, exitCode: 0, retryDecision: "not_applicable", retryStopReason: null, totalCostUsd: 0.01 })]
+      }
+    })
+  });
+
+  const recent = readRecentRuns(config, { days: 7, limit: 10 });
+  assert.equal(recent.runCount, 1);
+  assert.equal(recent.runs[0].reviewContract.reviewResultValidated, true);
+  assert.equal(recent.runs[0].reviewContract.reviewEligibility, "eligible_for_orchestrator_evaluation");
+});
+
 test("V2-02: attempt üretmeyen erken hata v2 kaydında top-level tanıyla okunur", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "v2-02-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

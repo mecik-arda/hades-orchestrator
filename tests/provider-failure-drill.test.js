@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createAdapter } from "../subagent-bridge/src/adapters/agent-adapter-base.js";
+import { createCodexAdapter } from "../subagent-bridge/src/adapters/codex-adapter.js";
 import { createBridgeRuntime } from "../subagent-bridge/src/runtime/bridge-runtime.js";
 import { readRecentRuns } from "../subagent-bridge/src/recent-runs.js";
 import {
@@ -166,6 +167,29 @@ test("DRILL-02: quota hatası retry edilir, circuit açılır ve sonraki çağr�
   assert.equal(metrics[0].failureClass, "rate_limited");
   assert.equal(metrics[1].failureClass, "provider_circuit_open");
   for (const metric of metrics) assertRedactedMetric(metric, root);
+});
+
+test("DRILL-CODEX-RATE: adapter JSONL rate-limit event'i runtime read-only retry'sine taşır", async (t) => {
+  const root = fixtureDirectory(t, "codex-rate");
+  const configuration = createConfiguration(root);
+  const eventStream = [
+    { type: "thread.started", thread_id: "thread-test" },
+    { type: "turn.started" },
+    { type: "turn.failed", error: { code: "rate_limited" } }
+  ].map((event) => JSON.stringify(event)).join("\n");
+  const script = `process.stdout.write(${JSON.stringify(`${eventStream}\n`)}); process.exit(7);`;
+  const adapter = createCodexAdapter({ codex: { executable: process.execPath, execArgs: ["-e", script] } });
+  const runtime = createBridgeRuntime({ configuration, adapters: { codex: adapter }, sleep: async () => {} });
+
+  const result = await runtime.run(runRequest(root));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "rate_limited");
+  assert.equal(result.metrics.attempts.length, 2);
+  assert.equal(result.metrics.attempts[0].failureClass, "rate_limited");
+  assert.equal(result.metrics.attempts[0].retryDecision, "retry");
+  assert.equal(result.metrics.attempts[1].retryDecision, "stop");
+  assert.equal(result.metrics.attempts[1].retryStopReason, "max_attempts_reached");
 });
 
 test("DRILL-03: izin hatası yeniden denenmez ve circuit kapalı kalır", async (t) => {

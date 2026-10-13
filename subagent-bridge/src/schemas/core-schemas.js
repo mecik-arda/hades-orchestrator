@@ -135,7 +135,10 @@ const reviewContractV1Schema = z.object({
   sourceFileCount: z.number().int().min(0).nullable(),
   sourceBytes: z.number().int().min(0).nullable(),
   reviewEligibility: z.enum(reviewEligibilityValues)
-}).strict();
+}).strict().transform((value) => ({
+  ...value,
+  reviewEligibility: value.reviewEligibility === "eligible_for_orchestrator_evaluation" ? "unverified" : value.reviewEligibility
+}));
 const reviewContractV2Schema = z.object({
   version: z.literal(2),
   sourceScopeStatus: z.enum(reviewScopeStatusValues),
@@ -145,9 +148,54 @@ const reviewContractV2Schema = z.object({
   sourceBytes: z.number().int().min(0).nullable(),
   outputIntegrity: z.enum(outputIntegrityValues),
   taskCompletion: z.enum(taskCompletionValues),
+  reviewResultValidated: z.boolean().optional(),
   reviewEligibility: z.enum(reviewEligibilityValues)
-}).strict();
+}).strict().transform((value) => {
+  const reviewResultValidated = value.reviewResultValidated === true;
+  return {
+    ...value,
+    reviewResultValidated,
+    reviewEligibility: value.reviewEligibility === "eligible_for_orchestrator_evaluation" && !reviewResultValidated
+      ? "unverified"
+      : value.reviewEligibility
+  };
+});
 export const reviewContractSchema = z.union([reviewContractV1Schema, reviewContractV2Schema]);
+const sourceReviewReferenceSchema = z.object({
+  path: z.string().min(1).max(500),
+  lineStart: z.number().int().min(1),
+  lineEnd: z.number().int().min(1)
+}).strict();
+const requiredGenericSourceReviewResultSchema = z.object({
+  summary: z.string().min(1).max(12000),
+  findings: z.array(z.object({
+    severity: z.enum(["critical", "high", "medium", "low", "info"]),
+    title: z.string().min(1).max(300),
+    description: z.string().min(1).max(5000),
+    references: z.array(sourceReviewReferenceSchema).min(1).max(20)
+  }).strict()).max(100),
+  limitations: z.array(z.string().min(1).max(1000)).max(20).default([])
+}).strict();
+const requiredStructuredSourceReviewResultSchema = z.object({
+  status: z.literal("completed"),
+  summary: z.string().min(1).max(30000),
+  findings: z.array(z.object({
+    title: z.string().min(1).max(1000),
+    evidence: z.string().min(1).max(12000),
+    impact: z.string().min(1).max(12000),
+    recommendation: z.string().min(1).max(12000),
+    confidence: z.enum(["high", "medium", "low"]),
+    references: z.array(sourceReviewReferenceSchema).min(1).max(20)
+  }).strict()).max(100),
+  proposed_steps: z.array(z.string().min(1).max(4000)).max(100),
+  risks: z.array(z.string().min(1).max(4000)).max(100),
+  questions: z.array(z.string().min(1).max(4000)).max(100),
+  requires_human_approval: z.boolean()
+}).strict();
+export const requiredSourceReviewResultSchema = z.union([
+  requiredGenericSourceReviewResultSchema,
+  requiredStructuredSourceReviewResultSchema
+]);
 export const reviewSourceDeliveryStatusValues = ["complete_to_cli", "failed"];
 
 export const capabilityProbeSchema = z.object({

@@ -50,6 +50,39 @@ test("CODEX-AUTH-CLASSIFICATION: yalnız belirgin kimlik doğrulama ifadeleri au
   assert.equal(shouldRetry("auth_invalid", "read_only", 1, 3).retryable, false);
 });
 
+test("CODEX-RATE-CLASSIFICATION: alıntı veya görev metnindeki quota/429 retry tetiklemez", () => {
+  for (const output of [
+    "Documentation example: HTTP 429 quota exceeded",
+    'The file contains {"error":"rate limit exceeded"} as a sample',
+    "The task text mentions a rate limit, but provider diagnosis is absent"
+  ]) {
+    const classification = classifyCodexError(null, 1, output, "");
+    assert.equal(classification.errorClass, "non_zero_exit", output);
+    assert.equal(shouldRetry(classification.errorClass, "read_only", 1, 3).retryable, false, output);
+  }
+});
+
+test("CODEX-RATE-CLASSIFICATION-STRUCTURED: yalnız başarısız JSONL terminal provider event'i rate limit retry üretir", () => {
+  const rateLimited = JSON.stringify({ type: "turn.failed", error: { code: "rate_limited" } });
+  assert.equal(classifyCodexError(null, 1, rateLimited, "").errorClass, "rate_limited");
+  assert.equal(shouldRetry(classifyCodexError(null, 1, rateLimited, "").errorClass, "read_only", 1, 3).retryable, true);
+  assert.equal(classifyCodexError(null, 0, rateLimited, "").valid, true);
+  assert.equal(classifyCodexError(null, 1, rateLimited, "", "SIGTERM").errorClass, "process_exit");
+
+  const modelMessage = [
+    { type: "item.completed", item: { type: "agent_message", text: rateLimited } },
+    { type: "turn.failed", error: { code: "process_exit" } }
+  ].map((event) => JSON.stringify(event)).join("\n");
+  assert.equal(classifyCodexError(null, 1, modelMessage, "").errorClass, "non_zero_exit");
+  assert.equal(classifyCodexError(null, 1, "", rateLimited).errorClass, "non_zero_exit");
+
+  const supersededError = [
+    { type: "error", error: { code: "rate_limited" } },
+    { type: "turn.completed" }
+  ].map((event) => JSON.stringify(event)).join("\n");
+  assert.equal(classifyCodexError(null, 1, supersededError, "").errorClass, "non_zero_exit");
+});
+
 test("CX-AC-01: CodexAdapter AgentAdapter kontratını uygular", () => {
   const adapter = createAdapter("codex", {
     canRead: true, canWrite: true,
@@ -120,9 +153,16 @@ test("CX-AC-09: parseCodexOutput empty", () => {
 });
 
 test("CX-AC-10: parseCodexOutput valid", () => {
-  const parsed = parseCodexOutput("response text");
+  const parsed = parseCodexOutput([
+    { type: "thread.started" },
+    { type: "turn.started" },
+    { type: "item.completed", item: { type: "reasoning", text: "reasoning must not escape" } },
+    { type: "item.completed", item: { type: "agent_message", text: "response text" } },
+    { type: "turn.completed" }
+  ].map((event) => JSON.stringify(event)).join("\n"));
   assert.equal(parsed.ok, true);
   assert.equal(parsed.text, "response text");
+  assert.equal(parseCodexOutput("response text").errorClass, "output_parse_invalid");
 });
 
 test("CODEX-DIAG-04/05/06: canonical argv sandbox modunu seçer ve danger flag içermez", () => {
@@ -131,15 +171,16 @@ test("CODEX-DIAG-04/05/06: canonical argv sandbox modunu seçer ve danger flag i
   const edit = buildCodexArgs({ ...request, mode: "edit" }, { codex: { executable: "codex" } });
 
   assert.equal(readOnly.executable, "codex");
-  assert.deepEqual(readOnly.args.slice(0, 2), ["--ephemeral", "exec"]);
-  assert.deepEqual(readOnly.args.slice(2, 5), ["--model", "gpt-5", "--sandbox"]);
-  assert.equal(readOnly.args.at(-2), "read-only");
-  assert.equal(edit.args.at(-2), "workspace-write");
+  assert.deepEqual(readOnly.args.slice(0, 3), ["--ephemeral", "exec", "--json"]);
+  assert.deepEqual(readOnly.args.slice(3, 6), ["--model", "gpt-5", "--sandbox"]);
+  assert.equal(readOnly.args[readOnly.args.indexOf("--sandbox") + 1], "read-only");
+  assert.equal(edit.args[edit.args.indexOf("--sandbox") + 1], "workspace-write");
   assert.equal(readOnly.args.some((value) => /danger-full-access|bypass-approvals/i.test(value)), false);
   const providerDefault = buildCodexArgs({ ...request, model: "default" }, { codex: { executable: "codex" } });
   assert.equal(providerDefault.args.includes("--model"), false);
   const sol61 = buildCodexArgs({ ...request, model: "gpt-6.1-sol" }, { codex: { executable: "codex" } });
-  assert.deepEqual(sol61.args.slice(1, 4), ["--model", "gpt-6.1-sol", "--sandbox"]);
+  assert.deepEqual(sol61.args.slice(2, 5), ["--model", "gpt-6.1-sol", "--sandbox"]);
+  assert.equal(buildCodexArgs(request, { codex: { execArgs: ["--json"] } }).args.filter((value) => value === "--json").length, 1);
 });
 
 test("CODEX-STDIN-01: Codex prompt ve host source bundle argv yerine stdin üzerinden taşınır", () => {
@@ -228,6 +269,33 @@ test("CODEX-DIAG-07/08: non-zero stdout başarı sayılmaz ve permission ayrış
   assert.equal(result.metrics.diagnostics.stderrBytes, 0);
   assert.equal(classifyCodexError(null, 1, "", "sandbox violation: permission denied").errorClass, "permission_denied");
   assert.equal(classifyCodexError(null, 1, "", "model is not supported").errorClass, "invalid_model");
+});
+
+test("CODEX-JSONL-RETRY: adapter preserves a structured terminal rate-limit classification", async () => {
+  const eventStream = [
+    { type: "thread.started", thread_id: "thread-test" },
+    { type: "turn.started" },
+    { type: "turn.failed", error: { code: "rate_limited" } }
+  ].map((event) => JSON.stringify(event)).join("\n");
+  const script = `process.stdout.write(${JSON.stringify(`${eventStream}\n`)}); process.exit(7);`;
+  const adapter = createCodexAdapter({ codex: { executable: process.execPath, execArgs: ["-e", script] } });
+  const result = await adapter.execute({
+    executionId: "codex-structured-rate-limit",
+    backend: "codex",
+    prompt: "inspect",
+    model: "gpt-6.1-sol",
+    mode: "read_only",
+    workspace: process.cwd(),
+    delegationDepth: 0,
+    caller: "test",
+    timeoutMs: 5000
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "rate_limited");
+  assert.equal(result.retryable, true);
+  assert.equal(result.metrics.diagnostics.failureStage, "provider_rate_limit");
+  assert.equal(result.metrics.diagnostics.providerCode, "rate_limited");
 });
 
 test("CODEX-DIAG-10: signal ile sonlanan manuel iptal cancelled olarak raporlanır", async () => {

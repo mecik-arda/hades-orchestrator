@@ -7,6 +7,39 @@ import { prependExecutionMetadata } from "../services/execution-metadata.js";
 
 const activeExecutionHandles = new Map();
 const FORBIDDEN_EXTERNAL_PROVIDER_MODEL_PATTERN = /^(?:google\/gemini-|deepseek\/)/i;
+const structuredRateLimitCodes = new Set(["rate_limited", "too_many_requests", "resource_exhausted"]);
+
+function parseCodexEvents(stdout) {
+  const events = [];
+  for (const rawLine of String(stdout || "").split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      return null;
+    }
+    if (!event || typeof event !== "object" || Array.isArray(event) || typeof event.type !== "string") return null;
+    events.push(event);
+  }
+  return events.length > 0 ? events : null;
+}
+
+function codexTerminalEvent(events) {
+  if (!Array.isArray(events)) return null;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (["turn.completed", "turn.failed", "error"].includes(events[index].type)) return events[index];
+  }
+  return null;
+}
+
+function isCodexRateLimitEvent(event) {
+  if (!event || !["turn.failed", "error"].includes(event.type)) return false;
+  const error = event.error && typeof event.error === "object" ? event.error : event;
+  const code = typeof error.code === "string" ? error.code.toLocaleLowerCase("en-US") : "";
+  return structuredRateLimitCodes.has(code);
+}
 
 function resolveCodexModel(alias) {
   if (alias === "default") {
@@ -52,6 +85,10 @@ function classifyCodexError(error, exitCode, stdout, stderr, signal = null) {
   }
 
   if (exitCode !== null && exitCode !== 0) {
+    const events = parseCodexEvents(stdout);
+    if (isCodexRateLimitEvent(codexTerminalEvent(events))) {
+      return { valid: false, errorClass: "rate_limited", reason: "provider rate limit", providerCode: "rate_limited" };
+    }
     const output = `${stderr || ""} ${stdout || ""}`.toLocaleLowerCase("en-US");
     if (/sandbox (?:setup|startup|helper)|failed to (?:start|initialize).*sandbox|kernel (?:refresh|reset|initialization)/i.test(output)) {
       return { valid: false, errorClass: "sandbox_setup", reason: "sandbox setup failed", providerCode: "process_error" };
@@ -62,9 +99,6 @@ function classifyCodexError(error, exitCode, stdout, stderr, signal = null) {
     const authenticationFailure = /\bauthentication\s+(?:failed|failure|required|error)\b|\bfailed\s+to\s+authenticate\b|\bnot\s+authenticated\b|\b(?:login|sign[\s-]?in)\s+required\b|\bnot\s+(?:logged|signed)\s+in\b|\bplease\s+(?:log\s+in|sign\s+in)\b|\b(?:invalid|expired|revoked|missing)\s+(?:api[- ]?key|access\s+token|authentication\s+token|authorization\s+token|credentials?)\b|\b(?:api[- ]?key|access\s+token|authentication\s+token|authorization\s+token|credentials?)\s+(?:(?:is|was|are|were)\s+)?(?:invalid|expired|revoked|missing)\b|\bhttp(?:\/\d(?:\.\d)?)?\s+401\s+unauthorized\b|\b401\s+unauthorized\b/i.test(output);
     if (authenticationFailure) {
       return { valid: false, errorClass: "auth_invalid", reason: "authentication failure" };
-    }
-    if (/rate.limit|429|quota/i.test(output)) {
-      return { valid: false, errorClass: "rate_limited", reason: "provider rate limited" };
     }
     if (/\b5\d\d\b|internal server error|service unavailable|bad gateway|gateway timeout/i.test(output)) {
       return { valid: false, errorClass: "server", reason: "provider service unavailable" };
@@ -89,9 +123,20 @@ function classifyCodexError(error, exitCode, stdout, stderr, signal = null) {
 
 function parseCodexOutput(stdout) {
   if (!stdout || !stdout.trim()) {
-    return { ok: false, error: "empty output", text: null };
+    return { ok: false, errorClass: "empty_output", error: "empty output", text: null };
   }
-  return { ok: true, text: stdout.trim() };
+  const events = parseCodexEvents(stdout);
+  if (!events) return { ok: false, errorClass: "output_parse_invalid", error: "codex JSONL output was invalid", text: null };
+  if (codexTerminalEvent(events)?.type !== "turn.completed") {
+    return { ok: false, errorClass: "output_parse_invalid", error: "codex JSONL output did not contain a completed turn", text: null };
+  }
+  const messages = events
+    .filter((event) => event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string")
+    .map((event) => event.item.text.trim())
+    .filter(Boolean);
+  const text = messages.at(-1) || "";
+  if (!text) return { ok: false, errorClass: "empty_output", error: "empty output", text: null };
+  return { ok: true, text };
 }
 
 function codexFailureStage(errorClass) {
@@ -154,8 +199,9 @@ function buildCodexArgs(request, configuration) {
     executable,
     model: model.model,
     args: [
-      ...execArgs,
+      ...execArgs.filter((argument) => argument !== "--json"),
       "exec",
+      "--json",
       ...(allowNonGitWorkspace && !isGitWorkspace ? ["--skip-git-repo-check"] : []),
       ...(model.model ? ["--model", model.model] : []),
       "--sandbox", request.mode === "read_only" ? "read-only" : "workspace-write",
@@ -323,9 +369,9 @@ export function createCodexAdapter(configuration) {
             error: parsed.error,
             durationMs: Date.now() - startedAt,
             exitCode: processResult.code || 1,
-            reason: "empty_output",
+            reason: parsed.errorClass,
             metrics: {
-              diagnostics: createCodexDiagnostics("empty_output", {
+              diagnostics: createCodexDiagnostics(parsed.errorClass, {
                 stdout: processResult.stdout,
                 stderr: processResult.stderr,
                 durationMs: Date.now() - startedAt

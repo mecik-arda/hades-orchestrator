@@ -1,3 +1,23 @@
+const structuredRateLimitCodes = new Set(["rate_limited", "too_many_requests", "resource_exhausted"]);
+
+function isStructuredRateLimitOutput(value) {
+  for (const rawLine of String(value || "").split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!event || typeof event !== "object" || Array.isArray(event) || event.type !== "error") continue;
+    const error = event.error && typeof event.error === "object" ? event.error : event;
+    const code = typeof error.code === "string" ? error.code.toLocaleLowerCase("en-US") : "";
+    if (structuredRateLimitCodes.has(code)) return true;
+  }
+  return false;
+}
+
 export function classifyProcessFailure(processResult) {
   const output = `${processResult.stderr || ""}\n${processResult.stdout || ""}`.toLocaleLowerCase("en-US");
   if (processResult.error) {
@@ -15,7 +35,7 @@ export function classifyProcessFailure(processResult) {
     }
     return "process_error";
   }
-  if (/\b429\b|rate limit|too many requests|quota exceeded/.test(output)) {
+  if (isStructuredRateLimitOutput(output)) {
     return "rate_limited";
   }
   if (/\b5\d\d\b|internal server error|service unavailable|bad gateway|gateway timeout/.test(output)) {

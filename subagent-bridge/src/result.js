@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 const confidenceSchema = z.enum(["high", "medium", "low"]);
+const sourceReferenceSchema = z.object({
+  path: z.string().min(1).max(500),
+  lineStart: z.number().int().min(1),
+  lineEnd: z.number().int().min(1)
+}).strict();
 
 export const deepSeekResultSchema = z.object({
   status: z.enum(["completed", "needs_context", "blocked", "failed"]),
@@ -10,7 +15,8 @@ export const deepSeekResultSchema = z.object({
     evidence: z.string().min(1).max(12000),
     impact: z.string().min(1).max(12000),
     recommendation: z.string().min(1).max(12000),
-    confidence: confidenceSchema
+    confidence: confidenceSchema,
+    references: z.array(sourceReferenceSchema).min(1).max(20).optional()
   }).strict()).max(100),
   proposed_steps: z.array(z.string().min(1).max(4000)).max(100),
   risks: z.array(z.string().min(1).max(4000)).max(100),

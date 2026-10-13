@@ -8,7 +8,7 @@ import { createAdapter } from "../subagent-bridge/src/adapters/agent-adapter-bas
 import { createDeepSeekCheckpoint } from "../subagent-bridge/src/deepseek.js";
 import { createGlmCheckpoint } from "../subagent-bridge/src/glm.js";
 import { createBridgeRuntime } from "../subagent-bridge/src/runtime/bridge-runtime.js";
-import { createFailureSubagentResult, createSuccessSubagentResult } from "../subagent-bridge/src/schemas/core-schemas.js";
+import { createFailureSubagentResult, createSuccessSubagentResult, requiredSourceReviewResultSchema } from "../subagent-bridge/src/schemas/core-schemas.js";
 import {
   createReviewSourceManifest,
   REVIEW_SOURCE_MAX_BUNDLE_BYTES,
@@ -27,6 +27,36 @@ function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
+function structuredReviewResult(findings = []) {
+  return JSON.stringify({
+    summary: "Reviewed the selected host source scope.",
+    findings,
+    limitations: []
+  });
+}
+
+function successfulReviewAdapterResult(request, result = structuredReviewResult(), diagnostics = true) {
+  return createSuccessSubagentResult("codex", request.model, {
+    result,
+    metrics: {
+      retries: 0,
+      totalCostUsd: 0,
+      stdinWriteStatus: request.reviewSourcePayload ? "complete" : "not_used",
+      stdinBytes: request.reviewSourcePayload ? Buffer.byteLength(request.reviewSourcePayload, "utf8") : null,
+      ...(diagnostics ? {
+        diagnostics: {
+          failureStage: null,
+          providerCode: null,
+          settingsLockWaitMs: null,
+          providerExecutionMs: 5,
+          stdoutBytes: Buffer.byteLength(result, "utf8"),
+          stderrBytes: 0
+        }
+      } : {})
+    }
+  });
+}
+
 test("RSM-01: manifest sorts selected paths and hashes exact host-read bytes", (t) => {
   const root = createWorkspace(t);
   const beta = Buffer.from("const beta = 2;\n", "utf8");
@@ -40,6 +70,10 @@ test("RSM-01: manifest sorts selected paths and hashes exact host-read bytes", (
   assert.equal(manifest.version, 1);
   assert.equal(manifest.fileCount, 2);
   assert.equal(manifest.sourceBytes, beta.length + alpha.length);
+  assert.deepEqual(manifest.sourceFileLineCounts, [
+    { path: "src/alpha.js", lineCount: 1 },
+    { path: "src/beta.js", lineCount: 1 }
+  ]);
   assert.equal(manifest.manifestSha256, sha256(Buffer.from(JSON.stringify({
     version: 1,
     hashAlgorithm: "sha256",
@@ -185,23 +219,13 @@ test("RSM-06: runtime sends the exact host bundle to supported CLI input and blo
     observedRequest = request;
     return adapterResult(request);
   };
-  adapterResult = (request) => createSuccessSubagentResult("codex", request.model, {
-    result: "Review completed",
-    metrics: {
-      retries: 0,
-      totalCostUsd: 0,
-      stdinWriteStatus: request.reviewSourcePayload ? "complete" : "not_used",
-      stdinBytes: request.reviewSourcePayload ? Buffer.byteLength(request.reviewSourcePayload, "utf8") : null,
-      diagnostics: {
-        failureStage: null,
-        providerCode: null,
-        settingsLockWaitMs: null,
-        providerExecutionMs: 5,
-        stdoutBytes: Buffer.byteLength("Review completed", "utf8"),
-        stderrBytes: 0
-      }
-    }
-  });
+  const validReview = structuredReviewResult([{
+    severity: "info",
+    title: "Reviewed selected source",
+    description: "The selected file contains the expected exported value.",
+    references: [{ path: "src/answer.js", lineStart: 1, lineEnd: 1 }]
+  }]);
+  adapterResult = (request) => successfulReviewAdapterResult(request, validReview);
   const runtime = createBridgeRuntime({ configuration, adapters: { codex: adapter }, sleep: async () => {} });
   const result = await runtime.run({
     target: "codex",
@@ -217,45 +241,31 @@ test("RSM-06: runtime sends the exact host bundle to supported CLI input and blo
 
   assert.equal(result.ok, true);
   assert.match(observedRequest.reviewSourcePayload, /export const answer = 42;/u);
-  assert.equal(observedRequest.prompt, "Review the selected source.");
+  assert.match(observedRequest.prompt, /^Review the selected source\./u);
+  assert.match(observedRequest.prompt, /host source manifest/u);
   assert.equal(result.reviewContract.sourceScopeStatus, "complete");
   assert.equal(result.reviewContract.sourceDeliveryStatus, "complete_to_cli");
   assert.equal(result.reviewContract.outputIntegrity, "complete");
   assert.equal(result.reviewContract.taskCompletion, "completed");
+  assert.equal(result.reviewContract.reviewResultValidated, true);
   assert.equal(result.reviewContract.reviewEligibility, "eligible_for_orchestrator_evaluation");
 
-  adapterResult = (request) => createSuccessSubagentResult("codex", request.model, {
-    result: " ",
-    metrics: {
-      retries: 0,
-      totalCostUsd: 0,
-      stdinWriteStatus: "complete",
-      stdinBytes: Buffer.byteLength(request.reviewSourcePayload, "utf8"),
-      diagnostics: {
-        failureStage: null,
-        providerCode: null,
-        settingsLockWaitMs: null,
-        providerExecutionMs: 5,
-        stdoutBytes: 1,
-        stderrBytes: 0
-      }
-    }
-  });
-  const empty = await runtime.run({
+  adapterResult = (request) => successfulReviewAdapterResult(request, "I will start reviewing shortly.");
+  const unfinished = await runtime.run({
     target: "codex",
     prompt: "Review the selected source.",
     model: "gpt-6.1-sol",
     mode: "read_only",
     trustedWorkspace: root,
-    caller: "test_review_empty",
+    caller: "test_review_unfinished",
     delegationDepth: 0,
     reviewEvidenceRequirement: "required",
     reviewScope: ["src/answer.js"]
   });
-  assert.equal(empty.ok, true);
-  assert.equal(empty.reviewContract.outputIntegrity, "complete");
-  assert.equal(empty.reviewContract.taskCompletion, "partial");
-  assert.equal(empty.reviewContract.reviewEligibility, "unavailable");
+  assert.equal(unfinished.ok, false);
+  assert.equal(unfinished.reason, "schema_invalid");
+  assert.equal(unfinished.reviewContract.reviewResultValidated, false);
+  assert.equal(unfinished.reviewContract.reviewEligibility, "unavailable");
 
   adapterResult = (request) => createFailureSubagentResult("codex", request.model, {
     error: "execution timed out",
@@ -331,10 +341,7 @@ test("RSM-06: runtime sends the exact host bundle to supported CLI input and blo
   assert.equal(outputLimited.reviewContract.taskCompletion, "partial");
   assert.equal(outputLimited.reviewContract.reviewEligibility, "unavailable");
 
-  adapterResult = (request) => createSuccessSubagentResult("codex", request.model, {
-    result: "Review completed",
-    metrics: { retries: 0, totalCostUsd: 0, stdinWriteStatus: "complete", stdinBytes: Buffer.byteLength(request.reviewSourcePayload, "utf8") }
-  });
+  adapterResult = (request) => successfulReviewAdapterResult(request, validReview, false);
   const unproven = await runtime.run({
     target: "codex",
     prompt: "Review the selected source.",
@@ -349,25 +356,52 @@ test("RSM-06: runtime sends the exact host bundle to supported CLI input and blo
   assert.equal(unproven.ok, true);
   assert.equal(unproven.reviewContract.outputIntegrity, "unknown");
   assert.equal(unproven.reviewContract.taskCompletion, "unknown");
+  assert.equal(unproven.reviewContract.reviewResultValidated, true);
   assert.equal(unproven.reviewContract.reviewEligibility, "unverified");
 
-  adapterResult = (request) => createSuccessSubagentResult("codex", request.model, {
-    result: "Review completed",
-    metrics: {
-      retries: 0,
-      totalCostUsd: 0,
-      stdinWriteStatus: request.reviewSourcePayload ? "complete" : "not_used",
-      stdinBytes: request.reviewSourcePayload ? Buffer.byteLength(request.reviewSourcePayload, "utf8") : null,
-      diagnostics: {
-        failureStage: null,
-        providerCode: null,
-        settingsLockWaitMs: null,
-        providerExecutionMs: 5,
-        stdoutBytes: Buffer.byteLength("Review completed", "utf8"),
-        stderrBytes: 0
-      }
-    }
+  const invalidReferences = structuredReviewResult([{
+    severity: "medium",
+    title: "Invalid references are refused",
+    description: "This fixture cites a missing file and an out-of-range line.",
+    references: [
+      { path: "src/missing.js", lineStart: 1, lineEnd: 1 },
+      { path: "src/answer.js", lineStart: 2, lineEnd: 2 }
+    ]
+  }]);
+  adapterResult = (request) => successfulReviewAdapterResult(request, invalidReferences);
+  const invalidReferenceResult = await runtime.run({
+    target: "codex",
+    prompt: "Review the selected source.",
+    model: "gpt-6.1-sol",
+    mode: "read_only",
+    trustedWorkspace: root,
+    caller: "test_review_invalid_references",
+    delegationDepth: 0,
+    reviewEvidenceRequirement: "required",
+    reviewScope: ["src/answer.js"]
   });
+  assert.equal(invalidReferenceResult.ok, false);
+  assert.equal(invalidReferenceResult.reason, "schema_invalid");
+  assert.equal(invalidReferenceResult.reviewContract.reviewResultValidated, false);
+  assert.equal(invalidReferenceResult.reviewContract.reviewEligibility, "unavailable");
+
+  adapterResult = (request) => successfulReviewAdapterResult(request, validReview);
+  const bestEffort = await runtime.run({
+    target: "codex",
+    prompt: "Review the selected source.",
+    model: "gpt-6.1-sol",
+    mode: "read_only",
+    trustedWorkspace: root,
+    caller: "test_review_best_effort",
+    delegationDepth: 0,
+    reviewEvidenceRequirement: "best_effort",
+    reviewScope: ["src/answer.js"]
+  });
+  assert.equal(bestEffort.ok, true);
+  assert.equal(bestEffort.reviewContract.reviewResultValidated, false);
+  assert.equal(bestEffort.reviewContract.reviewEligibility, "unverified");
+
+  adapterResult = (request) => successfulReviewAdapterResult(request, validReview);
   const rejected = await runtime.run({
     target: "codex",
     prompt: "Review the selected source.",
@@ -382,7 +416,7 @@ test("RSM-06: runtime sends the exact host bundle to supported CLI input and blo
   assert.equal(rejected.ok, false);
   assert.equal(rejected.reviewContract.sourceScopeStatus, "blocked");
   assert.equal(rejected.reviewContract.reviewEligibility, "unavailable");
-  assert.equal(executionCount, 5);
+  assert.equal(executionCount, 7);
 
   const unscoped = await runtime.run({
     target: "codex",
@@ -396,7 +430,27 @@ test("RSM-06: runtime sends the exact host bundle to supported CLI input and blo
   });
   assert.equal(unscoped.ok, true);
   assert.equal(Object.hasOwn(unscoped, "reviewContract"), false);
-  assert.equal(executionCount, 6);
+  assert.equal(executionCount, 8);
+});
+
+test("RSM-REVIEW-01: required review schema accepts the provider structured-result form with references", () => {
+  const parsed = requiredSourceReviewResultSchema.safeParse({
+    status: "completed",
+    summary: "Reviewed the selected source.",
+    findings: [{
+      title: "Example finding",
+      evidence: "A concrete code path demonstrates the issue.",
+      impact: "The behavior can fail for this input.",
+      recommendation: "Guard the edge case.",
+      confidence: "medium",
+      references: [{ path: "src/answer.js", lineStart: 1, lineEnd: 1 }]
+    }],
+    proposed_steps: [],
+    risks: [],
+    questions: [],
+    requires_human_approval: false
+  });
+  assert.equal(parsed.success, true);
 });
 
 test("RSM-07: DeepSeek and GLM wrapper results retain the host review contract", () => {

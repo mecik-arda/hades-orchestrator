@@ -6,7 +6,7 @@ import test from "node:test";
 import { createAdapter } from "../subagent-bridge/src/adapters/agent-adapter-base.js";
 import { buildOpenCodeArgs } from "../subagent-bridge/src/adapters/opencode-adapter.js";
 import { createMcpToolHandlers, publicToolSchemas } from "../subagent-bridge/src/frontends/mcp/tools.js";
-import { buildGlmReadOnlyPrompt, checkGlm, createGlmRuntimeRequest, resolveGlmModel } from "../subagent-bridge/src/glm.js";
+import { buildGlmReadOnlyPrompt, buildGlmSchemaRepairPrompt, checkGlm, createGlmRuntimeRequest, resolveGlmModel } from "../subagent-bridge/src/glm.js";
 import { createBridgeRuntime } from "../subagent-bridge/src/runtime/bridge-runtime.js";
 import { resolveRuntimeRoute } from "../subagent-bridge/src/runtime/router.js";
 import { createSuccessSubagentResult } from "../subagent-bridge/src/schemas/core-schemas.js";
@@ -158,6 +158,23 @@ test("GLM-08: structured GLM prompt JSON sözleşmesini içerir", () => {
   const prompt = buildGlmReadOnlyPrompt(input({ role: "analyst", mode: "read_only", files: [] }));
   assert.match(prompt, /CRITICAL JSON RULES/);
   assert.match(prompt, /requires_human_approval/);
+});
+
+test("GLM-08a: required reviewer prompt ve repair schema host-manifest line references ister", () => {
+  const reviewInput = input({
+    role: "reviewer",
+    mode: "read_only",
+    files: ["src/value.txt"],
+    contextFiles: [],
+    reviewEvidenceRequirement: "required",
+    reviewScope: ["src/value.txt"]
+  });
+  const prompt = buildGlmReadOnlyPrompt(reviewInput);
+  const repairPrompt = buildGlmSchemaRepairPrompt(reviewInput);
+  assert.match(prompt, /references/);
+  assert.match(prompt, /manifest-relative path/);
+  assert.match(prompt, /lineStart/);
+  assert.match(repairPrompt, /references/);
 });
 
 test("GLM-09: glm_implementation profili controlled edit akışına yönlenir", async () => {

@@ -22,6 +22,7 @@ export function resolveGlmModel(configuration, model = "glm_5_2") {
 }
 
 export function buildGlmReadOnlyPrompt(input) {
+  const requiredSourceReview = input.reviewEvidenceRequirement === "required" && input.reviewScope?.length > 0;
   return [
     `Görev: ${input.objective}`,
     `İncelenecek dosyalar: ${input.files.length > 0 ? input.files.join(", ") : "Yok"}`,
@@ -31,28 +32,37 @@ export function buildGlmReadOnlyPrompt(input) {
     "Dosya değiştirme, shell veya başka subagent kullanma.",
     "CRITICAL JSON RULES: Return exactly one JSON object starting with { and ending with }. No backtick fences, no markdown, no explanatory text before or after the JSON. Every key and string value must use double quotes. No trailing commas. No single quotes. No unquoted keys. No comments. No JavaScript syntax.",
     "Required keys (every one must be present, even if empty): status, summary, findings, proposed_steps, risks, questions, requires_human_approval.",
-    "status must be one of: completed, needs_context, blocked, failed. requires_human_approval must be a boolean (true or false, not a string). findings must be an array of objects with exactly: title, evidence, impact, recommendation, confidence. confidence must be exactly: high, medium, or low. If no findings, use [].",
-    "Valid example: {\"status\":\"completed\",\"summary\":\"short summary\",\"findings\":[],\"proposed_steps\":[],\"risks\":[],\"questions\":[],\"requires_human_approval\":false}"
+    "status must be one of: completed, needs_context, blocked, failed. requires_human_approval must be a boolean (true or false, not a string). findings must be an array of objects with exactly: title, evidence, impact, recommendation, confidence" + (requiredSourceReview ? ", references" : "") + ". confidence must be exactly: high, medium, or low. If no findings, use [].",
+    ...(requiredSourceReview ? ["Every finding must include a non-empty references array of {\"path\":\"exact manifest-relative path\",\"lineStart\":1,\"lineEnd\":1} objects. Use only paths and 1-based inclusive line ranges present in the supplied host manifest."] : []),
+    requiredSourceReview
+      ? "Valid example: {\"status\":\"completed\",\"summary\":\"short summary\",\"findings\":[{\"title\":\"short title\",\"evidence\":\"evidence\",\"impact\":\"impact\",\"recommendation\":\"recommendation\",\"confidence\":\"medium\",\"references\":[{\"path\":\"src/example.js\",\"lineStart\":1,\"lineEnd\":1}]}],\"proposed_steps\":[],\"risks\":[],\"questions\":[],\"requires_human_approval\":false}"
+      : "Valid example: {\"status\":\"completed\",\"summary\":\"short summary\",\"findings\":[],\"proposed_steps\":[],\"risks\":[],\"questions\":[],\"requires_human_approval\":false}"
   ].join("\n");
 }
 
 export function buildGlmSchemaRepairPrompt(input) {
+  const requiredSourceReview = input.reviewEvidenceRequirement === "required" && input.reviewScope?.length > 0;
   return [
     "Görev: " + input.objective,
     "Your previous JSON response was invalid. Common causes: trailing commas, unquoted keys, single quotes, backtick fences, explanatory text outside JSON.",
     "Return exactly one JSON object now. Start with { and end with }. No markdown, no code fences, no text before or after.",
     "All required keys must be present: status, summary, findings, proposed_steps, risks, questions, requires_human_approval.",
+    ...(requiredSourceReview ? ["Every finding must contain a non-empty references array with exact manifest-relative paths and 1-based inclusive lineStart/lineEnd values from the host source manifest."] : []),
     "requires_human_approval must be a JSON boolean (true or false, not a string).",
-    "Example: {\"status\":\"completed\",\"summary\":\"fixed\",\"findings\":[{\"title\":\"t\",\"evidence\":\"e\",\"impact\":\"i\",\"recommendation\":\"r\",\"confidence\":\"high\"}],\"proposed_steps\":[],\"risks\":[],\"questions\":[],\"requires_human_approval\":false}"
+    requiredSourceReview
+      ? "Example: {\"status\":\"completed\",\"summary\":\"fixed\",\"findings\":[{\"title\":\"t\",\"evidence\":\"e\",\"impact\":\"i\",\"recommendation\":\"r\",\"confidence\":\"high\",\"references\":[{\"path\":\"src/example.js\",\"lineStart\":1,\"lineEnd\":1}]}],\"proposed_steps\":[],\"risks\":[],\"questions\":[],\"requires_human_approval\":false}"
+      : "Example: {\"status\":\"completed\",\"summary\":\"fixed\",\"findings\":[{\"title\":\"t\",\"evidence\":\"e\",\"impact\":\"i\",\"recommendation\":\"r\",\"confidence\":\"high\"}],\"proposed_steps\":[],\"risks\":[],\"questions\":[],\"requires_human_approval\":false}"
   ].join("\n");
 }
 
-export function buildGlmProfileReadOnlyPrompt(prompt) {
+export function buildGlmProfileReadOnlyPrompt(prompt, reviewOptions = {}) {
   return buildGlmReadOnlyPrompt({
     objective: prompt,
     files: [],
     contextFiles: [],
-    acceptanceCriteria: ["Return a concise, evidence-based result."]
+    acceptanceCriteria: ["Return a concise, evidence-based result."],
+    reviewEvidenceRequirement: reviewOptions.reviewEvidenceRequirement,
+    reviewScope: reviewOptions.reviewScope
   });
 }
 

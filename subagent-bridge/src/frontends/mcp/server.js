@@ -239,7 +239,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
 
   server.registerTool("run_deepseek_subagent", {
     title: "DeepSeek V4 Pro veya Flash subagent çalıştır",
-    description: "OpenCode üzerinden DeepSeek Pro veya Flash'ı read-only veya kontrollü edit modunda çalıştırır. deepseek_flash aliası canonical deepseek/deepseek-flash kimliğine, yani DeepSeek-V4.1-Flash sürümüne çözülür. Edit yalnız seçilmiş dosyaları disposable workspace sonrası trusted host workspace'e doğrulanmış promotion ile uygular.",
+    description: "OpenCode üzerinden DeepSeek Pro veya Flash'ı read-only veya kontrollü edit modunda çalıştırır. Reviewer rolü için açık files/contextFiles kapsamı zorunludur; required review katı JSON bulguları ve host manifestine göre doğrulanan path/line atıfları ister. deepseek_flash aliası canonical deepseek/deepseek-flash kimliğine, yani DeepSeek-V4.1-Flash sürümüne çözülür. Edit yalnız seçilmiş dosyaları disposable workspace sonrası trusted host workspace'e doğrulanmış promotion ile uygular.",
     inputSchema: publicToolInputShape(publicToolSchemas.runDeepSeek),
     annotations: executionAnnotations
   }, safe(handlers.runDeepSeek));
@@ -264,7 +264,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
 
   server.registerTool("run_glm_subagent", {
     title: "GLM subagent çalıştır",
-    description: "OpenCode üzerinden GLM 5.2, GLM 5.2 HighSpeed, GLM 5.3 veya GLM 5.3 Flash'ı read-only ya da kontrollü edit modunda çalıştırır. Edit yalnız seçilmiş dosyaları disposable workspace sonrası trusted host workspace'e doğrulanmış promotion ile uygular.",
+    description: "OpenCode üzerinden GLM 5.2, GLM 5.2 HighSpeed, GLM 5.3 veya GLM 5.3 Flash'ı read-only ya da kontrollü edit modunda çalıştırır. Reviewer rolü için açık files/contextFiles kapsamı zorunludur; required review katı JSON bulguları ve host manifestine göre doğrulanan path/line atıfları ister. Edit yalnız seçilmiş dosyaları disposable workspace sonrası trusted host workspace'e doğrulanmış promotion ile uygular.",
     inputSchema: publicToolInputShape(publicToolSchemas.runGlm),
     annotations: executionAnnotations
   }, safe(handlers.runGlm));
@@ -288,7 +288,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
     }));
     server.registerTool(`run_${provider}_subagent`, {
       title: `${provider} subagent çalıştır`,
-      description: `OpenCode üzerinden ${provider} modelini read-only veya kontrollü edit modunda çalıştırır.`,
+      description: `OpenCode üzerinden ${provider} modelini read-only veya kontrollü edit modunda çalıştırır. Reviewer rolü için açık files/contextFiles kapsamı zorunludur; required review katı JSON bulguları ve host manifestine göre doğrulanan path/line atıfları ister.`,
       inputSchema: publicToolInputShape(publicToolSchemas.runCatalogProvider),
       annotations: executionAnnotations
     }, safe(handler));
@@ -328,14 +328,14 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
 
   server.registerTool("run_claude_code_subagent", {
     title: "Claude Code subagent çalıştır",
-    description: "Claude Code CLI üzerinden salt okunur veya düzenleme modunda görev devreder.",
+    description: "Claude Code CLI üzerinden salt okunur veya düzenleme modunda görev devreder. Required source review için açık reviewScope gerekir; sonuç strict JSON review şeması ve host manifest path/line aralıklarıyla doğrulanır.",
     inputSchema: publicToolInputShape(publicToolSchemas.runClaudeCode),
     annotations: executionAnnotations
   }, safe(handlers.runClaudeCode));
 
   server.registerTool("run_opencode_subagent", {
     title: "OpenCode subagent çalıştır",
-    description: "Açıkça belirtilmiş bağımsız OpenCode provider modellerine görev devreder. Gemini modelleri Antigravity üzerinden çalıştırılmalıdır.",
+    description: "Açıkça belirtilmiş bağımsız OpenCode provider modellerine görev devreder. Required source review için açık reviewScope gerekir; sonuç strict JSON review şeması ve host manifest path/line aralıklarıyla doğrulanır. Gemini modelleri Antigravity üzerinden çalıştırılmalıdır.",
     inputSchema: publicToolInputShape(publicToolSchemas.runOpenCode),
     annotations: executionAnnotations
   }, safe(handlers.runOpenCode));
@@ -366,14 +366,14 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
 
   server.registerTool("run_codex_subagent", {
     title: "OpenAI Codex subagent çalıştır",
-    description: "OpenAI Codex CLI üzerinden salt okunur veya düzenleme modunda görev devreder.",
+    description: "OpenAI Codex CLI üzerinden salt okunur veya düzenleme modunda görev devreder. Required source review için açık reviewScope gerekir; sonuç strict JSON review şeması ve host manifest path/line aralıklarıyla doğrulanır.",
     inputSchema: publicToolInputShape(publicToolSchemas.runCodex),
     annotations: executionAnnotations
   }, safe(handlers.runCodex));
 
   server.registerTool("run_task_profile", {
     title: "Görev profiliyle subagent çalıştır",
-    description: "Açıkça seçilen görev profiline ait canonical provider ve modla çalışır; yalnız policy'de tanımlı read-only fallback hedeflerini kullanabilir.",
+    description: "Açıkça seçilen görev profiline ait canonical provider ve modla çalışır; yalnız policy'de tanımlı read-only fallback hedeflerini kullanabilir. Required source review için açık reviewScope, strict JSON sonucu ve host manifestine göre doğrulanmış path/line atıfları gerekir.",
     inputSchema: publicToolInputShape(publicToolSchemas.runProfile),
     annotations: executionAnnotations
   }, safe(handlers.runProfile));

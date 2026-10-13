@@ -56,7 +56,9 @@ test("model_access_denied kalıcı hata sınıfıdır ve retry edilmez", () => {
 });
 
 test("yalnızca geçici hata sınıfları retry için uygundur", () => {
-  assert.equal(classifyProcessFailure({ code: 1, stdout: "", stderr: "HTTP 429 rate limit" }), "rate_limited");
+  assert.equal(classifyProcessFailure({ code: 1, stdout: "", stderr: JSON.stringify({ type: "error", error: { code: "rate_limited" } }) }), "rate_limited");
+  assert.equal(classifyProcessFailure({ code: 1, stdout: "documentation: HTTP 429 quota example", stderr: "" }), "process_exit");
+  assert.equal(classifyProcessFailure({ code: 1, stdout: "", stderr: "Tool execution aborted; log quoted rate limit" }), "process_exit");
   assert.equal(classifyProcessFailure({ code: 1, stdout: "", stderr: "HTTP 503 service unavailable" }), "server");
   assert.equal(classifyProcessFailure({ code: 1, stdout: "", stderr: "network connection reset" }), "network");
   assert.equal(classifyProcessFailure({ error: Object.assign(new Error("process command-line budget exceeded"), { code: "ENAMETOOLONG", failureClass: "prompt_transport_limit" }) }), "prompt_transport_limit");

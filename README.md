@@ -184,6 +184,8 @@ Calls use `--pure`, disable project-local OpenCode config, and receive a Bridge-
 
 For OpenCode source-bundle reviews, the Bridge sets `OPENCODE_DB=:memory:` so session and message records use the in-memory database path supported by the verified CLI version instead of persisting in the user's OpenCode session database. The source-bundle transport accepts only the verified exact CLI versions `1.18.35` and `1.19.0`; other versions fail closed before dispatch. Run `npm run opencode:memory-db:verify` with the installed `1.19.0` CLI to send the two-file synthetic bundle to a localhost-only mock model, verify that no tool events or persistent session database are produced, and clean up the isolated data directory. The mock response is fixed, so this check does not evaluate review semantics or replace the hosted Zen Terms decision and source-bundle canary.
 
+Required source-bundle reviews must return a strict provider-specific JSON result. Codex, OpenCode, and Claude Code use `summary`, `findings`, and `limitations`; DeepSeek and GLM retain their structured `status`/`summary`/`findings` envelope with required references. Every finding must cite one or more host-manifest paths and 1-based inclusive line ranges; the Bridge rejects references to unselected paths or lines outside the selected files. A malformed or unvalidated result cannot become review-eligible. Best-effort reviews remain unverified. Host citation validation confirms only that the referenced path and range exist in the supplied snapshot, not that the finding is true or that the model semantically read the source.
+
 The current OpenCode Terms (effective August 15, 2026) prohibit automatically or programmatically extracting data or Output. Official CLI docs describe `run` for scripting/automation and `--format json` for raw JSON events; the SDK supports programmatic control, and the Zen page says “Use with any agent.” These product docs establish technical/product support but do not expressly define an exception to the Terms restriction. The user reports that a written clarification request was sent to OpenCode on 2026-10-10; its response is pending. A new hosted Space Bunny source-bundle canary remains gated until that response is evaluated. The CLI's local in-memory session database does not change upstream data handling or Terms applicability.
 
 `run_space_bunny_subagent`, its web-research variant, `run_space_bunny_edit_pilot`, and controlled edits all use the currently blocked Bridge CLI route; they should be expected to fail with `permission_denied` until an allowed access route is configured and verified. The historical read-only canary on 2026-09-30 confirmed access under that date's route, marker reading, no workspace mutation, and a reported denial for write/outside-directory attempts; it does not override the current 403. If access is restored, the tools retain their restrictions: web research uses `webResearch: true`, `role: researcher`, and `mode: read_only` in an empty OS-temp workspace with only `websearch` and `webfetch`; every edit promotion requires an explicit prepared approval; the edit pilot uses a disposable copy and never promotes. OpenCode's public materials do not identify the Space Bunny Free upstream provider; zero-retention/no-training is OpenCode's published statement, not an independent audit.
@@ -258,9 +260,11 @@ Canonical error classes are `rate_limited`, `authentication_failure`, `permissio
 The canonical executable is the official standalone `codex` on PATH.
 
 ```text
-read_only  → codex exec --sandbox read-only
-edit       → codex exec --sandbox workspace-write
+read_only  → codex exec --sandbox read-only --json
+edit       → codex exec --sandbox workspace-write --json
 ```
+
+The adapter consumes Codex's JSONL event stream, returns only the last completed `agent_message`, and does not expose reasoning or tool-event text as the result. Read-only retry for rate limits requires a recognized code on the terminal `turn.failed` or `error` event; prose, stderr examples, and JSON embedded in an agent message do not trigger a rate-limit retry. Malformed JSONL or a missing completed turn is rejected.
 
 The normal flow contains no sandbox or approval bypass. Edit tools apply only selected files in a disposable workspace with hash checks, secret scanning and rollback-supported promotion; test, build, script, package manager and mutating shell commands are forbidden. High-impact promotions stay fail-closed until the orchestrator approves the stored prepared edit; multi-file application provides handled-error rollback. Interrupted promotion artifacts block new applications until manual recovery: inspect the `.tmp` and `.tmp.backup` artifacts in the target directories, restore a `.backup` over its source when needed, then remove the artifacts before retrying.
 
@@ -667,9 +671,11 @@ Kanonik hata sınıfları `rate_limited`, `authentication_failure`, `permission_
 Kanonik executable PATH üzerindeki resmi standalone `codex`’tir.
 
 ```text
-read_only  → codex exec --sandbox read-only
-edit       → codex exec --sandbox workspace-write
+read_only  → codex exec --sandbox read-only --json
+edit       → codex exec --sandbox workspace-write --json
 ```
+
+Adapter Codex’in JSONL event akışını işler; yalnız son tamamlanmış `agent_message` sonucunu döndürür, reasoning veya araç event’lerini sonuç metni olarak sızdırmaz. Rate-limit retry yalnız terminal `turn.failed` veya `error` event’inde tanınan hata koduyla açılır; düz metin, stderr örnekleri ve agent mesajı içindeki JSON rate-limit retry başlatmaz. Bozuk JSONL veya tamamlanma event’i olmayan çıktı reddedilir.
 
 Normal akış sandbox veya approval bypass içermez. Edit araçları disposable workspace’te yalnız seçili dosyaları hash kontrolü, secret taraması ve rollback destekli promotion ile uygular; test, build, script, paket yöneticisi ve mutasyon yapan shell komutları yasaktır. Yüksek etkili promotion, orkestratör saklanan prepared edit’i onaylayana kadar fail-closed kalır; çok dosyalı uygulama işlenen hatalarda geri alınır. Kesintiye uğramış promotion artifaktları manuel kurtarma tamamlanana kadar yeni uygulamaları engeller: hedef dizinlerdeki `.tmp` ve `.tmp.backup` artifaktlarını inceleyin, gerekiyorsa `.backup` dosyasını hedefinin üzerine geri taşıyın ve yeniden denemeden önce artifaktları kaldırın.
 

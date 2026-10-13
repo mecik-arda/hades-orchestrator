@@ -28,6 +28,7 @@ export function resolveDeepSeekModel(configuration, model = "deepseek_pro") {
 }
 
 export function buildDeepSeekPrompt(input, guidance) {
+  const requiredSourceReview = input.reviewEvidenceRequirement === "required" && input.reviewScope?.length > 0;
   const skillSections = guidance.skills.flatMap((skill) => [
     `Etkin skill: ${skill.name}`,
     skill.content
@@ -44,8 +45,12 @@ export function buildDeepSeekPrompt(input, guidance) {
     "Dosya değiştirme veya komut çalıştırma. Do not modify files or run commands.",
     "Return only valid JSON. Use double-quoted keys and string values. Do not use Markdown, code fences, prose outside JSON, JavaScript object syntax, or YAML.",
     "Return every required key exactly once: status, summary, findings, proposed_steps, risks, questions, requires_human_approval.",
-    "Each findings item must contain exactly title, evidence, impact, recommendation, confidence. confidence must be high, medium, or low. Never use key/value findings. Use findings: [] when there is no verified finding.",
-    "The result must conform to this example shape: {\"status\":\"completed\",\"summary\":\"short summary\",\"findings\":[],\"proposed_steps\":[],\"risks\":[],\"questions\":[],\"requires_human_approval\":false}."
+    requiredSourceReview
+      ? "Each findings item must contain exactly title, evidence, impact, recommendation, confidence, references. confidence must be high, medium, or low. references must be a non-empty array of objects shaped as {\"path\":\"exact manifest-relative path\",\"lineStart\":1,\"lineEnd\":1}; use only paths and 1-based inclusive line ranges present in the supplied host manifest. Never use key/value findings. Use findings: [] when there is no verified finding."
+      : "Each findings item must contain exactly title, evidence, impact, recommendation, confidence. confidence must be high, medium, or low. Never use key/value findings. Use findings: [] when there is no verified finding.",
+    requiredSourceReview
+      ? "The result must conform to this example shape: {\"status\":\"completed\",\"summary\":\"short summary\",\"findings\":[{\"title\":\"short title\",\"evidence\":\"evidence\",\"impact\":\"impact\",\"recommendation\":\"recommendation\",\"confidence\":\"medium\",\"references\":[{\"path\":\"src/example.js\",\"lineStart\":1,\"lineEnd\":1}]}],\"proposed_steps\":[],\"risks\":[],\"questions\":[],\"requires_human_approval\":false}."
+      : "The result must conform to this example shape: {\"status\":\"completed\",\"summary\":\"short summary\",\"findings\":[],\"proposed_steps\":[],\"risks\":[],\"questions\":[],\"requires_human_approval\":false}."
   ].join("\n");
 }
 

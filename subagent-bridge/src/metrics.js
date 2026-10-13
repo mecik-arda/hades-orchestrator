@@ -232,6 +232,7 @@ function sanitizeReviewContract(value) {
   const sourceBytes = Number.isInteger(value.sourceBytes) && value.sourceBytes >= 0 && value.sourceBytes <= 256 * 1024
     ? value.sourceBytes
     : null;
+  const reviewResultValidated = value.version === 2 && value.reviewResultValidated === true;
   const contract = {
     version: value.version,
     sourceScopeStatus: value.sourceScopeStatus,
@@ -239,11 +240,15 @@ function sanitizeReviewContract(value) {
     sourceManifestSha256,
     sourceFileCount,
     sourceBytes,
-    reviewEligibility: value.reviewEligibility
+    reviewEligibility: value.reviewEligibility === "eligible_for_orchestrator_evaluation"
+      && !reviewResultValidated
+      ? "unverified"
+      : value.reviewEligibility
   };
   if (value.version === 2) {
     contract.outputIntegrity = value.outputIntegrity;
     contract.taskCompletion = value.taskCompletion;
+    contract.reviewResultValidated = reviewResultValidated;
   }
   return contract;
 }

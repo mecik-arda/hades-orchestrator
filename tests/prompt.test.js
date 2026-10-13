@@ -38,6 +38,25 @@ test("DeepSeek şema onarım istemi eksiksiz JSON sözleşmesini tekrarlar", () 
   assert.match(prompt, /Every array field must be present/i);
 });
 
+test("DeepSeek required reviewer prompt demands manifest-bound line references", () => {
+  const input = {
+    role: "reviewer",
+    objective: "Review the selected source",
+    files: ["src/example.js"],
+    contextFiles: [],
+    skills: [],
+    acceptanceCriteria: ["Report only evidence-backed findings"],
+    reviewEvidenceRequirement: "required",
+    reviewScope: ["src/example.js"]
+  };
+  const prompt = buildDeepSeekPrompt(input, { skills: [] });
+  const repairPrompt = buildDeepSeekSchemaRepairPrompt(input, { skills: [] });
+  assert.match(prompt, /references/);
+  assert.match(prompt, /manifest-relative path/);
+  assert.match(prompt, /lineStart/);
+  assert.match(repairPrompt, /references/);
+});
+
 test("Orchestrator named provider failure için host fallback yapmaz", () => {
   const prompt = fs.readFileSync(path.join(process.cwd(), ".opencode", "agent", "orchestrator.md"), "utf8");
   assert.match(prompt, /Report named-provider failure with its canonical reason/);

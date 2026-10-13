@@ -31,7 +31,10 @@ const reviewContractV1Schema = z.object({
   sourceFileCount: z.number().int().nonnegative().nullable(),
   sourceBytes: z.number().int().nonnegative().max(256 * 1024).nullable(),
   reviewEligibility: z.enum(["eligible_for_orchestrator_evaluation", "unverified", "unavailable"])
-}).strict();
+}).strict().transform((value) => ({
+  ...value,
+  reviewEligibility: value.reviewEligibility === "eligible_for_orchestrator_evaluation" ? "unverified" : value.reviewEligibility
+}));
 const reviewContractV2Schema = z.object({
   version: z.literal(2),
   sourceScopeStatus: z.enum(["not_requested", "complete", "blocked"]),
@@ -41,8 +44,18 @@ const reviewContractV2Schema = z.object({
   sourceBytes: z.number().int().nonnegative().max(256 * 1024).nullable(),
   outputIntegrity: z.enum(outputIntegrityValues),
   taskCompletion: z.enum(taskCompletionValues),
+  reviewResultValidated: z.boolean().optional(),
   reviewEligibility: z.enum(["eligible_for_orchestrator_evaluation", "unverified", "unavailable"])
-}).strict();
+}).strict().transform((value) => {
+  const reviewResultValidated = value.reviewResultValidated === true;
+  return {
+    ...value,
+    reviewResultValidated,
+    reviewEligibility: value.reviewEligibility === "eligible_for_orchestrator_evaluation" && !reviewResultValidated
+      ? "unverified"
+      : value.reviewEligibility
+  };
+});
 const reviewContractSchema = z.union([reviewContractV1Schema, reviewContractV2Schema]);
 const usageSchema = z.object({
   durationMs: finiteNonnegativeSchema.optional().nullable(),
