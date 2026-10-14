@@ -8,7 +8,7 @@ import path from "node:path";
 import { createAdapter } from "../subagent-bridge/src/adapters/agent-adapter-base.js";
 import { createBridgeRuntime } from "../subagent-bridge/src/runtime/bridge-runtime.js";
 import { resolveRuntimeRoute } from "../subagent-bridge/src/runtime/router.js";
-import { publicToolSchemas, createMcpToolHandlers } from "../subagent-bridge/src/frontends/mcp/tools.js";
+import { antigravityProbeSchema, publicToolSchemas, createMcpToolHandlers } from "../subagent-bridge/src/frontends/mcp/tools.js";
 import { resolveTrustedWorkspace } from "../subagent-bridge/src/frontends/mcp/workspace-context.js";
 import { releaseAllLocks } from "./support/workspace-lock.js";
 import { ensureRuntimeDirectories } from "../subagent-bridge/src/config.js";
@@ -77,11 +77,12 @@ function createConfiguration(packageRoot, stateRoot) {
 }
 
 test("P0-ROUTE: canonical targets resolve to one backend", () => {
-  assert.deepEqual(resolveRuntimeRoute({ target: "gemini_pro" }), { backend: "antigravity", model: "gemini_pro" });
   assert.deepEqual(resolveRuntimeRoute({ target: "gemini_flash" }), { backend: "antigravity", model: "gemini_flash" });
-  assert.deepEqual(resolveRuntimeRoute({ target: "gemini_flash_3_7" }), { backend: "antigravity", model: "gemini_flash_3_7" });
   assert.deepEqual(resolveRuntimeRoute({ target: "gemini_flash_3_8" }), { backend: "antigravity", model: "gemini_flash_3_8" });
   assert.deepEqual(resolveRuntimeRoute({ target: "claude_sonnet" }), { backend: "antigravity", model: "claude_sonnet" });
+  assert.throws(() => resolveRuntimeRoute({ target: "gemini_pro" }), /disabled by the current access policy/u);
+  assert.throws(() => resolveRuntimeRoute({ target: "gemini_flash_3_7" }), /disabled by the current access policy/u);
+  assert.throws(() => resolveRuntimeRoute({ target: "antigravity", model: "gemini_pro" }), /disabled by the current access policy/u);
   assert.deepEqual(resolveRuntimeRoute({ target: "codex" }), { backend: "codex", model: "default" });
   assert.deepEqual(resolveRuntimeRoute({ target: "native_claude", model: "sonnet" }), { backend: "claude_code", model: "sonnet" });
   assert.deepEqual(resolveRuntimeRoute({ target: "native_claude" }), { backend: "claude_code", model: "sonnet" });
@@ -93,8 +94,10 @@ test("P0-ROUTE: canonical targets resolve to one backend", () => {
   assert.throws(() => resolveRuntimeRoute({ target: "opencode", model: "gemini" }), /Antigravity/);
   assert.throws(() => resolveRuntimeRoute({ target: "opencode", model: "google/gemini" }), /Antigravity/);
   assert.throws(() => resolveRuntimeRoute({ target: "opencode", model: "google/gemini_flash" }), /Antigravity/);
-  assert.equal(publicToolSchemas.runAntigravity.safeParse({ prompt: "inspect", model: "gemini_flash_3_7", mode: "read_only" }).success, true);
+  assert.equal(publicToolSchemas.runAntigravity.safeParse({ prompt: "inspect", model: "gemini_pro", mode: "read_only" }).success, false);
+  assert.equal(publicToolSchemas.runAntigravity.safeParse({ prompt: "inspect", model: "gemini_flash_3_7", mode: "read_only" }).success, false);
   assert.equal(publicToolSchemas.runAntigravity.safeParse({ prompt: "inspect", model: "gemini_flash_3_8", mode: "read_only" }).success, true);
+  assert.equal(antigravityProbeSchema.safeParse({ probeModels: ["gemini_pro", "gemini_flash_3_7"], probeCapabilities: ["modelAccess"] }).success, true);
   assert.equal(publicToolSchemas.runAntigravity.safeParse({ prompt: "inspect", model: "gemini_flash_3_6", mode: "read_only" }).success, false);
   const scopedAntigravity = publicToolSchemas.runAntigravity.safeParse({
     prompt: "inspect",
@@ -114,9 +117,32 @@ test("P0-ROUTE: canonical targets resolve to one backend", () => {
   assert.match(requiredAntigravityReview.error.issues.at(-1).message, /Antigravity does not support host source-bundle reviewScope/u);
 });
 
+test("P0-ANTIGRAVITY-DISABLED: inaccessible Gemini aliases fail before provider execution", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-p0-disabled-antigravity-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let executions = 0;
+  const antigravity = createFakeAdapter("antigravity", async (request) => {
+    executions += 1;
+    return successResult("antigravity", request.model);
+  });
+  const runtime = createBridgeRuntime({
+    configuration: createConfiguration(root, root),
+    adapters: { antigravity },
+    sleep: async () => {}
+  });
+
+  for (const target of ["gemini_pro", "gemini_flash_3_7"]) {
+    const result = await runtime.run({ target, prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "model_access_denied");
+    assert.equal(result.metrics.adapterAttempts, 0);
+  }
+  assert.equal(executions, 0);
+});
+
 test("P0-PUBLIC: bridge-owned metadata is rejected by every public schema", () => {
   const schemaCases = {
-    runAntigravity: { input: { prompt: "inspect", model: "gemini_pro", mode: "read_only" }, allowedBridgeFields: ["workspace"] },
+    runAntigravity: { input: { prompt: "inspect", model: "gemini_flash_3_8", mode: "read_only" }, allowedBridgeFields: ["workspace"] },
     runClaudeCode: { input: { prompt: "inspect", mode: "read_only" } },
     runOpenCode: { input: { prompt: "inspect", model: "deepseek/deepseek-v4-pro", mode: "read_only" } },
     runCodex: { input: { prompt: "inspect", mode: "read_only" } },
@@ -174,7 +200,7 @@ test("P0-ANTIGRAVITY-WORKSPACE: izinli harici workspace salt okunur Gemini çağ
     runtime: {
       async run(request) {
         observedWorkspace = request.trustedWorkspace;
-        return successResult("antigravity", "gemini_pro");
+        return successResult("antigravity", "gemini_flash_3_8");
       }
     },
     trustedWorkspace,
@@ -184,7 +210,7 @@ test("P0-ANTIGRAVITY-WORKSPACE: izinli harici workspace salt okunur Gemini çağ
 
   await handlers.runAntigravity({
     prompt: "inspect",
-    model: "gemini_pro",
+    model: "gemini_flash_3_8",
     mode: "read_only",
     workspace: externalWorkspace
   });
@@ -198,17 +224,17 @@ test("P0-ANTIGRAVITY-WORKSPACE: harici workspace düzenleme modunda ve izinli k�
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
   const handlers = createMcpToolHandlers({
-    runtime: { async run() { return successResult("antigravity", "gemini_pro"); } },
+    runtime: { async run() { return successResult("antigravity", "gemini_flash_3_8"); } },
     trustedWorkspace: root,
     configuration: { allowedRoots: [root], workspacePolicy: { antigravityDeniedRootPaths: [] } }
   });
 
   await assert.rejects(
-    () => handlers.runAntigravity({ prompt: "inspect", model: "gemini_pro", mode: "edit", workspace: root }),
+    () => handlers.runAntigravity({ prompt: "inspect", model: "gemini_flash_3_8", mode: "edit", workspace: root }),
     /expected "read_only"/
   );
   await assert.rejects(
-    () => handlers.runAntigravity({ prompt: "inspect", model: "gemini_pro", mode: "read_only", workspace: outside }),
+    () => handlers.runAntigravity({ prompt: "inspect", model: "gemini_flash_3_8", mode: "read_only", workspace: outside }),
     /izinli köklerin dışında/
   );
 });
@@ -370,7 +396,7 @@ test("P0-ANTIGRAVITY-RETRY: Antigravity retry backoff beklemesini uygular", asyn
     sleep: async (delayMs) => { delays.push(delayMs); }
   });
 
-  const result = await runtime.run({ target: "gemini_pro", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  const result = await runtime.run({ target: "gemini_flash_3_8", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
 
   assert.equal(result.ok, true);
   assert.equal(attempts, 2);
@@ -837,18 +863,18 @@ test("P0-CIRCUIT: named provider circuit açıldığında fallback yapmadan fail
   assert.equal(antigravityAttempts, 0);
 });
 
-test("P0-CIRCUIT: Antigravity circuit modeli diğer Gemini modellerinden ayırır", async (t) => {
+test("P0-CIRCUIT: Antigravity model circuit'i diğer aktif modeli etkilemez", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-p0-antigravity-circuit-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const configuration = createConfiguration(root, root);
   configuration.orchestration = { circuitBreaker: { failureThreshold: 1, windowMs: 60000, openMs: 30000 } };
-  const antigravity = createFakeAdapter("antigravity", async (request) => request.model === "gemini_flash_3_7"
+  const antigravity = createFakeAdapter("antigravity", async (request) => request.model === "gemini_flash_3_8"
     ? failureResult("antigravity", request.model, "network error", "network")
     : successResult("antigravity", request.model));
   const runtime = createBridgeRuntime({ configuration, adapters: { antigravity }, sleep: async () => {} });
-  await runtime.run({ target: "gemini_flash_3_7", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
-  const blocked = await runtime.run({ target: "gemini_flash_3_7", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
-  const available = await runtime.run({ target: "gemini_flash_3_8", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  await runtime.run({ target: "gemini_flash_3_8", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  const blocked = await runtime.run({ target: "gemini_flash_3_8", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  const available = await runtime.run({ target: "claude_sonnet", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
   assert.equal(blocked.reason, "provider_circuit_open");
   assert.equal(available.ok, true);
 });

@@ -14,6 +14,8 @@ const ANTIGRAVITY_MODEL_MAP = {
   gemini_flash_3_8: "gemini-3.8-flash-high",
   claude_sonnet: "claude-sonnet-4-6"
 };
+const ANTIGRAVITY_DISABLED_MODEL_ALIASES = new Set(["gemini_pro", "gemini_flash_3_7"]);
+const ANTIGRAVITY_ACTIVE_MODEL_ALIASES = Object.keys(ANTIGRAVITY_MODEL_MAP).filter((alias) => !ANTIGRAVITY_DISABLED_MODEL_ALIASES.has(alias));
 
 const READ_ONLY_PROBE_HINT = " If read-only failures repeat, run check_antigravity_subagent with probeCapabilities (modelAccess, webRead) before retrying.";
 
@@ -363,10 +365,16 @@ function resolveModel(alias) {
   if (!model) {
     return {
       valid: false,
-      error: `unsupported model alias: "${alias}". Supported: ${Object.keys(ANTIGRAVITY_MODEL_MAP).join(", ")}`
+      error: `unsupported model alias: "${alias}". Supported for execution: ${ANTIGRAVITY_ACTIVE_MODEL_ALIASES.join(", ")}`
     };
   }
   return { valid: true, model };
+}
+
+function createDisabledModelError(alias) {
+  return Object.assign(new Error(`Antigravity model is disabled by the current access policy: ${alias}`), {
+    failureClass: "model_access_denied"
+  });
 }
 
 function buildAntigravityArgs(request, config) {
@@ -374,6 +382,7 @@ function buildAntigravityArgs(request, config) {
   if (!resolved.valid) {
     throw Object.assign(new Error(resolved.error), { failureClass: "invalid_model" });
   }
+  if (ANTIGRAVITY_DISABLED_MODEL_ALIASES.has(request.model)) throw createDisabledModelError(request.model);
 
   const { executable, execArgs } = resolveAntigravityCommand(config);
   const sandbox = config?.antigravity?.defaultSandbox !== false;
@@ -831,7 +840,6 @@ export function createAntigravityAdapter(configuration) {
 
     async execute(request) {
       const startedAt = Date.now();
-      recoverStaleSettings();
       const model = resolveModel(request.model);
       if (!model.valid) {
         return createFailureSubagentResult("antigravity", request.model, {
@@ -843,6 +851,17 @@ export function createAntigravityAdapter(configuration) {
           metrics: { diagnostics: createAttemptDiagnostics("mcp_preflight", "invalid_model") }
         });
       }
+      if (ANTIGRAVITY_DISABLED_MODEL_ALIASES.has(request.model)) {
+        return createFailureSubagentResult("antigravity", model.model, {
+          error: createDisabledModelError(request.model).message,
+          durationMs: Date.now() - startedAt,
+          retryable: false,
+          exitCode: null,
+          reason: "model_access_denied",
+          metrics: { diagnostics: createAttemptDiagnostics("mcp_preflight", "invalid_model") }
+        });
+      }
+      recoverStaleSettings();
 
       const timeoutMs = request.timeoutMs || configuration?.antigravity?.timeoutMs || 300000;
       const requestDeadlineMs = startedAt + timeoutMs;
@@ -1161,4 +1180,4 @@ function resolveAntigravityCommand(configuration) {
   };
 }
 
-export { ANTIGRAVITY_MODEL_MAP, READ_ONLY_INSTRUCTION, READ_ONLY_PROBE_HINT, WEB_EVIDENCE_OUTPUT_INSTRUCTION, READ_ONLY_PERMISSION_RULES, CARRIER_OUTPUT_SCHEMA, hasSafeReadOnlyPermissionBaseline, hasNoConfiguredMcpServers, resolveModel, resolveAntigravityCommand, buildAntigravityArgs, classifyAntigravityError, extractAntigravityResult, normalizeCarrierStructuredOutput, writeCarrierSchemaFile };
+export { ANTIGRAVITY_MODEL_MAP, ANTIGRAVITY_DISABLED_MODEL_ALIASES, ANTIGRAVITY_ACTIVE_MODEL_ALIASES, READ_ONLY_INSTRUCTION, READ_ONLY_PROBE_HINT, WEB_EVIDENCE_OUTPUT_INSTRUCTION, READ_ONLY_PERMISSION_RULES, CARRIER_OUTPUT_SCHEMA, hasSafeReadOnlyPermissionBaseline, hasNoConfiguredMcpServers, resolveModel, resolveAntigravityCommand, buildAntigravityArgs, classifyAntigravityError, extractAntigravityResult, normalizeCarrierStructuredOutput, writeCarrierSchemaFile };

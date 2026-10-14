@@ -84,20 +84,28 @@ test("MODE-03: runtime policy edit isteğini provider başlamadan reddeder", asy
 test("MODEL-01: runtime requested ve resolved model kimliğini ayırır", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "model-identity-runtime-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let executions = 0;
   const runtime = createBridgeRuntime({
     configuration: configuration(root),
-    adapters: { antigravity: fakeAdapter("antigravity", async () => createSuccessSubagentResult("antigravity", "gemini-3.1-pro-high", { result: "ok", webEvidence: null })) }
+    adapters: { antigravity: fakeAdapter("antigravity", async () => {
+      executions += 1;
+      return createSuccessSubagentResult("antigravity", "gemini-3.8-flash-high", { result: "ok", webEvidence: null });
+    }) }
   });
-  const result = await runtime.run({ target: "gemini_pro", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
-  assert.equal(result.requestedModel, "gemini_pro");
-  assert.equal(result.resolvedModel, "gemini-3.1-pro-high");
+  const result = await runtime.run({ target: "gemini_flash_3_8", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  assert.equal(result.requestedModel, "gemini_flash_3_8");
+  assert.equal(result.resolvedModel, "gemini-3.8-flash-high");
   assert.equal(result.accessMode, "read_only");
   const health = await runtime.health(["antigravity"]);
   assert.deepEqual(health.adapters.antigravity.modePolicy, { defaultMode: "read_only", allowedModes: ["read_only", "edit"] });
-  assert.equal(health.adapters.antigravity.configuredModels.find((entry) => entry.requestedModel === "gemini_pro").resolvedModel, "gemini-3.1-pro-high");
   assert.equal(health.adapters.antigravity.configuredModels.find((entry) => entry.requestedModel === "gemini_flash").resolvedModel, "gemini-3.8-flash-high");
-  assert.equal(health.adapters.antigravity.configuredModels.find((entry) => entry.requestedModel === "gemini_flash_3_7").resolvedModel, "gemini-3.7-flash-high");
   assert.equal(health.adapters.antigravity.configuredModels.find((entry) => entry.requestedModel === "gemini_flash_3_8").resolvedModel, "gemini-3.8-flash-high");
+  assert.equal(health.adapters.antigravity.configuredModels.some((entry) => ["gemini_pro", "gemini_flash_3_7"].includes(entry.requestedModel)), false);
+
+  const disabled = await runtime.run({ target: "gemini_pro", prompt: "inspect", mode: "read_only", trustedWorkspace: root, caller: "test", delegationDepth: 0 });
+  assert.equal(disabled.ok, false);
+  assert.equal(disabled.reason, "model_access_denied");
+  assert.equal(executions, 1);
 });
 
 test("MODEL-02: Codex default kesin model olarak raporlanmaz", async (t) => {
@@ -121,11 +129,11 @@ test("MODEL-03: Claude modelUsage tek gerçek modeli çözer", () => {
 });
 
 test("MODE-04: provider CLI argümanları explicit access mode kullanır", () => {
-  const readAgy = buildAntigravityArgs({ model: "gemini_pro", mode: "read_only", workspace: "C:\\workspace", prompt: "inspect" }, { antigravity: { executable: "agy", defaultSandbox: true } });
-  const editAgy = buildAntigravityArgs({ model: "gemini_pro", mode: "edit", workspace: "C:\\workspace", prompt: "apply" }, { antigravity: { executable: "agy", defaultSandbox: true } });
+  const readAgy = buildAntigravityArgs({ model: "gemini_flash_3_8", mode: "read_only", workspace: "C:\\workspace", prompt: "inspect" }, { antigravity: { executable: "agy", defaultSandbox: true } });
+  const editAgy = buildAntigravityArgs({ model: "gemini_flash_3_8", mode: "edit", workspace: "C:\\workspace", prompt: "apply" }, { antigravity: { executable: "agy", defaultSandbox: true } });
   assert.deepEqual(readAgy.args.slice(readAgy.args.indexOf("--mode"), readAgy.args.indexOf("--mode") + 2), ["--mode", "plan"]);
   assert.deepEqual(editAgy.args.slice(editAgy.args.indexOf("--mode"), editAgy.args.indexOf("--mode") + 2), ["--mode", "accept-edits"]);
-  assert.match(readAgy.args.at(-1), /Resolved model: gemini-3\.1-pro-high/);
+  assert.match(readAgy.args.at(-1), /Resolved model: gemini-3\.8-flash-high/);
   const readOpenCode = buildOpenCodeArgs({ mode: "read_only", caller: "deepseek_opencode", workspace: "C:\\workspace", prompt: "inspect" }, { opencode: { deepSeekReadOnlyAgent: "deepseek-readonly", editAgent: "build" } }, "deepseek/deepseek-v4-pro");
   const editOpenCode = buildOpenCodeArgs({ mode: "edit", caller: "test", workspace: "C:\\workspace", prompt: "apply" }, { opencode: { deepSeekReadOnlyAgent: "deepseek-readonly", editAgent: "controlled-edit" } }, "deepseek/deepseek-v4-pro");
   const pilotOpenCode = buildOpenCodeArgs({ mode: "edit", caller: "deepseek_edit_pilot", workspace: "C:\\workspace", prompt: "apply" }, { opencode: { deepSeekReadOnlyAgent: "deepseek-readonly", deepSeekEditAgent: "deepseek-edit", editAgent: "controlled-edit" } }, "deepseek/deepseek-v4-pro");

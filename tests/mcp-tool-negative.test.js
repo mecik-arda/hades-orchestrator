@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { publicToolSchemas, storeMemorySchema } from "../subagent-bridge/src/frontends/mcp/tools.js";
 
 const wrongTypePayloads = {
-  runAntigravity: { prompt: 42, model: "gemini_pro", mode: "read_only" },
+  runAntigravity: { prompt: 42, model: "gemini_flash_3_8", mode: "read_only" },
   runClaudeCode: { prompt: 42, mode: "read_only" },
   runOpenCode: { prompt: "soru", model: 42, mode: "read_only" },
   runSpaceBunny: { taskId: 42, role: "analyst", mode: "read_only", objective: "hedef" },

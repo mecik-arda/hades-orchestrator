@@ -207,15 +207,15 @@
                                                                          "cacheable":  true,
                                                                          "webEvidenceRequired":  true
                                                                      },
-                                               "web_research":  {
-                                                                    "target":  "gemini_pro",
+                                                "web_research":  {
+                                                                     "target":  "gemini_flash",
                                                                     "mode":  "read_only",
                                                                     "priority":  20,
                                                                     "cacheable":  true,
                                                                     "webEvidenceRequired":  true
                                                                 },
-                                               "file_audit":  {
-                                                                  "target":  "gemini_pro",
+                                                "file_audit":  {
+                                                                   "target":  "gemini_flash",
                                                                   "mode":  "read_only",
                                                                   "priority":  20,
                                                                   "cacheable":  true
@@ -252,13 +252,10 @@
                                                                                                   "target":  "glm",
                                                                                                   "model":  "glm_5_2"
                                                                                               },
-                                                                                              {
-                                                                                                  "target":  "opencode",
-                                                                                                  "model":  "deepseek/deepseek-v4-pro"
-                                                                                              },
-                                                                                              {
-                                                                                                  "target":  "gemini_pro"
-                                                                                              }
+                                                                                               {
+                                                                                                   "target":  "opencode",
+                                                                                                   "model":  "deepseek/deepseek-v4-pro"
+                                                                                               }
                                                                                           ]
                                                                   },
                                                "glm_implementation":  {
@@ -272,13 +269,10 @@
                                                                                                       "target":  "opencode",
                                                                                                       "model":  "deepseek/deepseek-v4-pro"
                                                                                                   },
-                                                                                                  {
-                                                                                                      "target":  "codex",
-                                                                                                      "model":  "gpt-5.6-terra"
-                                                                                                  },
-                                                                                                  {
-                                                                                                      "target":  "gemini_pro"
-                                                                                                  }
+                                                                                                   {
+                                                                                                       "target":  "codex",
+                                                                                                       "model":  "gpt-5.6-terra"
+                                                                                                   }
                                                                                               ]
                                                                       },
                                                "critical_implementation":  {
@@ -309,13 +303,10 @@
                                                                                                         "target":  "opencode",
                                                                                                         "model":  "deepseek/deepseek-v4-pro"
                                                                                                     },
-                                                                                                    {
-                                                                                                        "target":  "codex",
-                                                                                                        "model":  "gpt-5.6-terra"
-                                                                                                    },
-                                                                                                    {
-                                                                                                        "target":  "gemini_pro"
-                                                                                                    }
+                                                                                                     {
+                                                                                                         "target":  "codex",
+                                                                                                         "model":  "gpt-5.6-terra"
+                                                                                                     }
                                                                                                 ]
                                                                         },
                                                "glm53_flash_implementation":  {

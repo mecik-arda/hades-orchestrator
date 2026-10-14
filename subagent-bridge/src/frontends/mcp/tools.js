@@ -71,7 +71,7 @@ export const storeMemorySchema = z.object({
 export const publicToolSchemas = {
   runAntigravity: z.object({
     prompt: z.string().min(1).max(60000),
-    model: z.enum(["gemini_pro", "gemini_flash", "gemini_flash_3_7", "gemini_flash_3_8", "claude_sonnet"]),
+    model: z.enum(["gemini_flash", "gemini_flash_3_8", "claude_sonnet"]),
     mode: readOnlyModeSchema,
     timeout_seconds: timeoutSecondsSchema,
     workspace: z.string().min(1).optional(),

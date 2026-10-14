@@ -73,7 +73,7 @@ OpenCode Host
 └─ @orchestrator → local MCP → subagent-bridge
      ├─ MCP Frontend         → trusted host workspace injection
      ├─ Bridge Runtime       → canonical router, capability, lock, retry, cancellation
-     ├─ AntigravityAdapter   → AGY (Gemini Pro/Flash, Claude Sonnet via Antigravity)
+     ├─ AntigravityAdapter   → AGY (Gemini 3.8 Flash, Claude Sonnet)
      ├─ ClaudeCodeAdapter    → native Claude Code
       ├─ OpenCodeAdapter      → DeepSeek, GLM, independent OpenCode providers/models including gated Space Bunny Free
      ├─ CodexAdapter         → official OpenAI Codex CLI
@@ -163,7 +163,7 @@ The OpenCode batch-progress plugin source is `templates/opencode/parallel-batch-
 ### Canonical routing
 
 ```text
-Gemini Pro / Flash      → AntigravityAdapter → AGY (gemini-3.1-pro-high / gemini-3.8-flash-high)
+Gemini 3.8 Flash / Antigravity Claude Sonnet → AntigravityAdapter → AGY
 Codex                   → CodexAdapter → official standalone codex.exe
 Native Claude Code      → ClaudeCodeAdapter
 DeepSeek V4 Pro / Flash → OpenCodeAdapter → deepseek/deepseek-v4-pro or deepseek/deepseek-flash (DeepSeek-V4.1-Flash)
@@ -192,7 +192,7 @@ The current OpenCode Terms (effective August 15, 2026) prohibit automatically or
 
 ### Task profiles
 
-`run_task_profile` executes the task with a fixed route; read-only profiles have no fallback. Edit fallback is used only in the policy `fallbackTargets` order, under a clean disposable workspace, a single attempt, secret inspection and verified promotion.
+`run_task_profile` executes the task with a fixed route; read-only profiles have no fallback. Edit fallback is used only in the policy `fallbackTargets` order, under a clean disposable workspace, a single attempt, secret inspection and verified promotion. Gemini Pro and Gemini 3.7 Flash are disabled from normal execution after live `modelAccess=unavailable` probes on 2026-10-14; the matching task profiles now use the available Gemini 3.8 Flash route. The explicit capability-check tool may still probe the disabled aliases for diagnostics, but this does not make them callable through run tools.
 
 ```text
 quick_read              → Codex Luna, read_only, 30, cache enabled
@@ -202,16 +202,16 @@ low_cost_glm_highspeed  → GLM 5.2 HighSpeed, read_only, 22, cache enabled
 glm_analysis            → GLM 5.2, read_only, 18, cache enabled
 kimi_analysis           → Kimi K2.5 Instruct, read_only, 18, cache enabled
 qwen_analysis           → Qwen3 Coder 480B, read_only, 18, cache enabled
-web_research_fast       → Gemini Flash, read_only, 25, cache enabled
-web_research / file_audit → Gemini Pro, read_only, 20, cache enabled
+web_research_fast       → Gemini 3.8 Flash, read_only, 25, cache enabled
+web_research / file_audit → Gemini 3.8 Flash, read_only, 20, cache enabled
 review                  → Codex Terra, read_only, 20, cache enabled
 critical_review         → Codex Sol, read_only, 15, cache enabled
 sol6_review             → GPT-6 Sol, read_only, 13, cache enabled
 sol61_review            → GPT-6.1 Sol, read_only, 13, cache enabled
 luna6_review            → GPT-6 Luna, read_only, 13, cache enabled
 luna_implementation     → Codex Luna, edit, 12, cache disabled, no fallback
-implementation          → Codex Terra, edit, 10, fallback: GLM 5.2 → DeepSeek Pro → Gemini Pro
-glm_implementation      → GLM 5.2, edit, 8, fallback: DeepSeek Pro → Codex Terra → Gemini Pro
+implementation          → Codex Terra, edit, 10, fallback: GLM 5.2 → DeepSeek Pro
+glm_implementation      → GLM 5.2, edit, 8, fallback: DeepSeek Pro → Codex Terra
 critical_implementation → Codex Sol, edit, 5, fallback: GLM 5.2 → DeepSeek Pro
 sol6_implementation     → GPT-6 Sol, edit, 4, fallback: Codex Sol (5.6) → DeepSeek Pro
 sol61_implementation    → GPT-6.1 Sol, edit, 4, fallback: GPT-6 Sol → Codex Sol (5.6) → DeepSeek Pro
@@ -231,19 +231,19 @@ Backups are created under `~/.config/subagent-bridge/backups/`; use `npm run con
 
 ### Verified provider matrix
 
-Antigravity/Gemini Pro and Flash, Codex and DeepSeek V4 Pro/Flash are verified. GPT-6 Luna, GPT-6 Sol and GPT-6 Astra are verified Codex identities (live capability probe, 2026-09-22); GPT-6 Luna/Sol are preferred for the Luna/Sol roles and the GPT-5.6 counterparts remain as compatibility profiles. Because the GLM subscription is inactive, GLM models, profiles and fallbacks are not invoked; Codex Luna is the fast performance/cost implementer, Terra the balanced editor and Sol the model for hard debugging and review. The independent OpenCode backend depends on configuration, Claude Code requires an active subscription and its native acceptance phase is closed here, and Kimi/Qwen depend on catalog entries. Claude Code health combines `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` with the CLI `claude auth status` result; when neither reports an active session the call fails fast with `auth_invalid`.
+Antigravity Gemini 3.8 Flash, Codex and DeepSeek V4 Pro/Flash are verified for their recorded routes. Gemini Pro (`gemini-3.1-pro-high`) and Gemini 3.7 Flash (`gemini-3.7-flash-high`) returned `modelAccess=unavailable` in live probes on 2026-10-14 and are disabled from normal execution; the current Antigravity plan matrix lists those models for Enterprise, while Gemini 3.8 Flash is available across plans. GPT-6 Luna, GPT-6 Sol and GPT-6 Astra are verified Codex identities (live capability probe, 2026-09-22); GPT-6 Luna/Sol are preferred for the Luna/Sol roles and the GPT-5.6 counterparts remain as compatibility profiles. Because the GLM subscription is inactive, GLM models, profiles and fallbacks are not invoked; Codex Luna is the fast performance/cost implementer, Terra the balanced editor and Sol the model for hard debugging and review. The independent OpenCode backend depends on configuration, Claude Code requires an active subscription and its native acceptance phase is closed here, and Kimi/Qwen depend on catalog entries. Claude Code health combines `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` with the CLI `claude auth status` result; when neither reports an active session the call fails fast with `auth_invalid`.
 
 ### Antigravity contract
 
 The canonical executable is `%LOCALAPPDATA%\agy\bin\agy.exe` and is invoked as `agy` through PATH.
 
 ```text
-gemini_pro        → gemini-3.1-pro-high
 gemini_flash      → gemini-3.8-flash-high
-gemini_flash_3_7  → gemini-3.7-flash-high
 gemini_flash_3_8  → gemini-3.8-flash-high
 claude_sonnet     → claude-sonnet-4-6
 ```
+
+`gemini_pro` and `gemini_flash_3_7` are disabled for normal run calls after live access probes reported unavailable. They remain accepted only by the explicit `check_antigravity_subagent` capability-probe schema, to allow future access diagnostics; they are absent from active run aliases and task-profile fallbacks. Probe permission does not enable model execution.
 
 Read-only calls are constrained with `--add-dir`, `deny write_file(*)` and `no command(*)` policies. The `agy mcp list` output must be `No MCP servers configured.`; external MCP, permanently broad permissions, mutation and network probing are rejected. Settings are serialized with a PID lock and restored afterwards.
 
@@ -296,7 +296,7 @@ The shared core is re-opened only for a confirmed production bug, a new provider
 
 ## Model roles
 
-Codex defines scope and architecture, runs code and tests, and verifies results. DeepSeek provides structured results for analysis, second opinions, research and planning; edits are limited to selected files. Gemini Pro is for web research and file auditing, Gemini Flash for short research, and second opinions use DeepSeek or Antigravity Claude Sonnet; native Claude Code stays disabled without a subscription.
+Codex defines scope and architecture, runs code and tests, and verifies results. DeepSeek provides structured results for analysis, second opinions, research and planning; edits are limited to selected files. Gemini 3.8 Flash is the active Antigravity route for web research and file auditing; Gemini Pro and Gemini 3.7 Flash remain disabled in this configuration after unavailable access probes. Second opinions use DeepSeek or Antigravity Claude Sonnet; native Claude Code stays disabled without a subscription.
 
 ## Security separation
 
@@ -503,7 +503,7 @@ OpenCode Host
 └─ @orchestrator → local MCP → subagent-bridge
      ├─ MCP Frontend         → trusted host workspace injection
      ├─ Bridge Runtime       → canonical router, capability, lock, retry, cancellation
-     ├─ AntigravityAdapter   → AGY (Gemini Pro/Flash, Claude Sonnet via Antigravity)
+     ├─ AntigravityAdapter   → AGY (Gemini 3.8 Flash, Claude Sonnet)
      ├─ ClaudeCodeAdapter    → native Claude Code
      ├─ OpenCodeAdapter      → DeepSeek, GLM, bağımsız OpenCode provider/model
      ├─ CodexAdapter         → official OpenAI Codex CLI
@@ -593,7 +593,7 @@ OpenCode batch ilerleme eklentisinin kaynak şablonu `templates/opencode/paralle
 ### Kanonik yönlendirme
 
 ```text
-Gemini Pro / Flash      → AntigravityAdapter → AGY (gemini-3.1-pro-high / gemini-3.8-flash-high)
+Gemini 3.8 Flash / Antigravity Claude Sonnet → AntigravityAdapter → AGY
 Codex                   → CodexAdapter → official standalone codex.exe
 Native Claude Code      → ClaudeCodeAdapter
 DeepSeek V4 Pro / Flash → OpenCodeAdapter → deepseek/deepseek-v4-pro veya deepseek/deepseek-flash (DeepSeek-V4.1-Flash)
@@ -615,16 +615,16 @@ low_cost_glm_highspeed  → GLM 5.2 HighSpeed, read_only, 22, cache açık
 glm_analysis            → GLM 5.2, read_only, 18, cache açık
 kimi_analysis           → Kimi K2.5 Instruct, read_only, 18, cache açık
 qwen_analysis           → Qwen3 Coder 480B, read_only, 18, cache açık
-web_research_fast       → Gemini Flash, read_only, 25, cache açık
-web_research / file_audit → Gemini Pro, read_only, 20, cache açık
+web_research_fast       → Gemini 3.8 Flash, read_only, 25, cache açık
+web_research / file_audit → Gemini 3.8 Flash, read_only, 20, cache açık
 review                  → Codex Terra, read_only, 20, cache açık
 critical_review         → Codex Sol, read_only, 15, cache açık
 sol6_review             → GPT-6 Sol, read_only, 13, cache açık
 sol61_review            → GPT-6.1 Sol, read_only, 13, cache açık
 luna6_review            → GPT-6 Luna, read_only, 13, cache açık
 luna_implementation     → Codex Luna, edit, 12, cache kapalı, fallback yok
-implementation          → Codex Terra, edit, 10, fallback: GLM 5.2 → DeepSeek Pro → Gemini Pro
-glm_implementation      → GLM 5.2, edit, 8, fallback: DeepSeek Pro → Codex Terra → Gemini Pro
+implementation          → Codex Terra, edit, 10, fallback: GLM 5.2 → DeepSeek Pro
+glm_implementation      → GLM 5.2, edit, 8, fallback: DeepSeek Pro → Codex Terra
 critical_implementation → Codex Sol, edit, 5, fallback: GLM 5.2 → DeepSeek Pro
 sol6_implementation     → GPT-6 Sol, edit, 4, fallback: Codex Sol (5.6) → DeepSeek Pro
 sol61_implementation    → GPT-6.1 Sol, edit, 4, fallback: GPT-6 Sol → Codex Sol (5.6) → DeepSeek Pro
@@ -642,19 +642,19 @@ Backup `~/.config/subagent-bridge/backups/` altında oluşturulur; rollback içi
 
 ### Doğrulanmış sağlayıcı matrisi
 
-Antigravity/Gemini Pro ve Flash, Codex ve DeepSeek V4 Pro/Flash doğrulanmıştır. GPT-6 Luna, GPT-6 Sol ve GPT-6 Astra doğrulanmış Codex kimlikleridir (canlı capability probe, 2026-09-22); Luna/Sol rollerinde GPT-6 sürümleri tercih edilir, GPT-5.6 karşılıkları uyumluluk profili olarak korunur. GLM aboneliği pasif olduğundan GLM model, profil ve fallback'leri çağrılmaz; Codex Luna hızlı fiyat/performans uygulayıcı, Terra dengeli edit, Sol zor hata ayıklama ve denetim modelidir. OpenCode bağımsız backend'i yapılandırmaya bağlıdır; Claude Code etkin abonelik gerektirir ve native Claude acceptance fazı bu kurulumda kapalıdır; Kimi/Qwen katalog girdisine bağlıdır. Claude Code health kontrolü `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` ile CLI'ın `claude auth status` sonucunu birleştirir; iki kaynak da etkin oturum bildirmezse çağrı `auth_invalid` ile erken reddedilir.
+Antigravity Gemini 3.8 Flash, Codex ve DeepSeek V4 Pro/Flash kayıtlı rotalarında doğrulanmıştır. Gemini Pro (`gemini-3.1-pro-high`) ve Gemini 3.7 Flash (`gemini-3.7-flash-high`) 2026-10-14 canlı probe'larında `modelAccess=unavailable` döndürdü ve normal çalıştırmadan devre dışı bırakıldı; güncel Antigravity plan matrisi bu iki modeli Enterprise için, Gemini 3.8 Flash'ı tüm planlar için listeliyor. GPT-6 Luna, GPT-6 Sol ve GPT-6 Astra doğrulanmış Codex kimlikleridir (canlı capability probe, 2026-09-22); Luna/Sol rollerinde GPT-6 sürümleri tercih edilir, GPT-5.6 karşılıkları uyumluluk profili olarak korunur. GLM aboneliği pasif olduğundan GLM model, profil ve fallback'leri çağrılmaz; Codex Luna hızlı fiyat/performans uygulayıcı, Terra dengeli edit, Sol zor hata ayıklama ve denetim modelidir. OpenCode bağımsız backend'i yapılandırmaya bağlıdır; Claude Code etkin abonelik gerektirir ve native Claude acceptance fazı bu kurulumda kapalıdır; Kimi/Qwen katalog girdisine bağlıdır. Claude Code health kontrolü `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` ile CLI'ın `claude auth status` sonucunu birleştirir; iki kaynak da etkin oturum bildirmezse çağrı `auth_invalid` ile erken reddedilir.
 
 ### Antigravity sözleşmesi
 
 Kanonik executable `%LOCALAPPDATA%\agy\bin\agy.exe` olup PATH üzerinden `agy` çağrılır.
 
 ```text
-gemini_pro        → gemini-3.1-pro-high
 gemini_flash      → gemini-3.8-flash-high
-gemini_flash_3_7  → gemini-3.7-flash-high
 gemini_flash_3_8  → gemini-3.8-flash-high
 claude_sonnet     → claude-sonnet-4-6
 ```
+
+`gemini_pro` ve `gemini_flash_3_7` normal çalıştırma çağrılarında devre dışıdır. Erişim probe'larında unavailable döndüklerinden etkin run araçlarından ve task-profile fallback'lerinden çıkarılmışlardır. Gelecekteki erişim kontrolü için açıkça çağrılan `check_antigravity_subagent` probe şeması bu iki alias'ı kabul etmeye devam eder; probe edilebilir olmaları çalıştırılabilir oldukları anlamına gelmez.
 
 Salt-okunur çağrı `--add-dir`, `deny write_file(*)` ve `no command(*)` politikalarıyla sınırlanır. `agy mcp list` sonucu `No MCP servers configured.` olmalıdır; harici MCP, kalıcı geniş izin, mutasyon ve network probe reddedilir. Ayarlar PID lock ile serileştirilir ve geri yüklenir.
 
@@ -707,7 +707,7 @@ Shared core yalnız confirmed production bug, yeni provider, security vulnerabil
 
 ## Model rolleri
 
-Codex kapsamı ve mimariyi belirler, kodu ve testleri yürütür, sonuçları doğrular. DeepSeek analiz, ikinci görüş, araştırma ve planlama için yapılandırılmış sonuç verir; edit yalnız seçili dosyalardadır. Gemini Pro web araştırması ve dosya denetimi, Gemini Flash kısa araştırma içindir; ikinci görüş için DeepSeek veya Antigravity Claude Sonnet kullanılır, native Claude Code abonelik olmadan kapalı kalır.
+Codex kapsamı ve mimariyi belirler, kodu ve testleri yürütür, sonuçları doğrular. DeepSeek analiz, ikinci görüş, araştırma ve planlama için yapılandırılmış sonuç verir; edit yalnız seçili dosyalardadır. Web araştırması ve dosya denetiminde etkin Antigravity rotası Gemini 3.8 Flash'tır; Gemini Pro ve Gemini 3.7 Flash erişim probu unavailable verdiğinden bu kurulumda devre dışıdır. İkinci görüş için DeepSeek veya Antigravity Claude Sonnet kullanılır; native Claude Code abonelik olmadan kapalı kalır.
 
 ## Güvenlik ayrımı
 

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createRequire } from "node:module";
 import { z } from "zod";
-import { ANTIGRAVITY_MODEL_MAP } from "../../adapters/antigravity-adapter.js";
+import { ANTIGRAVITY_ACTIVE_MODEL_ALIASES, ANTIGRAVITY_DISABLED_MODEL_ALIASES } from "../../adapters/antigravity-adapter.js";
 import { analyzePersistentMemoryWrite, checkPersistentMemory, promotePersistentMemory, readPersistentMemory, reviewPersistentMemory, searchPersistentMemory, storePersistentMemory } from "../../memory.js";
 import { capabilityProbeSchema, capabilityStatusValues, workspaceReadStatusValues } from "../../schemas/core-schemas.js";
 import { createMcpToolHandlers, publicToolSchemas, antigravityProbeSchema, storeMemorySchema } from "./tools.js";
@@ -296,7 +296,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
 
   server.registerTool("check_antigravity_subagent", {
     title: "Antigravity subagent bağlantısını kontrol et",
-    description: "Antigravity CLI, model/auth erişimi, sandbox başlangıcı ve workspace-read yeteneklerini redakte biçimde kontrol eder. probeModels ve probeCapabilities birlikte verilirse isteğe bağlı, seri, düşük maliyetli capability probları çalıştırır; workspaceReadTarget trusted_workspace olduğunda host kontrollü kısa ömürlü sentinel dizini oluşturur.",
+    description: "Antigravity CLI, model/auth erişimi, sandbox başlangıcı ve workspace-read yeteneklerini redakte biçimde kontrol eder. gemini_pro ve gemini_flash_3_7 normal çalıştırmada devre dışıdır; yalnızca bu açık capability-probe aracıyla erişim teşhisi yapılabilir. probeModels ve probeCapabilities birlikte verilirse isteğe bağlı, seri, düşük maliyetli capability probları çalıştırır; workspaceReadTarget trusted_workspace olduğunda host kontrollü kısa ömürlü sentinel dizini oluşturur.",
     inputSchema: antigravityProbeSchema,
     annotations: readOnlyAnnotations
   }, safeHealth(async (input) => {
@@ -313,7 +313,8 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
       modePolicy: entry.modePolicy,
       configuredModels: entry.configuredModels,
       health: sanitizeHealth(entry.health),
-      modelAliases: Object.keys(ANTIGRAVITY_MODEL_MAP),
+      modelAliases: ANTIGRAVITY_ACTIVE_MODEL_ALIASES,
+      disabledModelAliases: [...ANTIGRAVITY_DISABLED_MODEL_ALIASES],
       schemaValid: true
     };
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result };
@@ -321,7 +322,7 @@ export function createSubagentMcpServer({ runtime, configuration, trustedWorkspa
 
   server.registerTool("run_antigravity_subagent", {
     title: "Antigravity subagent çalıştır",
-    description: "Antigravity CLI üzerinden Gemini Pro, Gemini Flash, Gemini 3.7 Flash, Gemini 3.8 Flash veya Claude Sonnet görevi devreder. İsteğe bağlı workspace yalnızca salt okunur modda ve izinli kökler altında kullanılabilir. Host source-bundle reviewScope transport'u desteklenmez; reviewScope veya required review evidence isteği reddedilir.",
+    description: "Antigravity CLI üzerinden yalnızca erişilebilir Gemini Flash 3.8 veya Claude Sonnet modelleriyle görev devreder. Erişilemeyen Gemini Pro ve Gemini Flash 3.7 çalıştırma şemasında devre dışıdır; erişim durumu check_antigravity_subagent ile ayrıca probe edilebilir. İsteğe bağlı workspace yalnızca salt okunur modda ve izinli kökler altında kullanılabilir. Host source-bundle reviewScope transport'u desteklenmez.",
     inputSchema: publicToolInputShape(publicToolSchemas.runAntigravity),
     annotations: executionAnnotations
   }, safe(handlers.runAntigravity));

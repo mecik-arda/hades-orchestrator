@@ -92,7 +92,7 @@ const repoBBefore = snapshot(repoB);
 
 try {
   const gemini = await runtime.run({
-    target: "gemini_pro",
+    target: "gemini_flash",
     prompt: "Read TEST_MARKER.txt in the trusted workspace and return only its exact marker.",
     mode: "read_only",
     trustedWorkspace: repoA,

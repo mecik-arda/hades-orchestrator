@@ -39,7 +39,7 @@ function createConfiguration(root, overrides = {}) {
     orchestration: {
       taskProfiles: {
         quick_read: { target: "codex", model: "gpt-5.6-luna", mode: "read_only", priority: 30, cacheable: false },
-        web_research_test: { target: "gemini_pro", mode: "read_only", priority: 20, cacheable: false, webEvidenceRequired: true }
+        web_research_test: { target: "gemini_flash", mode: "read_only", priority: 20, cacheable: false, webEvidenceRequired: true }
       }
     },
     codex: { timeoutMs: 30000, maxRetries: 0 },
@@ -490,7 +490,7 @@ test("V2-BATCH: web-research profile reports a read_url permission denial separa
     handler: () => ({
       ok: false,
       backend: "antigravity",
-      model: "gemini_pro",
+      model: "gemini_flash",
       result: null,
       error: "read_url tool permission denied",
       retryable: false,

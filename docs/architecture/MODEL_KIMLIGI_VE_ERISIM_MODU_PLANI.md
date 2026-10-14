@@ -4,6 +4,8 @@ SUBAGENT MODEL KİMLİĞİ VE İKİLİ YETKİ MODU HEDEFİ
 
 > İkinci durum notu (2026-09-18, akşam): Kullanıcının Claude Code aboneliği yoktur. Faz 4 native Claude edit acceptance bu nedenle `reddedildi` olarak kapatılmıştır; native Claude edit yetkisi açılmayacak ve bu ortamda Claude tabanlı ikinci görüş Antigravity Claude Sonnet ile karşılanacaktır. Faz 1-3 desteği ve `claude_code` read-only adapter kodu, aboneliği olan bir ortamda çalışacak biçimde korunur; bu kurulumda çağrı yapılmaz.
 
+> Güncel model erişim notu (2026-10-14): Canlı Antigravity `modelAccess` probe'larında `gemini_pro` (`gemini-3.1-pro-high`) ve `gemini_flash_3_7` (`gemini-3.7-flash-high`) `unavailable` / `authentication_failure`, `gemini_flash_3_8` (`gemini-3.8-flash-high`) ise `available` döndü. Resmî model matrisi 3.1 Pro ve 3.7 Flash'ı Enterprise planına, 3.8 Flash'ı tüm planlara listeliyor. İlk iki model normal çalışma rotalarından ve fallback'lerden çıkarıldı; yalnız açık capability probe arayüzü erişim teşhisi için bu alias'ları kabul eder. Hesabın planı ayrıca kontrol edilmedi. Bu güncelleme tarihsel uygulama adımlarını silmez.
+
 Araştırma sonucu: Bu hedef projeye uygulanabilir. Altyapının önemli kısmı şimdiden read_only ve edit modlarını destekliyor. Ancak her modele edit yetkisi varsayılan olarak verilmemeli; provider bazında doğrulandıktan sonra policy ile açılmalı.
 
 UYGULAMA DURUMU - 2026-08-11

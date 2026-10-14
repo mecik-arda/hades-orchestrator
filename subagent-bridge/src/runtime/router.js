@@ -1,4 +1,12 @@
-const ANTIGRAVITY_TARGETS = new Set(["gemini_pro", "gemini_flash", "gemini_flash_3_7", "gemini_flash_3_8", "claude_sonnet"]);
+import { ANTIGRAVITY_ACTIVE_MODEL_ALIASES, ANTIGRAVITY_DISABLED_MODEL_ALIASES } from "../adapters/antigravity-adapter.js";
+
+const ANTIGRAVITY_TARGETS = new Set(ANTIGRAVITY_ACTIVE_MODEL_ALIASES);
+
+function disabledAntigravityModelError(model) {
+  return Object.assign(new Error(`Antigravity model is disabled by the current access policy: ${model}`), {
+    failureClass: "model_access_denied"
+  });
+}
 
 function requireModel(model, target) {
   if (typeof model !== "string" || model.trim().length === 0) {
@@ -15,6 +23,7 @@ function rejectOpenCodeGemini(model) {
 }
 
 export function resolveRuntimeRoute({ target, model, profile }, configuration = {}) {
+  if (ANTIGRAVITY_DISABLED_MODEL_ALIASES.has(target)) throw disabledAntigravityModelError(target);
   if (target === "profile") {
     const selectedProfile = configuration.orchestration?.taskProfiles?.[profile];
     if (!selectedProfile) {
@@ -27,6 +36,7 @@ export function resolveRuntimeRoute({ target, model, profile }, configuration = 
   }
   if (target === "antigravity") {
     const selectedModel = requireModel(model, target);
+    if (ANTIGRAVITY_DISABLED_MODEL_ALIASES.has(selectedModel)) throw disabledAntigravityModelError(selectedModel);
     if (!ANTIGRAVITY_TARGETS.has(selectedModel)) {
       throw new Error(`unsupported Antigravity model: ${selectedModel}`);
     }

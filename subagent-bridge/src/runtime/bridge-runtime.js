@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import { ANTIGRAVITY_MODEL_MAP, createAntigravityAdapter } from "../adapters/antigravity-adapter.js";
+import { ANTIGRAVITY_ACTIVE_MODEL_ALIASES, ANTIGRAVITY_MODEL_MAP, createAntigravityAdapter } from "../adapters/antigravity-adapter.js";
 import { CLAUDE_MODEL_MAP, createClaudeCodeAdapter } from "../adapters/claude-code-adapter.js";
 import { createCodexAdapter } from "../adapters/codex-adapter.js";
 import { createOpenCodeAdapter } from "../adapters/opencode-adapter.js";
@@ -84,7 +84,7 @@ function createProductionAdapters(configuration) {
 
 function configuredModels(configuration, backend) {
   if (backend === "antigravity") {
-    return Object.entries(ANTIGRAVITY_MODEL_MAP).map(([requestedModel, resolvedModel]) => ({ requestedModel, resolvedModel }));
+    return ANTIGRAVITY_ACTIVE_MODEL_ALIASES.map((requestedModel) => ({ requestedModel, resolvedModel: ANTIGRAVITY_MODEL_MAP[requestedModel] }));
   }
   if (backend === "claude_code") {
     return Object.keys(CLAUDE_MODEL_MAP).map((requestedModel) => ({ requestedModel, resolvedModel: null }));
@@ -764,7 +764,7 @@ export function createBridgeRuntime({ configuration, statePaths, host = {}, adap
     try {
       route = resolveRuntimeRoute(input, runtimeConfiguration);
     } catch (error) {
-      return createRuntimeFailure(input.target, input.model || "default", error.message);
+      return createRuntimeFailure(input.target, input.model || "default", error.message, { reason: error.failureClass });
     }
     let webEvidenceMode = input.webEvidenceRequired === true
       ? "strict"

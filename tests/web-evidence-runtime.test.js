@@ -448,7 +448,7 @@ test("WP2-RUNTIME-12: profil strict carrier politikasi fallback istegine tasinir
       mode: "read_only",
       cacheable: false,
       webEvidenceRequired: true,
-      fallbackTargets: [{ target: "gemini_flash_3_7" }]
+      fallbackTargets: [{ target: "gemini_flash_3_8" }]
     }
   };
   let calls = 0;
@@ -475,7 +475,7 @@ test("WP2-RUNTIME-03: web evidence kontrol alanları ve fallback davranışını
       model: "gemini_flash_3_8",
       mode: "read_only",
       cacheable: false,
-      fallbackTargets: [{ target: "gemini_flash_3_7", model: "gemini_flash_3_7" }]
+      fallbackTargets: [{ target: "gemini_flash_3_8", model: "gemini_flash_3_8" }]
     }
   };
   let calls = 0;

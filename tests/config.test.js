@@ -101,22 +101,21 @@ test("provider rol profilleri exact model kullanır ve edit fallback policy ile 
     { target: "glm", model: "glm_5_2" }
   ]);
   assert.deepEqual({ target: profiles.deep_analysis.target, model: profiles.deep_analysis.model }, { target: "opencode", model: "deepseek/deepseek-v4-pro" });
-  assert.equal(profiles.web_research.target, "gemini_pro");
+  assert.equal(profiles.web_research.target, "gemini_flash");
+  assert.equal(profiles.file_audit.target, "gemini_flash");
   assert.equal(profiles.implementation.mode, "edit");
   assert.equal(profiles.critical_implementation.mode, "edit");
   assert.equal(Object.values(profiles).filter((profile) => profile.mode === "read_only").some((profile) => profile.fallbackTargets), false);
   assert.ok(profiles.implementation.fallbackTargets.length > 0);
   assert.deepEqual(profiles.implementation.fallbackTargets, [
     { target: "glm", model: "glm_5_2" },
-    { target: "opencode", model: "deepseek/deepseek-v4-pro" },
-    { target: "gemini_pro" }
+    { target: "opencode", model: "deepseek/deepseek-v4-pro" }
   ]);
   assert.equal(profiles.low_cost_glm_highspeed.model, "glm_5_2_highspeed");
   assert.deepEqual({ target: profiles.glm53_implementation.target, model: profiles.glm53_implementation.model, mode: profiles.glm53_implementation.mode, priority: profiles.glm53_implementation.priority, cacheable: profiles.glm53_implementation.cacheable }, { target: "glm", model: "glm_5_3", mode: "edit", priority: 7, cacheable: false });
   assert.deepEqual(profiles.glm53_implementation.fallbackTargets, [
     { target: "opencode", model: "deepseek/deepseek-v4-pro" },
-    { target: "codex", model: "gpt-5.6-terra" },
-    { target: "gemini_pro" }
+    { target: "codex", model: "gpt-5.6-terra" }
   ]);
   assert.deepEqual({ target: profiles.glm53_flash_implementation.target, model: profiles.glm53_flash_implementation.model, mode: profiles.glm53_flash_implementation.mode, priority: profiles.glm53_flash_implementation.priority, cacheable: profiles.glm53_flash_implementation.cacheable }, { target: "glm", model: "glm_5_3_flash", mode: "edit", priority: 6, cacheable: false });
   assert.deepEqual(profiles.glm53_flash_implementation.fallbackTargets, [

@@ -69,7 +69,7 @@ test("AG-AC-03: invalid model alias reddedilir", () => {
   const bad = resolveModel("nonexistent_model");
   assert.equal(bad.valid, false);
   assert.match(bad.error, /unsupported model alias/i);
-  assert.match(bad.error, /gemini_pro/);
+  assert.match(bad.error, /gemini_flash/);
 
   const empty = resolveModel("");
   assert.equal(empty.valid, false);
@@ -78,10 +78,32 @@ test("AG-AC-03: invalid model alias reddedilir", () => {
   assert.equal(nil.valid, false);
 });
 
+test("AG-DISABLED-01: erişilemeyen modeller adapter çağrısında provider öncesi reddedilir", async () => {
+  const adapter = createAntigravityAdapter({ antigravity: { executable: "missing-agy-should-not-spawn" } });
+  for (const model of ["gemini_pro", "gemini_flash_3_7"]) {
+    const result = await adapter.execute({
+      executionId: createExecutionId(),
+      backend: "antigravity",
+      prompt: "inspect",
+      model,
+      mode: "read_only",
+      workspace: process.cwd(),
+      delegationDepth: 0,
+      caller: "test",
+      timeoutMs: 1000
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "model_access_denied");
+    assert.equal(result.retryable, false);
+    assert.equal(result.exitCode, null);
+    assert.equal(result.metrics.diagnostics.failureStage, "mcp_preflight");
+  }
+});
+
 test("AG-AC-04: sandbox default ON, dangerously_skip_permissions public API'den açılamaz", () => {
   const publicArgs = {
     prompt: "test",
-    model: "gemini_pro",
+    model: "gemini_flash_3_8",
     mode: "read_only",
     timeout_seconds: 60
   };
@@ -99,7 +121,7 @@ test("AG-AC-05: workspace inject edilemez, backend inject edilemez", () => {
   const guard = createDelegationGuard();
   const publicArgs = {
     prompt: "test",
-    model: "gemini_pro",
+    model: "gemini_flash_3_8",
     mode: "read_only"
   };
 
@@ -512,7 +534,7 @@ test("AGY-PERM-09: mevcut command allow read-only deny ile bastırılır ve iki 
   const providerSource = `import fs from 'node:fs'; import path from 'node:path'; if (process.argv.includes('mcp')) { console.log('No MCP servers configured.'); process.exit(0); } const settingsPath = path.join(process.env.HOME, '.gemini', 'antigravity-cli', 'settings.json'); const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); fs.writeFileSync(${JSON.stringify(observedPath)}, JSON.stringify({ allowPreserved: settings.permissions.allow.includes('command(specific)'), commandDenied: settings.permissions.deny.includes('command(*)'), unsandboxedDenied: settings.permissions.deny.includes('unsandboxed(*)'), writeDenied: settings.permissions.deny.includes('write_file(*)'), mcpDenied: settings.permissions.deny.includes('mcp(*)'), executeUrlDenied: settings.permissions.deny.includes('execute_url(*)') })); setTimeout(() => process.exit(0), 1000);`;
   fs.writeFileSync(sleeperPath, providerSource, "utf8");
   const adapterModule = pathToFileURL(path.resolve("subagent-bridge/src/adapters/antigravity-adapter.js")).href;
-  const source = `import { createAntigravityAdapter } from ${JSON.stringify(adapterModule)}; const adapter = createAntigravityAdapter({ antigravity: { executable: process.execPath, execArgs: [${JSON.stringify(sleeperPath)}], defaultSandbox: false } }); await adapter.execute({ executionId: process.argv[1], backend: "antigravity", prompt: "inspect", model: "gemini_pro", mode: "read_only", workspace: process.cwd(), delegationDepth: 0, caller: "test", timeoutMs: 1500 });`;
+  const source = `import { createAntigravityAdapter } from ${JSON.stringify(adapterModule)}; const adapter = createAntigravityAdapter({ antigravity: { executable: process.execPath, execArgs: [${JSON.stringify(sleeperPath)}], defaultSandbox: false } }); await adapter.execute({ executionId: process.argv[1], backend: "antigravity", prompt: "inspect", model: "gemini_flash_3_8", mode: "read_only", workspace: process.cwd(), delegationDepth: 0, caller: "test", timeoutMs: 1500 });`;
   const launch = (executionId) => new Promise((resolve, reject) => {
     const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", source, executionId], {
       cwd: process.cwd(),
@@ -562,7 +584,7 @@ test("AGY-PERM-09a: processler arasi lock beklemesi request timeout ile sinirlan
   const sleeperPath = path.join(root, "sleeper.js");
   fs.writeFileSync(sleeperPath, "if (process.argv.includes('mcp')) { console.log('No MCP servers configured.'); process.exit(0); } setTimeout(() => { console.log(JSON.stringify({ response: 'done' })); }, 5000);", "utf8");
   const adapterModule = pathToFileURL(path.resolve("subagent-bridge/src/adapters/antigravity-adapter.js")).href;
-  const createSource = (timeoutMs, printResult) => `import { createAntigravityAdapter } from ${JSON.stringify(adapterModule)}; const adapter = createAntigravityAdapter({ antigravity: { executable: process.execPath, execArgs: [${JSON.stringify(sleeperPath)}], defaultSandbox: false } }); const result = await adapter.execute({ executionId: process.argv[1], backend: "antigravity", prompt: "inspect", model: "gemini_pro", mode: "read_only", workspace: process.cwd(), delegationDepth: 0, caller: "test", timeoutMs: ${timeoutMs} }); if (${printResult}) process.stdout.write(JSON.stringify(result));`;
+  const createSource = (timeoutMs, printResult) => `import { createAntigravityAdapter } from ${JSON.stringify(adapterModule)}; const adapter = createAntigravityAdapter({ antigravity: { executable: process.execPath, execArgs: [${JSON.stringify(sleeperPath)}], defaultSandbox: false } }); const result = await adapter.execute({ executionId: process.argv[1], backend: "antigravity", prompt: "inspect", model: "gemini_flash_3_8", mode: "read_only", workspace: process.cwd(), delegationDepth: 0, caller: "test", timeoutMs: ${timeoutMs} }); if (${printResult}) process.stdout.write(JSON.stringify(result));`;
   const launch = (executionId, timeoutMs, captureOutput) => new Promise((resolve, reject) => {
     const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", createSource(timeoutMs, captureOutput), executionId], {
       cwd: process.cwd(),
@@ -609,15 +631,13 @@ test("AG-AC-15e: provider execArgs çalışma zamanı argv önüne eklenir", () 
   assert.equal(command.args[command.args.indexOf("--add-dir") + 1], "C:\\workspace");
 });
 
-test("AG-AC-15f: gemini_flash_3_7 argümanlarına gemini-3.7-flash-high modeli geçer", () => {
-  const command = buildAntigravityArgs(
-    { prompt: "inspect", model: "gemini_flash_3_7", workspace: "C:\\workspace" },
-    { antigravity: { executable: "agy", defaultSandbox: true } }
-  );
-
-  assert.equal(command.executable, "agy");
-  assert.ok(command.args.includes("--model"));
-  assert.equal(command.args[command.args.indexOf("--model") + 1], "gemini-3.7-flash-high");
+test("AG-AC-15f: erişilemeyen Antigravity modelleri komut oluşturmadan engellenir", () => {
+  for (const model of ["gemini_pro", "gemini_flash_3_7"]) {
+    assert.throws(() => buildAntigravityArgs(
+      { prompt: "inspect", model, workspace: "C:\\workspace" },
+      { antigravity: { executable: "agy", defaultSandbox: true } }
+    ), { failureClass: "model_access_denied" });
+  }
 });
 
 test("AG-AC-15g: gemini_flash_3_8 argümanlarına gemini-3.8-flash-high modeli geçer", () => {
@@ -632,15 +652,15 @@ test("AG-AC-15g: gemini_flash_3_8 argümanlarına gemini-3.8-flash-high modeli g
 
 test("AG-AC-15h: stream-json yalnız read-only web-read trace için seçilir", () => {
   const webRead = buildAntigravityArgs(
-    { prompt: "inspect", model: "gemini_pro", mode: "read_only", webReadTrace: true, workspace: "C:\\workspace" },
+    { prompt: "inspect", model: "gemini_flash_3_8", mode: "read_only", webReadTrace: true, workspace: "C:\\workspace" },
     { antigravity: { executable: "agy" } }
   );
   const ordinaryRead = buildAntigravityArgs(
-    { prompt: "inspect", model: "gemini_pro", mode: "read_only", workspace: "C:\\workspace" },
+    { prompt: "inspect", model: "gemini_flash_3_8", mode: "read_only", workspace: "C:\\workspace" },
     { antigravity: { executable: "agy" } }
   );
   const edit = buildAntigravityArgs(
-    { prompt: "change", model: "gemini_pro", mode: "edit", webReadTrace: true, workspace: "C:\\workspace" },
+    { prompt: "change", model: "gemini_flash_3_8", mode: "edit", webReadTrace: true, workspace: "C:\\workspace" },
     { antigravity: { executable: "agy" } }
   );
   assert.equal(webRead.args[webRead.args.indexOf("--output-format") + 1], "stream-json");
@@ -671,10 +691,10 @@ test("AG-VERIFY-01: production adapter supportsModelSelection true (AGY 1.1.11 d
 
 test("AG-VERIFY-02: read_only execution configured model flag içerir", () => {
   const command = buildAntigravityArgs(
-    { prompt: "inspect", model: "gemini_pro", workspace: "C:\\workspace" },
+    { prompt: "inspect", model: "gemini_flash_3_8", workspace: "C:\\workspace" },
     { antigravity: { executable: "agy" } }
   );
-  assert.equal(command.args[command.args.indexOf("--model") + 1], ANTIGRAVITY_MODEL_MAP.gemini_pro);
+  assert.equal(command.args[command.args.indexOf("--model") + 1], ANTIGRAVITY_MODEL_MAP.gemini_flash_3_8);
 });
 
 test("AG-VERIFY-03: invalid model ALIAS correctly rejected", () => {
@@ -715,7 +735,7 @@ test("AGY-EXEC-01: health ve execute aynı configured executable resolution kull
   const configuration = { antigravity: { executable: "C:\\tools\\agy.exe", execArgs: ["prefix"] } };
   const runtime = resolveAntigravityCommand(configuration);
   const execution = buildAntigravityArgs(
-    { prompt: "inspect", model: "gemini_pro", workspace: "C:\\workspace" },
+    { prompt: "inspect", model: "gemini_flash_3_8", workspace: "C:\\workspace" },
     configuration
   );
 

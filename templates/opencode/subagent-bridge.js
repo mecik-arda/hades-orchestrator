@@ -188,9 +188,7 @@ function createGlmEditTool(profile, model, label) {
   });
 }
 
-export const geminiPro = createReadOnlyTool("gemini_pro");
 export const geminiFlash = createReadOnlyTool("gemini_flash");
-export const geminiFlash37 = createReadOnlyTool("gemini_flash_3_7");
 export const geminiFlash38 = createReadOnlyTool("gemini_flash_3_8");
 export const claudeSonnet = createReadOnlyTool("claude_sonnet");
 export const codex = createCodexModelReadOnlyTool("gpt-6.1-sol", "GPT-6.1 Sol (default codex subagent)");
