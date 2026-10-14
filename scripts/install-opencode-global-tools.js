@@ -18,7 +18,7 @@ const rendered = renderGlobalOpenCodeTools(bridgeRoot);
 
 if (action === "--check") {
   const matches = fs.existsSync(destinationPath) && fs.readFileSync(destinationPath, "utf8") === rendered;
-  console.log(JSON.stringify({ ok: matches, action, globalToolsReady: matches }));
+  console.log(JSON.stringify({ ok: matches, action, globalWrapperReady: matches }));
   if (!matches) process.exitCode = 1;
 } else {
   fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
@@ -30,5 +30,5 @@ if (action === "--check") {
     fs.rmSync(temporaryPath, { force: true });
     throw error;
   }
-  console.log(JSON.stringify({ ok: true, action, globalToolsReady: true }));
+  console.log(JSON.stringify({ ok: true, action, globalWrapperReady: true }));
 }

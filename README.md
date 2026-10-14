@@ -220,7 +220,9 @@ luna6_implementation    → GPT-6 Luna, edit, 11, no fallback
 
 Profiles live under `orchestration.taskProfiles` in `~/.config/subagent-bridge/config.json`. Codex subagent calls without an explicit model default to `gpt-6.1-sol` at the tool layer (`run_codex_subagent` and the global `codex` tool); an explicit model overrides this default. The global read-only `codexSol61` tool selects GPT-6.1 Sol explicitly, while `codexSol6` remains mapped to GPT-6 Sol. These user-global OpenCode tool changes take effect in newly started OpenCode sessions. Model access depends on the account and rollout status.
 
-The canonical global OpenCode tool wrapper is tracked in `templates/opencode/subagent-bridge.js`. Render/install it for the current checkout with `npm run opencode-tools:install`; verify the installed copy with `npm run opencode-tools:check`. Restart OpenCode after installing so the updated tools load.
+The canonical global single-call OpenCode tool wrapper is tracked in `templates/opencode/subagent-bridge.js`. Render/install it for the current checkout with `npm run opencode-tools:install`; verify the installed copy with `npm run opencode-tools:check`. This check covers only that wrapper, not the V2 batch MCP server.
+
+V2 batch tools are provided by the local `subagent-bridge` MCP server. To make them available across OpenCode workspaces, register `node <bridge-root>/subagent-bridge/src/server.js` in the user-level `~/.config/opencode/opencode.jsonc` with `type: "local"`, `cwd: "."`, and `SUBAGENT_BRIDGE_TRUSTED_WORKSPACE` set to an empty string so the server validates the active workspace at startup. Keep batch and approval tools disabled in the default tool set and enable them only for a dedicated `hades-orchestrator` primary agent. Use `opencode mcp list` to verify the server connects. Restart OpenCode after changing configuration. Parallel workers explicitly disable the Bridge MCP server and its tools.
 
 ```powershell
 npm run config:apply-routing
@@ -631,7 +633,9 @@ sol61_implementation    → GPT-6.1 Sol, edit, 4, fallback: GPT-6 Sol → Codex 
 luna6_implementation    → GPT-6 Luna, edit, 11, fallback yok
 ```
 
-Profiller `~/.config/subagent-bridge/config.json` içindeki `orchestration.taskProfiles` alanındadır. Model belirtilmeyen Codex subagent çağrıları araç katmanında `gpt-6.1-sol` ile sabitlenir (`run_codex_subagent` ve global `codex` aracı); açıkça verilen model bu varsayılanı geçersiz kılar. Global salt-okunur `codexSol61` aracı GPT-6.1 Sol'u açıkça seçer; `codexSol6` GPT-6 Sol olarak kalır. Kanonik global OpenCode araç şablonu `templates/opencode/subagent-bridge.js` içindedir. Mevcut checkout'tan kurmak için `npm run opencode-tools:install`, kurulu kopyayı doğrulamak için `npm run opencode-tools:check` çalıştırılır; ardından OpenCode yeniden başlatılmalıdır. Model erişimi hesap ve rollout durumuna bağlıdır.
+Profiller `~/.config/subagent-bridge/config.json` içindeki `orchestration.taskProfiles` alanındadır. Model belirtilmeyen Codex subagent çağrıları araç katmanında `gpt-6.1-sol` ile sabitlenir (`run_codex_subagent` ve global `codex` aracı); açıkça verilen model bu varsayılanı geçersiz kılar. Global salt-okunur `codexSol61` aracı GPT-6.1 Sol'u açıkça seçer; `codexSol6` GPT-6 Sol olarak kalır. Kanonik global tekil çağrı OpenCode araç şablonu `templates/opencode/subagent-bridge.js` içindedir. Mevcut checkout'tan kurmak için `npm run opencode-tools:install`, kurulu kopyayı doğrulamak için `npm run opencode-tools:check` çalıştırılır; bu kontrol yalnız sarmalayıcıyı doğrular, V2 batch MCP sunucusunu değil.
+
+V2 batch araçları yerel `subagent-bridge` MCP sunucusundan sağlanır. Araçları farklı OpenCode çalışma alanlarında kullanmak için kullanıcı-genelindeki `~/.config/opencode/opencode.jsonc` dosyasına `node <bridge-root>/subagent-bridge/src/server.js` komutunu `type: "local"`, `cwd: "."` ile kaydedin ve `SUBAGENT_BRIDGE_TRUSTED_WORKSPACE` değerini boş bırakın; sunucu başlangıçta etkin çalışma alanını doğrular. Batch ve onay araçlarını varsayılan araç kümesinde kapalı tutup yalnız özel `hades-orchestrator` primary agent'ına açın. Sunucunun bağlantısını `opencode mcp list` ile doğrulayın. Yapılandırma değişikliğinden sonra OpenCode'u yeniden başlatın. Paralel worker'lar Bridge MCP sunucusunu ve araçlarını açıkça devre dışı bırakır.
 
 ```powershell
 npm run config:apply-routing

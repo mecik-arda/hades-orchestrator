@@ -414,6 +414,8 @@ test("OC-AC-18: regression check", () => {
 test("OC-AC-19: parallel worker inline config restricts tools and carries steps", () => {
   const readOnlyConfig = JSON.parse(buildParallelWorkerInlineConfiguration("read_only", 3));
   const readOnlyAgent = readOnlyConfig.agent["parallel-readonly"];
+  assert.equal(readOnlyConfig.mcp["subagent-bridge"].enabled, false);
+  assert.equal(readOnlyConfig.tools["subagent-bridge_*"], false);
   assert.equal(readOnlyAgent.steps, 3);
   assert.equal(readOnlyAgent.permission["*"], "deny");
   assert.equal(readOnlyAgent.permission.read, "allow");
@@ -425,6 +427,8 @@ test("OC-AC-19: parallel worker inline config restricts tools and carries steps"
   assert.equal(readOnlyAgent.permission.task, undefined);
   const editConfig = JSON.parse(buildParallelWorkerInlineConfiguration("edit", 5));
   const editAgent = editConfig.agent["parallel-edit"];
+  assert.equal(editConfig.mcp["subagent-bridge"].enabled, false);
+  assert.equal(editConfig.tools["subagent-bridge_*"], false);
   assert.equal(editAgent.steps, 5);
   assert.equal(editAgent.permission.edit, "allow");
   assert.equal(editAgent.permission["*"], "deny");

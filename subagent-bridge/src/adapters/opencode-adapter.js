@@ -229,6 +229,12 @@ function buildParallelWorkerInlineConfiguration(mode, steps) {
   permission.list = "allow";
   if (!readOnly) permission.edit = "allow";
   return JSON.stringify({
+    mcp: {
+      "subagent-bridge": { enabled: false }
+    },
+    tools: {
+      "subagent-bridge_*": false
+    },
     agent: {
       [agentName]: {
         description: readOnly ? "Bridge-managed parallel read-only worker" : "Bridge-managed parallel edit worker",
